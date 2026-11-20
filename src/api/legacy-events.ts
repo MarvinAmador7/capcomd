@@ -80,10 +80,10 @@ const AgentTitleText = UntrustedText.describe(`Agent-written text: render as pla
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
 export const SCOPE_EVENT_TYPES = [
-	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED", "RUN_GOAL_COMPLETED", "RUN_PR_OPENED", "RUN_BRANCH_KEPT", "RUN_TITLED",
+	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED", "RUN_GOAL_COMPLETED", "RUN_PR_OPENED", "RUN_BRANCH_KEPT", "RUN_TITLED", "RUN_ARCHIVED", "RUN_RESTORED",
 	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_TITLED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
-	"AGENT_WAKE_ARMED", "AGENT_WOKEN", "AGENT_WAKE_CANCELLED",
+	"AGENT_WAKE_ARMED", "AGENT_WOKEN", "AGENT_WAKE_CANCELLED", "AGENT_CONTINUED", "AGENT_MODEL_CHANGED",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
 	"MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED",
@@ -198,6 +198,27 @@ export const LegacyEventShapes = {
 		messageSeq: N.describe("The message it put in the agent's mailbox (Message.seq): the agent reads it as its next turn"),
 		armedAt: N.describe("When it was armed (epoch ms)"),
 	},
+	// Capability agents.idle (ADR-026 §1): an agent whose turn ended (done, failed, cancelled) is idle, not gone: a message
+	// to it starts its next attempt (epoch), on a fresh machine, continuing its conversation.
+	"agent.continued": {
+		epoch: N.describe("Its new attempt (Agent epoch): what runs now continues the same thread"),
+		from: z.enum(["done", "failed", "cancelled"]).describe("How its last attempt had ended (it stays on that attempt's agent.done / agent.failed / agent.cancelled)"),
+		by: S.describe("Who sent the message that woke it: operator, client:<id>, an agent id (its parent, an ancestor), or capcomd (a message that came while its last attempt was ending)"),
+		messageSeq: N.describe("The message (Message.seq) its new attempt starts with"),
+		...cause,
+	},
+	// Capability agents.messages.model: a message changed the model or effort the agent's next turns run with.
+	"agent.model_changed": {
+		model: nS.describe("The model its next turns run with; null: unchanged"),
+		effort: nS.describe("The reasoning effort its next turns run with; null: unchanged"),
+		previous: z.object({ model: nS, effort: nS }).describe("What it ran with before"),
+		by: S.describe("Who asked for it (operator, client:<id>, an agent id)"),
+		messageSeq: N.describe("The message that carried the change"),
+		applied: z.boolean().describe("true: its next attempt starts with it now (the agent was idle); false: queued until its current turn ends (a running CLI can't switch model), then it continues as a new attempt with it"),
+	},
+	// Capability runs.archive: an archived run is read-only (its agents take no messages) until it is restored.
+	"run.archived": { by: S.describe("Who archived it: operator or client:<id>"), ...cause },
+	"run.restored": { by: S.describe("Who restored it: operator or client:<id>"), ...cause },
 	"agent.wake_cancelled": {
 		wakeId: S.describe("The wake (wk-…)"),
 		reason: z.enum(["agent", "ended"]).describe("agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up)"),

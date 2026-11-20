@@ -278,7 +278,12 @@ public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
 /// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50, steer scope) with `Idempotency-Key`. `skills` rides
 /// along only when the daemon advertises `steer.skills`. Returns the message seq the confirming `message.sent` carries.
 public struct SentMessage: Sendable, Hashable { public var seq: Int; public var note: String?; public init(seq: Int, note: String?) { self.seq = seq; self.note = note } }
-public struct MessageRefused: Error, Sendable, Hashable { public var message: String; public init(_ m: String) { message = m } }
+public struct MessageRefused: Error, Sendable, Hashable {
+  public var message: String
+  /// The daemon's code when it matters: "archived" (capability runs.archive: the run is read-only until restored).
+  public var code: String?
+  public init(_ m: String, code: String? = nil) { message = m; self.code = code }
+}
 public protocol AgentMessaging: Sendable {
   func send(runId: String, agentId: String, body: String, skills: [String], idempotencyKey: String) async throws -> SentMessage
   /// The same, with the model and effort for the agent's next turn (capability `agents.messages.model`); a messenger

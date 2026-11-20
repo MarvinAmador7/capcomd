@@ -446,8 +446,16 @@ Bun.serve({
       const run = runs.find(r => r.id === msg[1]), agent = run?.agents.find(a => a.id === msg[2]);
       if (!run) return err(404, "not_found", `run ${msg[1]} not found`);
       if (!agent) return err(404, "not_found", `agent ${msg[2]} not found`);
-      if (["done", "failed", "cancelled"].includes(agent.status)) return err(409, "conflict", `${agent.id} is ${agent.status}: nothing will read this message`);
+      // Capability runs.archive: an archived run refuses (Restore). Capability agents.idle: an idle agent continues.
+      if ((run as any).archived) return err(409, "archived", `run ${run.id} is archived · restore to continue`);
+      const idle = ["done", "failed", "cancelled"].includes(agent.status);
       const mseq = ++msgSeq, ms = Date.now();
+      if (idle) {
+        const from = agent.status; agent.status = "running";
+        setTimeout(() => broadcast(run.id, { v: 1, id: `evt_cont_${mseq}`, scope: run.id, seq: HEAD + mseq, entity: agent.id, entitySeq: 1, type: "agent.continued",
+          typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: agent.id,
+          data: { epoch: 2, from, by: "operator", messageSeq: mseq } }), 200);
+      }
       setTimeout(() => broadcast(run.id, { v: 1, id: `evt_msg_${mseq}`, scope: run.id, seq: HEAD + mseq, entity: `msg-${mseq}`, entitySeq: 1, type: "message.sent",
         typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: "operator",   // the sender, as scope.ts records it
         data: { from: "operator", to: agent.id, seq: mseq, text: body.body, bytes: body.body.length, ...(body.skills ? { skills: body.skills } : {}) } }), 1200);
@@ -459,7 +467,7 @@ Bun.serve({
       setTimeout(() => threadWrite(run, agent.id, say), 2500);
       setTimeout(() => threadWrite(run, agent.id, call), 3500);
       setTimeout(() => threadWrite(run, agent.id, { ...call, rev: 2, status: "done", durationMs: 2300, tool: { ...call.tool, output: "42 pass\n0 fail" } }), 5800);
-      return Response.json({ runId: run.id, to: agent.id, from: "operator", seq: mseq, note: null });
+      return Response.json({ runId: run.id, to: agent.id, from: "operator", seq: mseq, note: idle ? `${agent.id} was idle: this message is its next turn (it continues the same thread on a fresh machine)` : null, ...(idle ? { continued: true } : {}) });
     }
     if (p === "/v1/runs" && req.method === "POST") {   // runs.create (harness #49): accepted, starts nothing here
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");

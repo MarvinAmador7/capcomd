@@ -12,7 +12,7 @@ export { claudeSummary, codexSummary, fxSummary, shellCommand } from "./summary"
 export { claudeNaming, codexNaming, fxNaming, isClaudeNamingCall, isCodexNamingCall, isFxNamingCall, namingCalls, namingCommand, shellWords } from "./naming";
 
 import { classifyLink, mediaOfPath, resolveMedia, type LinkContext } from "./links";
-import { toBlocks } from "./markdown";
+import { plainBlocks, toBlocks } from "./markdown";
 import { capBytes, oneLine, sanitize } from "./sanitize";
 import { THREAD_FORMAT, type BlockNode, type ItemDraft } from "./schema";
 
@@ -41,6 +41,17 @@ export function handoffDraft(o: { id: string; at: number; child: { agentId: stri
 		id: o.id, rev: 1, kind: "handoff", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text: p.text, blocks: [...p.blocks, ...extra], format: THREAD_FORMAT,
 		redacted: false, tool: null, error: null, truncated: p.truncated, child: v ? { ...o.child, verdict: v } : o.child,
 	};
+}
+
+/**
+ * A quiet daemon-written line in an agent's thread (kind `note`, ADR-026): "model → opus · effort high", "Picked up from
+ * the thread: the earlier session couldn't be resumed." Plain text the daemon wrote (trusted), one line; a client shows
+ * it as a muted divider, and one that doesn't know the kind as a plain line.
+ */
+export function threadNote(o: { id: string; at: number; text: string }): ItemDraft {
+	const text = oneLine(o.text, 500);
+	return { id: o.id, rev: 1, kind: "note", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text, blocks: plainBlocks(text), format: THREAD_FORMAT,
+		redacted: false, tool: null, error: null, truncated: null, child: null } as ItemDraft;
 }
 
 /** A reviewer's verdict on a hand-back: `{"passed", "reasons"}`, as the review contract has the reviewer answer. */

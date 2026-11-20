@@ -80,7 +80,7 @@ export type BlockNode =
 	| MediaBlock
 	| { t: "open"; text: string };
 
-export const ITEM_KINDS = ["say", "thinking", "tool", "error", "result", "plan", "handoff", "other"] as const;
+export const ITEM_KINDS = ["say", "thinking", "tool", "error", "result", "plan", "handoff", "other", "note"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
 export const DIFF_OPS = [" ", "+", "-", "@"] as const;

@@ -18,7 +18,7 @@ import { ProtocolError, type FrameSink } from "../../packages/plugin/src/host/pr
 import { PluginError, type PluginErrorCode } from "../../packages/plugin/src/errors";
 import type { PluginStore } from "../plugins/storage";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
-import { CreateRunError, entityOf, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
+import { CreateRunError, entityOf, envelopes, messagesOf, SendRefused, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
 import { daemonEnvelope, harnessState, type HarnessState } from "./state";
@@ -531,7 +531,6 @@ export function harnessApp(o: ServerOptions) {
 		} finally { writing.delete(kid); }
 	};
 	const gone = (what: string): Outcome => ({ status: 404, body: { code: "not_found", message: `${what} not found` } });
-	const ENDED = new Set(["done", "failed", "cancelled", "handed-off"]);
 
 	for (const action of ["pause", "resume", "cancel"] as const) {
 		app.post(`/v1/runs/:runId/${action}`, (c) => {
@@ -580,28 +579,63 @@ export function harnessApp(o: ServerOptions) {
 
 	app.post("/v1/runs/:runId/agents/:agentId/messages", async (c) => {
 		const runId = c.req.param("runId"), agentId = c.req.param("agentId");
-		const raw = await c.req.json().catch(() => null) as { body?: unknown; skills?: unknown } | null;
-		if (!raw || typeof raw.body !== "string" || !raw.body.length) return err(c, 422, "invalid", "body must be {body: non-empty string, skills?: [name]}");
+		const raw = await c.req.json().catch(() => null) as { body?: unknown; skills?: unknown; model?: unknown; effort?: unknown } | null;
+		if (!raw || typeof raw.body !== "string" || !raw.body.length) return err(c, 422, "invalid", "body must be {body: non-empty string, skills?: [name], model?: string, effort?: string}");
+		for (const f of ["model", "effort"] as const) if (raw[f] !== undefined && raw[f] !== null && (typeof raw[f] !== "string" || !(raw[f] as string).length || (raw[f] as string).length > 100)) return err(c, 422, "invalid", `${f} must be a non-empty string`, { field: f });
+		const turn = { model: (raw.model as string | null | undefined) ?? null, effort: (raw.effort as string | null | undefined) ?? null };
 		if (Buffer.byteLength(raw.body) > MESSAGE_BODY_MAX_BYTES) return err(c, 422, "invalid", `body is over ${MESSAGE_BODY_MAX_BYTES} bytes`);
 		if (raw.skills !== undefined && (!Array.isArray(raw.skills) || raw.skills.some((x) => typeof x !== "string" || !x))) return err(c, 422, "invalid", "skills must be a list of skill names from GET /v1/skills");
 		const body = raw.body;
 		const names = (raw.skills ?? []) as string[];
 		// Skills are part of the request: the same key with other skills is idempotency_conflict, like another body. A
 		// request without skills hashes as before skill attach, so a retry across the upgrade still replays.
-		return idempotent(c, ["agents.send", runId, agentId, body, ...(names.length ? [names] : [])], async (client, key) => {
+		// A model or effort is part of the request too (a request without them hashes as before).
+		return idempotent(c, ["agents.send", runId, agentId, body, ...(names.length ? [names] : []), ...(turn.model || turn.effort ? [turn] : [])], async (client, key) => {
 			const agents = await src.agents(runId);
 			if (agents === null) return gone(`run ${runId}`);
 			const a = agents.find((x) => x.id === agentId);
 			if (!a) return gone(`agent ${agentId}`);
-			if (ENDED.has(a.status)) return { status: 409, body: { code: "conflict", message: `${agentId} is ${a.status}: nothing will read this message` } };
+			// ADR-026 §1: every agent of a run that isn't archived takes messages; an idle one continues with it as its next
+			// turn. Capability agents.messages.model: a model and effort its provider's harness offers (GET /v1/run-options).
+			if (turn.model || turn.effort) {
+				const bad = await turnProblem(a, turn);
+				if (bad) return { status: 422, body: { code: "invalid", message: bad.message, field: bad.field } };
+			}
 			// Read here (not before the key check), so a replay still answers after a skill is removed.
 			const sk = await resolveSkills(names, { read: (n) => src.skill(n) });
 			if ("error" in sk) return { status: 422, body: { code: "invalid", message: sk.error } };
 			// The scope's own message key: a retry after a daemon restart (or after the 24h key window) still sends once.
-			const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`, sk.skills);
-			return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note } };
+			try {
+				const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`, sk.skills, turn.model || turn.effort ? turn : undefined);
+				return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note, ...(r.continued ? { continued: true } : {}) } };
+			} catch (e) {
+				if (e instanceof SendRefused) return { status: e.status, body: { code: e.code, message: e.message, ...(e.field ? { field: e.field } : {}) } };
+				throw e;
+			}
 		});
 	});
+
+	/** Capability agents.messages.model: a model and effort the agent's provider's harness offers (GET /v1/run-options
+	 *  drivers[].models / efforts), or why not (the field it is about). */
+	const turnProblem = async (a: { id: string; provider: string | null }, turn: { model: string | null; effort: string | null }): Promise<{ message: string; field: string } | null> => {
+		const driver = a.provider ? (await src.runOptions().catch(() => null))?.drivers.find((d) => d.provider === a.provider) : null;
+		if (!driver) return { message: `${a.id} has no model or effort a message can change (${a.provider ? `no ${a.provider} harness here` : "it isn't a Claude, Codex or fx agent"})`, field: turn.model ? "model" : "effort" };
+		if (turn.model && !driver.models.some((m) => m.id === turn.model)) return { message: `model ${JSON.stringify(turn.model)} isn't a ${driver.label} model capcomd offers: use one of ${driver.models.map((m) => m.id).join(", ")}`, field: "model" };
+		if (turn.effort && !driver.efforts.includes(turn.effort)) return { message: `effort ${JSON.stringify(turn.effort)} isn't one ${driver.label} offers: use one of ${driver.efforts.join(", ")}`, field: "effort" };
+		return null;
+	};
+
+	// Capability runs.archive: an archived run is read-only (its agents take no messages) until it is restored.
+	for (const action of ["archive", "restore"] as const) {
+		app.post(`/v1/runs/:runId/${action}`, (c) => {
+			const runId = c.req.param("runId");
+			return idempotent(c, [`runs.${action}`, runId], async (client) => {
+				const r = await src[action](runId, `client:${client.clientId}`);
+				if (!r.ok) return { status: r.status, body: { code: r.code, message: r.message } };
+				return { status: 200, body: { runId, archived: action === "archive", changed: r.changed } };
+			});
+		});
+	}
 
 	// Capability ops.front_door (plugin API §6.1): the CLI's and `capcomd mcp`'s verify, merge and approval of a merge run
 	// here, in the daemon, so every plugin's gate (an out-of-process plugin's too) judges them as it judges an agent's.

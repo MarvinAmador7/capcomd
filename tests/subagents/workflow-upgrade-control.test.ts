@@ -15,7 +15,7 @@ const shape2Logged = async (run: string, id: string) =>
 test("control: the same change without the gates runs the new shape inside an agent that started under the old one", async () => {
   const run = (await w.cj(["run", "new"])).j?.runId;
   const c = (await w.cj(["spawn", run, "--profile", "worker", "--task", "[hold:90] control", "--key", "c"])).j?.agentId;
-  const hold = join(w.vm, `${c}-e1`, "hold.log");
+  const hold = join(w.vm, c, "hold.log");
   for (let i = 0; i < 150 && !existsSync(hold); i++) await sleep(200);
   expect(existsSync(hold)).toBe(true);
   await w.engine.stop();

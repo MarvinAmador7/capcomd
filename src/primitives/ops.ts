@@ -17,6 +17,8 @@ import { RelayError } from "../core/errors";
 import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, lifecyclePlugins, pinnedMachine, pinnedRuntime, resolveAgent, runtimeProblems, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
+import { modelProblem } from "../config/models";
+import { providerEfforts } from "../profiles/v1";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
 import { checkpointRef, stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
@@ -77,6 +79,7 @@ export function asRelay(e: unknown): never {
   if (code === "budget" || code === "parent_terminal") throw new RelayError("conflict", msg, "Request a smaller --budget or free budget by cancelling agents.");
   if (code === "grant") throw new RelayError("conflict", msg, "Grant less, give the parent more first (or raise the run's budget: capcomd grant <runId> --budget …), or free budget by cancelling agents.");
   if (code === "finished") throw new RelayError("conflict", msg, "A finished agent can't be given more: spawn one that continues from its branch (result.branch).");
+  if (code === "archived") throw new RelayError("conflict", msg, "Restore the run first (`capcomd run restore <runId>`, or Restore in the app); its agents take messages again.", { code: "archived" });
   if (code === "rate_limited") throw new RelayError("conflict", msg, "Keep the title you have; rename only when the focus really changes.", { code: "rate_limited" });
   if (code === "usage") throw new RelayError("usage", msg, /title/.test(msg) ? TITLE_HINT : "Check the command's arguments.");
   throw e;
@@ -972,7 +975,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
       }
     }
     const res = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
+    const fin = await s.finish({ agentId, status: "failed", ...(me && !execOf(me) ? { readsMessages: false } : {}), result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
     // A failed agent's jobs settle and its machine goes too (its worker retries a destroy the provider didn't answer).
     await endJobs(runId, agentId, "its agent failed");
     await workerOf(runId, agentId, fin.agent.epoch).drainWorker({ workerId: agentId }).catch(() => {});
@@ -1080,13 +1083,24 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
     const [succ] = (await awaitAgents(runId, [to])).agents as any[];
     await w.drainWorker({ workerId: agentId }).catch(() => {});
     const st = succ.status === "done" ? "done" : "failed";
-    await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
+    await s.finish({ agentId, status: st, ...(execOf(a) ? {} : { readsMessages: false }), spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
     return { kind: "ended" };
   }
   const vmRpc = exec && hasVmCapcomd(a) ? await vmRpcFor(runId, a, w, agentId, prepared) : null;
   const review = reviewOf(a);
   const report = (a.contract as any)?.report === true;
-  const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
+  // ADR-026 §1: a message woke this idle agent into this attempt. It continues on its branch, else (one that pushed
+  // none: cancelled or failed early) from its last checkpoint.
+  const continued = a.continued?.epoch === epoch;
+  const ownCheckpoint = continued && a.checkpoint?.ref ? { agentId, ref: a.checkpoint.ref, stopped: a.continued!.from } : undefined;
+  const from = ((a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined) ?? ownCheckpoint;
+  // An agent with no CLI of its own (a fake or scripted one) reads no messages: the ones that woke it count as read now,
+  // so its end doesn't continue it again (a real one's runner hands them to its CLI and moves the cursor then).
+  if (continued && !exec) {
+    const k = await s.continuation({ agentId }).catch(() => null);
+    const last = Math.max(0, ...((k?.messages ?? []) as Array<{ seq: number }>).map((m) => m.seq));
+    if (last) await s.messagesDelivered({ agentId, seq: last });
+  }
   // ADR-025 §5.2: a consolidator answers with deltas, which the kernel stages on its branch when it ends (settlePushed);
   // a real one reads the run's candidates and outcomes in its prompt (a scripted one reads them with its capcomd): the
   // ones no consolidator of the run that ended done was given.
@@ -1102,7 +1116,7 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const named = shownTitle(a.titleState, a.task);
   const title = named.title && named.titleSource !== "derived" ? named.title : null;
   const machine = pinnedMachine(a.spec);
-  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(consolidate ? { consolidate } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(continued ? { continued: true } : epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(consolidate ? { consolidate } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
   // `vmRpc`: an agent that may spawn ran with its capcomd, so its work may be all its children's (no branch of its own).
   return { kind: "pushed", pushed, vmRpc: !!vmRpc && a.limits.allowSpawn };
@@ -1136,7 +1150,7 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
     const declared = await resultOf(runId, agentId);
     const said = typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
     const error = `${agentId} is an orchestrate agent and it ${orchestrateWritesText(ow)} in its checkout${ow.at === "turn" ? " (stopped at the end of that turn)" : ""}. An orchestrate agent writes nothing, so it failed; its changes were discarded, never committed or pushed. Give that work to a worker it spawns.`;
-    const fin = await s.finish({ agentId, status: "failed", spent, result: { ...declared, ...(!declared.summary && said ? { summary: said } : {}), error, errorKind: "orchestrate_wrote_files", wrote: { files: ow.files, total: ow.total, commits: ow.commits, at: ow.at }, verification: null, branch: null, commit: null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}) } });
+    const fin = await s.finish({ agentId, status: "failed", ...(exec ? {} : { readsMessages: false }), spent, result: { ...declared, ...(!declared.summary && said ? { summary: said } : {}), error, errorKind: "orchestrate_wrote_files", wrote: { files: ow.files, total: ow.total, commits: ow.commits, at: ow.at }, verification: null, branch: null, commit: null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}) } });
     return fin.agent;
   }
   // ADR-019 §6: the provider's usage limit is a pause, not a failure. Its login waits for the reset too.
@@ -1176,7 +1190,7 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;
   // A consolidator's work is only what was staged: no list, nothing to stage or a staging that failed is no branch.
   const work = consolidated ? { branch: consolidated.staged?.sha ? branch : null, commit: consolidated.staged?.sha ?? null } : { branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null };
-  const fin = await s.finish({ agentId, status: limit || "error" in blocked || consolidated?.error ? "failed" : "done", spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, ...consolidated?.result, verification: null, ...work, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+  const fin = await s.finish({ agentId, status: limit || "error" in blocked || consolidated?.error ? "failed" : "done", ...(exec ? {} : { readsMessages: false }), spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, ...consolidated?.result, verification: null, ...work, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
   return fin.agent;
 }
 
@@ -1672,24 +1686,66 @@ export async function awaitThroughPauses(runId: string, agentId: string, o: { ti
 
 /**
  * When the agent a message is sent to will read it, if not right away: a running Claude agent reads it at its next
- * step (ADR-019 §3), but `codex exec` reads no input after its prompt, and a finished agent reads nothing. Null when
- * it will read it now (or the agent isn't known here).
+ * step (ADR-019 §3), but `codex exec` reads no input after its prompt. An idle agent (its last attempt ended) reads it as
+ * its next turn: the message continues it (ADR-026 §1). Null when it will read it now (or the agent isn't known here).
  */
 export async function messageNote(runId: string, to: string): Promise<string | null> {
   const a: ScopeAgent | null = await client().scope.getOrCreate([runId]).getAgent({ agentId: to }).catch(() => null);
   if (!a) return null;
-  if (TERMINAL_AGENT.has(a.status)) return `${to} is ${a.status}: nothing will read this message`;
+  if (TERMINAL_AGENT.has(a.status)) return null;
   if ((a.spec as { provider?: string } | null)?.provider !== "codex") return null;
   return hasVmCapcomd(a)
     ? `${to} is a Codex agent: it can't read messages while it works, only when it checks its inbox (capcomd inbox)`
     : `${to} is a Codex agent that can't read messages while it works: this one stays in its inbox, unread`;
 }
 
-/** `capcomd send`: append a message to `to`'s mailbox (idempotent by key), with a note when it won't be read right away. */
-export async function sendToAgent(runId: string, o: { to: string; from: string; body: string; key?: string; skills?: AttachedSkill[] }) {
+/** What a message that woke an idle agent says it did (ADR-026 §1). */
+export const continuedNote = (to: string) => `${to} was idle: this message is its next turn (it continues the same thread on a fresh machine)`;
+
+/**
+ * `capcomd send`: append a message to `to`'s mailbox (idempotent by key), with a note when it won't be read right away.
+ * An idle agent continues with it as its next turn (`continued`); an archived run refuses (`archived`). `model` and
+ * `effort` (capability agents.messages.model) apply to its next turn, checked against what its harness offers.
+ */
+export async function sendToAgent(runId: string, o: { to: string; from: string; body: string; key?: string; skills?: AttachedSkill[]; model?: string | null; effort?: string | null }) {
   await assertEngine();
-  const r = await client().scope.getOrCreate([runId]).sendMessage({ to: o.to, from: o.from, body: o.body, ...(o.key ? { key: o.key } : {}), ...(o.skills?.length ? { skills: o.skills } : {}) });
-  return { ...r, note: await messageNote(runId, o.to) };
+  if (o.model || o.effort) {
+    const a = await getAgentOrThrow(runId, o.to);
+    const problem = turnChangeProblem(a, o.model ?? null, o.effort ?? null);
+    if (problem) throw new RelayError("usage", problem, "Pick a model and effort from `capcomd run-options` (GET /v1/run-options drivers[].models / efforts) for the agent's provider.", { code: "invalid" });
+  }
+  const r = await client().scope.getOrCreate([runId]).sendMessage({ to: o.to, from: o.from, body: o.body, ...(o.key ? { key: o.key } : {}), ...(o.skills?.length ? { skills: o.skills } : {}),
+    ...(o.model ? { model: o.model } : {}), ...(o.effort ? { effort: o.effort } : {}) }).catch(asRelay);
+  return { ...r, note: (r as { continued?: boolean }).continued ? continuedNote(o.to) : await messageNote(runId, o.to) };
+}
+
+/**
+ * Why a message can't change the agent's model or effort to these (capability agents.messages.model), or null: each must
+ * be one its provider's harness offers (GET /v1/run-options drivers[].models / efforts); a fake agent has neither.
+ */
+export function turnChangeProblem(a: Pick<ScopeAgent, "agentId" | "spec">, model: string | null, effort: string | null): string | null {
+  const provider = (a.spec as { provider?: unknown; kind?: unknown } | null)?.provider;
+  if ((a.spec as { kind?: unknown } | null)?.kind === "fake" || (provider !== "claude" && provider !== "codex" && provider !== "fx")) return `${a.agentId} has no model or effort to change (it isn't a Claude, Codex or fx agent)`;
+  if (model) { const p = modelProblem(provider, model); if (p) return p; }
+  if (effort) {
+    const efforts = providerEfforts(provider);
+    if (!efforts.includes(effort)) return `effort ${JSON.stringify(effort)} isn't one ${provider} offers: use one of ${efforts.join(", ") || "(none)"}`;
+  }
+  return null;
+}
+
+/** Capability runs.archive: archive a run (read-only, its agents take no messages) or restore it. */
+export async function archiveRun(runId: string, by = "operator") {
+  await assertEngine();
+  const s = await existingActor("scope", [runId]).catch(() => null) as any;
+  if (!s) throw new RelayError("not_found", `run ${runId} not found`, "Check run ids with `capcomd runs`.");
+  return { runId, ...(await s.archive({ by }).catch(asRelay)) };
+}
+export async function restoreRun(runId: string, by = "operator") {
+  await assertEngine();
+  const s = await existingActor("scope", [runId]).catch(() => null) as any;
+  if (!s) throw new RelayError("not_found", `run ${runId} not found`, "Check run ids with `capcomd runs`.");
+  return { runId, ...(await s.restore({ by }).catch(asRelay)) };
 }
 
 /**

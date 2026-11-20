@@ -177,7 +177,7 @@ describe("steer messages", () => {
 		expect(((await get("/v1/events?scope=run-1")) as any[]).filter((e) => e.type === "message.sent").length).toBe(1);
 	});
 
-	test("errors: 403 without steer, 422 bad body, 404 unknown agent or run, 409 ended agent", async () => {
+	test("errors: 403 without steer, 422 bad body, 404 unknown agent or run", async () => {
 		const { req } = setup();
 		expect((await send(req, "msg-000001", { body: "x" }, "a1", approver)).status).toBe(403);
 		expect((await send(req, undefined, { body: "x" })).status).toBe(422);
@@ -191,8 +191,57 @@ describe("steer messages", () => {
 		expect(nf.status).toBe(404);
 		expect((await nf.json()).code).toBe("not_found");
 		expect((await req("/v1/runs/run-nope/agents/a1/messages", steer, "msg-000003", { body: "x" })).status).toBe(404);
-		const ended = await send(req, "msg-000004", { body: "x" }, "a3");
-		expect(ended.status).toBe(409);
-		expect(await ended.json()).toMatchObject({ code: "conflict", message: "a3 is done: nothing will read this message" });
+	});
+
+	// ADR-026 §1 (capability agents.idle): an agent is idle, not done. A message continues it.
+	test("an idle agent takes a message: it continues (agent.continued), and the answer says so", async () => {
+		const { req, get, types, src } = setup();
+		const r = await send(req, "msg-000004", { body: "one more thing" }, "a3");
+		expect(r.status).toBe(200);
+		const body = await r.json();
+		expect(SentMessage.safeParse(body).success).toBe(true);
+		expect(body).toMatchObject({ to: "a3", continued: true });
+		expect(body.note).toContain("a3 was idle");
+		expect(await types()).toContain("agent.continued");
+		const ev = ((await get("/v1/events?scope=run-1")) as any[]).find((e) => e.type === "agent.continued");
+		expect(ev.data).toMatchObject({ epoch: 2, from: "done", by: "operator" });
+		expect((await src.agents("run-1"))!.find((a) => a.id === "a3")!.status).toBe("running");
+	});
+
+	// Capability runs.archive: the one state that refuses messages; Restore takes it back.
+	test("an archived run refuses messages (409 archived) until it is restored; archiving waits for working agents", async () => {
+		const { req, src, types } = setup();
+		const busy = await req("/v1/runs/run-1/archive", steer, "arc-000001");
+		expect(busy.status).toBe(409);
+		expect((await busy.json()).message).toContain("still working");
+		for (const a of (await src.agents("run-1"))!) a.status = "done";
+		const ok = await req("/v1/runs/run-1/archive", steer, "arc-000002");
+		expect(ok.status).toBe(200);
+		expect(await ok.json()).toEqual({ runId: "run-1", archived: true, changed: true });
+		expect((await src.runs())[0]!.archived).toBe(true);
+		const refused = await send(req, "msg-000005", { body: "x" }, "a3");
+		expect(refused.status).toBe(409);
+		expect(await refused.json()).toMatchObject({ code: "archived", message: "run run-1 is archived · restore to continue" });
+		const back = await req("/v1/runs/run-1/restore", steer, "arc-000003");
+		expect(await back.json()).toEqual({ runId: "run-1", archived: false, changed: true });
+		expect((await src.runs())[0]!.archived).toBeUndefined();
+		expect((await send(req, "msg-000006", { body: "x" }, "a3")).status).toBe(200);
+		expect(await types()).toEqual(expect.arrayContaining(["run.archived", "run.restored"]));
+	});
+
+	// Capability agents.messages.model: a model and effort its provider's harness offers, or 422 naming the field.
+	test("a message's model and effort are checked against the agent's harness options", async () => {
+		const { req, src } = setup();
+		(await src.agents("run-1"))!.find((a) => a.id === "a3")!.provider = "claude";
+		const bad = await send(req, "msg-000007", { body: "x", model: "gpt-nope" }, "a3");
+		expect(bad.status).toBe(422);
+		expect(await bad.json()).toMatchObject({ code: "invalid", field: "model" });
+		const badEffort = await send(req, "msg-000008", { body: "x", effort: "ludicrous" }, "a3");
+		expect(await badEffort.json()).toMatchObject({ code: "invalid", field: "effort" });
+		const ok = await send(req, "msg-000009", { body: "x", model: "claude-opus-5-5", effort: "high" }, "a3");
+		expect(ok.status).toBe(200);
+		expect(src.delivered.at(-1)).toMatchObject({ to: "a3", turn: { model: "claude-opus-5-5", effort: "high" } });
+		const fake = await send(req, "msg-000010", { body: "x", model: "claude-opus-5-5" }, "a1");
+		expect(fake.status).toBe(422);
 	});
 });

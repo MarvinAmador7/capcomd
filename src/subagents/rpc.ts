@@ -197,11 +197,17 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       if (to !== me.parent) await assertWritable(c, to, true);
       const tr: Truncation[] = [];
       const body = capText(String(args.body ?? ""), MESSAGE_MAX_BYTES, "body", tr);
-      const note = await O.messageNote(run, to);
-      return { ...(await s.sendMessage({ to, from: c.sub, body, ...(args.key ? { key: `${c.sub}:${args.key}` } : {}) })), ...(tr.length ? { truncated: tr } : {}), ...(note ? { note } : {}) };
+      const sent = await s.sendMessage({ to, from: c.sub, body, ...(args.key ? { key: `${c.sub}:${args.key}` } : {}) });
+      // ADR-026 §1: an idle child continues with the message as its next turn.
+      const note = (sent as { continued?: boolean }).continued ? O.continuedNote(to) : await O.messageNote(run, to);
+      return { ...sent, ...(tr.length ? { truncated: tr } : {}), ...(note ? { note } : {}) };
     }
     case "inbox": {
       const msgs = await s.inbox({ agentId: c.sub, after: Number(args.after ?? 0) });
+      // ADR-026 §1: what it read itself is read: the durable cursor moves past it, so its end doesn't continue it with
+      // the same messages again (a CLI that only reads its inbox, Codex, would otherwise be continued without end).
+      const last = Math.max(0, ...msgs.map((m: any) => Number(m.seq)));
+      if (last) await s.messagesDelivered({ agentId: c.sub, seq: last });
       // Skills the sender attached come with the body, as a running agent gets them (runner messageText).
       return { messages: msgs.map((m: any) => ({ seq: m.seq, from: m.from, at: m.at, body: fence(m.from, withSkills(m.body, m.skills)), ...(m.skills?.length ? { skills: m.skills.map((x: AttachedSkill) => x.name) } : {}) })) };
     }

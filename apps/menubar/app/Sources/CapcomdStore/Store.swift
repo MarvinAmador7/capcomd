@@ -119,6 +119,11 @@ public final class CapcomdStore {
   /// Renaming agents (`agents.title`; AgentTitle.swift): a rename on its way or why the last one failed, per agent.
   let titler: AgentTitling?
   public internal(set) var titleActions: [String: TitleAction] = [:]
+  /// Restoring archived runs (capability runs.archive; AgentLife.swift): Restore on its way, or why it failed, per run.
+  public internal(set) var restoreStates: [String: RestoreState] = [:]
+  var archiver: RunArchiving? { controls as? RunArchiving }
+  /// Marks a run archived or restored from outside the event feed (a Restore that went through, an archived refusal).
+  func setArchived(runId: String, _ archived: Bool) { runs[runId]?.archived = archived }
   var pendingTitleKeys: [String: String] = [:]
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
@@ -363,6 +368,7 @@ public final class CapcomdStore {
       run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
       run.goalBranch = r.goalBranch ?? run.goalBranch
+      run.archived = r.archived ?? false
       runs[r.id] = run
     }
     let agentRuns = Set(b.agents.map(\.runId)).union(b.steps.compactMap { $0.runId ?? ($0.scope.hasPrefix("run-") ? $0.scope : nil) })
@@ -388,6 +394,7 @@ public final class CapcomdStore {
       ag.activityAtMs = epochMs(iso: a.activity?.at) ?? old?.activityAtMs
       ag.read(result: a.result)
       ag.title = a.title.map(UntrustedText.init) ?? old?.title; ag.titleSource = a.titleSource ?? old?.titleSource
+      ag.continuedAtMs = epochMs(iso: a.continued?.at) ?? old?.continuedAtMs
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
     }
@@ -486,6 +493,20 @@ public final class CapcomdStore {
       if let runId, let agentId, d["result"]?["limit"]?.string == "quota", runs[runId]?.agents[agentId]?.resetAtMs == nil, let u = d["until"]?.int {
         runs[runId]?.agents[agentId]?.resetAtMs = u
       }
+    case "agent.continued":
+      // Capability agents.idle: a message woke this idle agent into its next attempt: it runs again (waking while it
+      // is set up), its last outcome no longer its state.
+      setStatus(runId, agentId, .running, e)
+      if let runId, let agentId {
+        runs[runId]?.agents[agentId]?.continuedAtMs = e.epochMs; runs[runId]?.agents[agentId]?.setupMarks = []
+        runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil
+      }
+    case "agent.model_changed":
+      // Capability agents.messages.model: the model its next turns run with; shown once it applies.
+      if let runId, let agentId, d["applied"]?.bool == true, let m = d["model"]?.string { runs[runId]?.agents[agentId]?.model = m }
+    case "run.archived", "run.restored":
+      guard let runId else { return }
+      runs[runId]?.archived = e.type == "run.archived"
     case "agent.resumed", "agent.started":
       setStatus(runId, agentId, .running, e)
       if let runId, let agentId { runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil }
@@ -507,6 +528,9 @@ public final class CapcomdStore {
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string
       runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
       runs[runId]?.agents[agentId]?.setup = AgentSetup(d["activity"]?["setup"])
+      if let ph = runs[runId]?.agents[agentId]?.setup?.phase, d["activity"]?["kind"]?.string == "setup", runs[runId]?.agents[agentId]?.setupMarks.last?.phase != ph {
+        runs[runId]?.agents[agentId]?.setupMarks.append(SetupMark(phase: ph, atMs: epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs))
+      }
       runs[runId]?.agents[agentId]?.wake = AgentWake(activity: d["activity"]?["wake"])
       runs[runId]?.agents[agentId]?.activityAtMs = epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
@@ -611,6 +635,7 @@ public final class CapcomdStore {
       run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
       run.goalBranch = r.goalBranch ?? run.goalBranch
+      run.archived = r.archived ?? false
       runs[r.id] = run
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
@@ -624,6 +649,7 @@ public final class CapcomdStore {
         old.createdAtMs = epochMs(iso: a.createdAt) ?? old.createdAtMs
         old.read(result: a.result)
         if let t = a.title { old.title = UntrustedText(t); old.titleSource = a.titleSource }
+        old.continuedAtMs = epochMs(iso: a.continued?.at) ?? old.continuedAtMs
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
@@ -634,6 +660,7 @@ public final class CapcomdStore {
         ag.provider = Provider(wire: a.provider); ag.model = a.model
         ag.activityAtMs = epochMs(iso: a.activity?.at); ag.read(result: a.result)
         ag.title = a.title.map(UntrustedText.init); ag.titleSource = a.titleSource
+        ag.continuedAtMs = epochMs(iso: a.continued?.at)
         runs[a.runId]?.agents[a.id] = ag
       }
     }

@@ -132,7 +132,9 @@ async function sendCommand({ positionals, values, json }: Cmd): Promise<number> 
   const names = (values.skill as string[] | undefined) ?? [];
   const sk = names.length ? await (await import("../../agents/skills")).resolveSkills(names, { listedBy: "`capcomd skills`" }) : { skills: [] };
   if ("error" in sk) usage(sk.error);
-  const { note, ...r } = await (await import("../../primitives/ops")).sendToAgent(runId, { to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}), ...(sk.skills.length ? { skills: sk.skills } : {}) });
+  // --model / --effort (capability agents.messages.model): what its next turns run with.
+  const { note, ...r } = await (await import("../../primitives/ops")).sendToAgent(runId, { to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}), ...(sk.skills.length ? { skills: sk.skills } : {}),
+    ...(values.model ? { model: String(values.model) } : {}), ...(values.effort ? { effort: String(values.effort) } : {}) });
   if (json) out({ runId, to, ...r, ...(note ? { note } : {}) }); else console.log(`sent #${r.seq} to ${to}${note ? ` (${note})` : ""}`);
   return EXIT.ok;
 }

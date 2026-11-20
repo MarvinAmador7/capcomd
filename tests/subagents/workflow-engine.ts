@@ -13,7 +13,7 @@ import { bareRepo } from "../merge/gitfixture";
 export interface WorkflowEngine {
   engine: Engine;
   env: Record<string, string>;
-  /** The fake provider's machines: an agent's first epoch works in `<vm>/<agentId>-e1`. */
+  /** The fake provider's machines: an agent works in `<vm>/<agentId>` (the same dir every epoch, ADR-026 §2). */
   vm: string;
   /** The test's own scratch dir (ledgers and the outage file live here). */
   dir: string;

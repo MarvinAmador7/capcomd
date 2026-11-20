@@ -14,6 +14,18 @@ import { type Cmd, type KernelCommand, usage, out, deepMerge, runTraceAt, saySki
 
 /** `capcomd run` */
 async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
+  // Capability runs.archive: `capcomd run archive|restore <runId>`: an archived run is read-only (its agents take no
+  // messages) until it is restored.
+  if ((positionals[1] === "archive" || positionals[1] === "restore") && positionals.length === 3) {
+    const P = await import("../../primitives/ops");
+    const runId = positionals[2]!;
+    const by = (values.by as string | undefined) ?? "operator";
+    const r = positionals[1] === "archive" ? await P.archiveRun(runId, by) : await P.restoreRun(runId, by);
+    if (json) out(r);
+    else console.log(positionals[1] === "archive" ? (r.changed ? `Archived ${runId}: read-only until \`capcomd run restore ${runId}\`.` : `${runId} was already archived.`)
+      : (r.changed ? `Restored ${runId}: its agents take messages again.` : `${runId} wasn't archived.`));
+    return EXIT.ok;
+  }
   if (positionals[1] === "new" && positionals.length === 2) {
     const { parseBudget } = await import("../../primitives/policy");
     let budget: Record<string, number> = {}; // no budget: the run is unlimited

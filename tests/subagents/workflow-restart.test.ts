@@ -25,7 +25,7 @@ test("restart mid-watch: the workflow resumes by itself at its watch's deadline,
   expect(run).toMatch(/^run-/);
   const agent = (await w.cj(["spawn", run, "--profile", "worker", "--task", "[hold:90] make the failing test pass", "--key", "w"])).j?.agentId;
   expect(agent).toMatch(/^agt-/);
-  const hold = join(w.vm, `${agent}-e1`, "hold.log");
+  const hold = join(w.vm, agent, "hold.log");
   for (let i = 0; i < 150 && !existsSync(hold); i++) { expect(w.drivers(run)).toEqual([]); await sleep(200); }
   expect(existsSync(hold)).toBe(true);
   expect((await w.scopeAgent(run, agent))?.driver).toMatch(/^wf-/);

@@ -1781,6 +1781,163 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `agent.continued`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "epoch": {
+      "type": "number",
+      "description": "Its new attempt (Agent epoch): what runs now continues the same thread"
+    },
+    "from": {
+      "type": "string",
+      "enum": [
+        "done",
+        "failed",
+        "cancelled"
+      ],
+      "description": "How its last attempt had ended (it stays on that attempt's agent.done / agent.failed / agent.cancelled)"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who sent the message that woke it: operator, client:<id>, an agent id (its parent, an ancestor), or capcomd (a message that came while its last attempt was ending)"
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message (Message.seq) its new attempt starts with"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "epoch",
+    "from",
+    "by",
+    "messageSeq"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.model_changed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "model": {
+      "description": "The model its next turns run with; null: unchanged",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort": {
+      "description": "The reasoning effort its next turns run with; null: unchanged",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "previous": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model",
+        "effort"
+      ],
+      "description": "What it ran with before"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who asked for it (operator, client:<id>, an agent id)"
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message that carried the change"
+    },
+    "applied": {
+      "type": "boolean",
+      "description": "true: its next attempt starts with it now (the agent was idle); false: queued until its current turn ends (a running CLI can't switch model), then it continues as a new attempt with it"
+    }
+  },
+  "required": [
+    "model",
+    "effort",
+    "previous",
+    "by",
+    "messageSeq",
+    "applied"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.archived`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "by": {
+      "type": "string",
+      "description": "Who archived it: operator or client:<id>"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.restored`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "by": {
+      "type": "string",
+      "description": "Who restored it: operator or client:<id>"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `agent.wake_cancelled`
 
 ```json
@@ -2307,7 +2464,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "properties": {
             "phase": {
               "type": "string",
-              "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
+              "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, restore, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
             },
             "bytes": {
               "description": "copy: bytes sent to the machine so far; null otherwise",
@@ -2652,7 +2809,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2759,7 +2919,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2809,7 +2972,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2871,7 +3037,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2933,7 +3102,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2995,7 +3167,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3057,7 +3232,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3119,7 +3297,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3181,7 +3362,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "titled",
         "waiting",
         "woken",
-        "wake_cancelled"
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -4194,7 +4378,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 # Lifecycle feed
 
-Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, agent.wake_armed, agent.woken, agent.wake_cancelled, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, run.archived, run.restored, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, agent.wake_armed, agent.woken, agent.wake_cancelled, agent.continued, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 Activity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).
 
@@ -4461,6 +4645,23 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "actor",
             "at"
           ]
+        },
+        "archived": {
+          "description": "Capability runs.archive. Set on an archived run only: read-only, its agents take no messages (409 `archived`) until it is restored (POST /v1/runs/{runId}/restore). Absent: not archived",
+          "type": "boolean",
+          "const": true
+        },
+        "archivedAt": {
+          "description": "Capability runs.archive. When it was archived; set with `archived` only",
+          "type": "string",
+          "allOf": [
+            {
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            },
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            }
+          ]
         }
       },
       "required": [
@@ -4591,7 +4792,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                 "properties": {
                   "phase": {
                     "type": "string",
-                    "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
+                    "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, restore, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
                   },
                   "bytes": {
                     "description": "copy: bytes sent to the machine so far; null otherwise",
@@ -4927,6 +5128,45 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               null
             ],
             "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
+          },
+          "continued": {
+            "description": "Capability agents.idle (ADR-026 §1). A message woke this idle agent into its current attempt (agent.continued); null when its current attempt is its first (or a resume). While its status is running and its activity is of kind setup, it is waking (a client shows \"Waking <name>…\" with the setup phase, including `restore`, after a second). Older daemons don't send it",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                  },
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                ],
+                "description": "When the message woke it"
+              },
+              "by": {
+                "type": "string",
+                "description": "Who sent it: operator, client:<id>, an agent id (its parent or an ancestor), or a wake (wake-wk-…)"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "failed",
+                  "cancelled"
+                ],
+                "description": "How its attempt before this one had ended"
+              }
+            },
+            "required": [
+              "at",
+              "by",
+              "from"
+            ]
           }
         },
         "required": [

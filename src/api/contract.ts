@@ -31,8 +31,8 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
-	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "invalid", "internal", "unavailable", "timeout"])
-		.describe("stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. timeout (504, capability plugins.routes): a plugin's route under /v1/x/ didn't answer within its deadline (30 s); invalid is also 413 there, a body over 1 MiB. Treat a code you don't know as a generic error"),
+	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "archived", "invalid", "internal", "unavailable", "timeout"])
+		.describe("archived (409, capability runs.archive): a message to an agent of an archived run; the message says so (\"… is archived · restore to continue\"): offer Restore (POST /v1/runs/{runId}/restore). stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a run to archive whose agents still work), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. timeout (504, capability plugins.routes): a plugin's route under /v1/x/ didn't answer within its deadline (30 s); invalid is also 413 there, a body over 1 MiB. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
 	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub. From PUT /v1/profiles/{name} (capability profiles.edit): the field id the value is about (limits.maxTurns), rev, or repo"),
@@ -58,6 +58,8 @@ export const Run = z.object({
 	createdAt: Timestamp.nullable(),
 	goalBranch: z.lazy(() => GoalBranchSummary).nullable().optional().describe("Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it"),
 	trigger: z.lazy(() => RunTrigger).nullable().optional().describe("Capability triggers. The external event this run was started from (plugin API §16.3: a source's trigger the intake acted on); null for a run someone started. Older daemons don't send it"),
+	archived: z.literal(true).optional().describe("Capability runs.archive. Set on an archived run only: read-only, its agents take no messages (409 `archived`) until it is restored (POST /v1/runs/{runId}/restore). Absent: not archived"),
+	archivedAt: Timestamp.optional().describe("Capability runs.archive. When it was archived; set with `archived` only"),
 });
 /** Run.trigger: where a run a trigger started came from, in its source's own terms. */
 export const RunTrigger = z.object({
@@ -133,6 +135,11 @@ export const Agent = z.object({
 	updatedAt: Timestamp.nullable(),
 	title: UntrustedText.nullable().optional().describe(`Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title. Its short name, for its tab, row or column header ("login redirect"): 1 to ${TITLE_WORDS_MAX} lowercase words, at most ${TITLE_MAX_CHARS} characters, one line. The user's (PUT …/title), else the latest the agent, its parent or the user's driving harness set, else the daemon's from the task's first words (titleSource derived); null only for an agent with no task text. Live: agent.titled. Older daemons don't send it: name the agent by its profile`),
 	titleSource: AgentTitleSource.nullable().optional(),
+	continued: z.object({
+		at: Timestamp.describe("When the message woke it"),
+		by: z.string().describe("Who sent it: operator, client:<id>, an agent id (its parent or an ancestor), or a wake (wake-wk-…)"),
+		from: z.enum(["done", "failed", "cancelled"]).describe("How its attempt before this one had ended"),
+	}).nullable().optional().describe("Capability agents.idle (ADR-026 §1). A message woke this idle agent into its current attempt (agent.continued); null when its current attempt is its first (or a resume). While its status is running and its activity is of kind setup, it is waking (a client shows \"Waking <name>…\" with the setup phase, including `restore`, after a second). Older daemons don't send it"),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
 export const Message = z.object({
@@ -562,6 +569,8 @@ const SendBody = z.object({
 	body: z.string().min(1).describe(`Message text (UTF-8, at most ${MESSAGE_BODY_MAX_BYTES} bytes). Delivered to a running Claude agent at its next step; a Codex agent reads it only from its inbox (see note)`),
 	skills: z.array(z.string()).max(SKILLS_PER_MESSAGE_MAX).optional().describe(`Capability steer.skills. Names from GET /v1/skills (at most ${SKILLS_PER_MESSAGE_MAX}; a repeated name is sent once): the agent gets each skill's SKILL.md with the message. ` +
 		`An unknown name, or SKILL.md files over ${SKILL_MAX_BYTES} bytes together, is 422 \`invalid\` and sends nothing. The confirming message.sent echoes them as data.skills`),
+	model: z.string().min(1).max(100).nullable().optional().describe("Capability agents.messages.model. The model the agent's next turns run with: one of GET /v1/run-options drivers[].models for the agent's provider (422 `invalid`, field model, otherwise). An idle agent continues with it; a working one switches when its current turn ends (a running CLI can't switch model): it then continues as a new attempt with it. agent.model_changed and a `note` thread item record it; Agent.model shows it once it applies"),
+	effort: z.string().min(1).max(100).nullable().optional().describe("Capability agents.messages.model. The reasoning effort of its next turns: one of drivers[].efforts for its provider (422 `invalid`, field effort). As `model`"),
 });
 /** Result of POST /v1/runs/{runId}/agents/{agentId}/messages. */
 export const SentMessage = z.object({
@@ -569,7 +578,14 @@ export const SentMessage = z.object({
 	to: z.string().describe("The agent the message was sent to"),
 	from: z.string().describe("Sender as threads show it: operator"),
 	seq: z.number().int().positive().describe("Thread message seq. The confirming message.sent event carries the same value as data.seq (with data.to = the agent), as does Message.seq in GET /v1/runs/{runId}/messages and snapshot.threads"),
-	note: z.string().nullable().describe("When the agent won't read it right away (a Codex agent reads messages only from its inbox); null when it will"),
+	note: z.string().nullable().describe("When the agent won't read it right away (a Codex agent reads messages only from its inbox), or that it woke an idle agent; null when it will"),
+	continued: z.literal(true).optional().describe("Capability agents.idle. The agent was idle (its last attempt done, failed or cancelled): this message is the first turn of its next attempt, confirmed by agent.continued. Absent when it was working"),
+});
+/** Result of POST /v1/runs/{runId}/archive and /restore (capability runs.archive). */
+export const RunArchive = z.object({
+	runId: z.string(),
+	archived: z.boolean().describe("Whether the run is archived now"),
+	changed: z.boolean().describe("false: it already was (archive) or wasn't (restore)"),
 });
 
 const WRITE_DOC = "Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); " +
@@ -616,6 +632,9 @@ export const CAPABILITIES = {
 	"plugins.seam_stats": "GET /v1/plugins (and GET /v1/plugins/{name}) `stats.seams`: the daemon's calls to each seam a plugin provides (sandbox, agent, forge, context) since it started, and the failed ones by their error kind (plugin API §13.5)",
 	"logins.fx": "GET /v1/logins takes `provider` (claude, codex or fx): only that AI's logins; fx's (a Vercel or Grok plan login with `capcomd auth login fx`, or AI_GATEWAY_API_KEY) are listed only when asked for with `provider=fx`",
 	"agents.setup": "Agent.activity of kind setup, with `setup` (phase, bytes, totalBytes): while an agent is being set up (its machine starting, its workspace prepared, the repository copied to it, its CLI installed and started), before its first step, live on agent.activity_changed",
+	"agents.idle": "An agent is idle, not done (ADR-026 §1): an agent whose attempt ended (done, failed, cancelled) in a run that isn't archived takes messages; a message continues it as a new attempt on a fresh machine (POST …/messages answers `continued: true`; agent.continued on run streams and the lifecycle feed, cause continued, and run.started when the run had ended), continuing its conversation (its saved CLI session, or one rebuilt from its thread, with a `note` thread item saying so). Agent.continued says a message woke its current attempt; Agent.activity setup phase `restore` while its conversation is restored. A parent's await counts an idle child as ended; a woken child runs again. Its wall-time budget counts only while it works (asleep between turns or idle, it pauses); turns and spend count across attempts",
+	"agents.messages.model": "POST …/agents/{agentId}/messages takes `model` and `effort` (from GET /v1/run-options drivers[].models / efforts for the agent's provider): its next turns run with them, at once for an idle agent, after its current turn for a working one; agent.model_changed and a `note` thread item record it",
+	"runs.archive": "POST /v1/runs/{runId}/archive and /restore (the steer scope, an Idempotency-Key): an archived run is read-only, a message to its agents is 409 `archived` until it is restored; Run.archived; run.archived and run.restored on run streams and the lifecycle feed. Archiving is refused (409 conflict) while an agent of it works",
 	"agents.wake": "Waits between turns (ADR-026 §3): an agent ends its turn with a wake armed instead of waiting inside a tool call. agent.wake_armed, agent.woken and agent.wake_cancelled on run streams and the lifecycle feed (causes waiting, woken, wake_cancelled), and Agent.activity of kind wait with `wake` (what it waits for, since when) while it waits",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
@@ -1375,6 +1394,15 @@ export const contract = {
 				"Confirmed by agent.cancelled per agent and run.cancelled. " +
 				`409 \`conflict\` when the run has already ended (a run with no agent running is cancelled, not refused). ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunControl),
+		archive: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/archive", inputStructure: "detailed",
+			description: "Capability runs.archive. Archive the run (no body): read-only until restored; a message to its agents is 409 `archived`. Confirmed by run.archived. " +
+				`409 \`conflict\` while an agent of it is pending, running or paused (stop the run first). ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunArchive),
+		restore: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/restore", inputStructure: "detailed",
+			description: `Capability runs.archive. Restore an archived run (no body): its agents take messages again (each is idle, as it was). Confirmed by run.restored. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunArchive),
 	},
 	agents: {
 		tree: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents" }).input(z.object({ runId: z.string() })).output(z.array(Agent)),
@@ -1394,8 +1422,8 @@ export const contract = {
 		send: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/messages", inputStructure: "detailed",
 			description: "Steer: send the agent a message from the operator (`capcomd send <runId> <agt> <text>`). Returns the thread `seq`; the message.sent event on the run stream " +
-				"with the same `data.seq` (and `data.to` = agentId) confirms it, so a client can match its optimistic bubble. 409 `conflict` when the agent has ended (nothing would read it). " +
-				`422 \`invalid\` when \`body\` is empty or over ${MESSAGE_BODY_MAX_BYTES} bytes, or a skill is unknown or too many. The same key with other \`skills\` is another request (409 \`idempotency_conflict\`). ${WRITE_DOC}`,
+				"with the same `data.seq` (and `data.to` = agentId) confirms it, so a client can match its optimistic bubble. Capability agents.idle: an agent whose attempt ended (idle) takes it too, as the first turn of its next attempt (`continued: true`, agent.continued); 409 `archived` when the run is archived (capability runs.archive). " +
+				`422 \`invalid\` when \`body\` is empty or over ${MESSAGE_BODY_MAX_BYTES} bytes, or a skill is unknown or too many, or \`model\`/\`effort\` isn't one its provider offers (\`field\`). The same key with other \`skills\` is another request (409 \`idempotency_conflict\`). ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders, body: SendBody })).output(SentMessage),
 		pause: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/pause", inputStructure: "detailed",

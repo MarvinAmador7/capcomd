@@ -4,7 +4,7 @@ import { basename } from "node:path";
 import { existingActor, generateRunId } from "../core/relay";
 import { redactShapes } from "../agents/redact";
 import { listSkills, readSkill } from "../agents/skills";
-import { cancelAny, decideMerge, pauseAgents, recentRuns, resumeAgents, sendToAgent, TARGET_KV } from "../primitives/ops";
+import { archiveRun, cancelAny, decideMerge, pauseAgents, recentRuns, restoreRun, resumeAgents, sendToAgent, TARGET_KV } from "../primitives/ops";
 import { mergeConfigFor } from "../merge/run-config";
 import { tracePath } from "../utils/tracing-simple";
 import { VERSION } from "../utils/self";
@@ -12,7 +12,7 @@ import { isoTs } from "./envelope";
 import { agentActivity, describeEvent, waitActivity } from "./describe";
 import { armedData } from "../actors/wakes";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
+import { approvalIdFor, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, SendRefused, type ArchiveOutcome, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
 import { applyRunPatch, hooks, principalOf, untrusted } from "../plugins/hooks";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { Principal } from "../../packages/plugin/src/shapes";
@@ -241,13 +241,25 @@ function withTrigger(runId: string): { trigger?: NonNullable<ReturnType<typeof t
  *  (src/plugins/services.ts). */
 export async function runOfRow(r: ReturnType<typeof recentRuns>[number]) {
 	const s = await existingScope(r.runId).catch(() => null);
-	const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null; agentTitle?: { title: string } | null } | null;
+	const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null; agentTitle?: { title: string } | null; archived?: { at: number; by: string } | null } | null;
 	const agents = s && meta ? await s.listAgents({}).catch(() => []) : [];
 	const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
 	// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
 	const goal = meta?.goal ?? null;
 	return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agentTitle: meta?.agentTitle?.title ?? null, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
-		goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended), ...withTrigger(r.runId) };
+		goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended), ...withTrigger(r.runId),
+		// Capability runs.archive: set only on an archived run.
+		...(meta?.archived ? { archived: true as const, archivedAt: isoTs(meta.archived.at) } : {}) };
+}
+
+/** POST …/archive|restore from what the op did or threw. */
+async function archiveOutcome(run: () => Promise<{ changed: boolean }>): Promise<ArchiveOutcome> {
+	try { return { ok: true, changed: (await run()).changed }; } catch (e) {
+		const err = e as { code?: string; message?: string };
+		if (err.code === "not_found") return { ok: false, status: 404, code: "not_found", message: String(err.message) };
+		if (err.code === "conflict") return { ok: false, status: 409, code: "conflict", message: String(err.message) };
+		throw e;
+	}
 }
 
 export function rivetSource(): HarnessSource {
@@ -318,6 +330,8 @@ export function rivetSource(): HarnessSource {
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
 					...agentRuntime(a.spec), createdAt: a.createdAt ? isoTs(a.createdAt) : null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
 					...shownTitle(a.titleState, inl.text ?? redactShapes(String(a.task ?? ""))),
+					// Capability agents.idle: a message woke its current attempt (while it is set up, it is waking).
+					...(a.continued ? { continued: { at: isoTs(a.continued.at), by: String(a.continued.by), from: a.continued.from } } : {}),
 				};
 			});
 		},
@@ -446,10 +460,19 @@ export function rivetSource(): HarnessSource {
 				throw e;
 			}
 		},
-		send: async (runId, to, body, key, skills) => {
-			const r = await sendToAgent(runId, { to, from: "operator", body, key, ...(skills?.length ? { skills } : {}) });
-			return { seq: r.seq, note: r.note };
+		send: async (runId, to, body, key, skills, turn) => {
+			try {
+				const r = await sendToAgent(runId, { to, from: "operator", body, key, ...(skills?.length ? { skills } : {}), ...(turn?.model ? { model: turn.model } : {}), ...(turn?.effort ? { effort: turn.effort } : {}) });
+				return { seq: r.seq, note: r.note, ...((r as { continued?: boolean }).continued ? { continued: true } : {}) };
+			} catch (e) {
+				const err = e as { code?: string; reason?: string; message?: string };
+				if (err.reason === "archived" || err.code === "archived") throw new SendRefused(409, "archived", String(err.message));
+				if (err.reason === "invalid") throw new SendRefused(422, "invalid", String(err.message), /effort/.test(String(err.message)) ? "effort" : "model");
+				throw e;
+			}
 		},
+		archive: (runId, by) => archiveOutcome(() => archiveRun(runId, by)),
+		restore: (runId, by) => archiveOutcome(() => restoreRun(runId, by)),
 		inspectProject: async (path) => { const P = await import("./projects"); return P.inspectProject(path, await projectDeps()); },
 		knownProjects: async () => { const P = await import("./projects"); return P.knownProjects(await projectDeps()); },
 		setUpProject: async (input) => { const P = await import("./projects"); return P.setUpProject(input, await projectDeps()); },

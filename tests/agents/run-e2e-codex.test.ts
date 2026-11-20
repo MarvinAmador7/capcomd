@@ -1,7 +1,7 @@
 // Codex variant. Full pipeline with the real adapter: capcomd run → planner (1 task) → worker runs (fake) claude
 // in a host-exec FakeProvider → commit with trailers + push → verifier runs tests → real git merge.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../helpers/test-engine";
@@ -84,5 +84,7 @@ test("capcomd run --profile cx --set maxTurns=8 (codex profile, apikey, appendSy
   const evlog = await capcomd(["events", runId, "--json", "--limit", "500"], cenv);
   process.stderr.write(evlog.stdout.slice(0, 0));
   expect(evlog.stdout).toContain('"maxTurns":8');
-  expect(readFileSync(join(env.CAPCOMD_AGENT_WORKDIR!, "task-1-e1/argv.txt"), "utf8")).toContain("PROFILE-APPEND-MARKER");
+  // Its work dir: `<agentId>` (the same every attempt, ADR-026 §2), found by the argv the fake wrote there.
+  const W = readdirSync(env.CAPCOMD_AGENT_WORKDIR!).map((d) => join(env.CAPCOMD_AGENT_WORKDIR!, d)).find((d) => existsSync(join(d, "argv.txt")))!;
+  expect(readFileSync(join(W, "argv.txt"), "utf8")).toContain("PROFILE-APPEND-MARKER");
 }, 180_000);

@@ -242,7 +242,8 @@ final class SidebarModelTests: XCTestCase {
     let c = m.sidebar.content
     XCTAssertTrue(c.needs.isEmpty)
     XCTAssertTrue(c.running.isEmpty)
-    XCTAssertEqual(c.finished.first?.rows.map(\.word), ["done", "done", "failed"])
+    // ADR-026 §9: the root agent is idle (a message continues it); its children keep their outcome.
+    XCTAssertEqual(c.finished.first?.rows.map(\.word), ["idle", "done", "failed"])
     m.closeNewProject()
     if m.selectedAgent != nil {
       // Its selected agent never hides: Finished shows while it holds the selection.

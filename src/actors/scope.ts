@@ -43,7 +43,7 @@ import { stableId, available, budgetUsed, checkGrant, checkSpawn, type Grant, gr
 import type { AgentSpec, ProfileLayer } from "../profiles";
 import type { AttachedSkill } from "../agents/skills";
 import { ACTIVITY_KINDS, SETUP_PHASES, setupMayReplace, type SetupState, type StoredActivity } from "../agents/activity";
-import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
+import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, threadNote, type ItemDraft } from "../../packages/agent-thread/src/index";
 import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, type TitleState } from "../primitives/agent-title";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 import { fitJobRecord } from "../jobs/record";
@@ -93,7 +93,7 @@ function itemRow(r: any) {
  * A finished child's hand-back card for its parent's thread. A reviewer declares no summary (its final message is its
  * verdict): its card is the verdict, `{"passed", "reasons"}` on its result, never a bare "Finished.".
  */
-export function handoffOf(parent: string, child: string, status: string, result: Record<string, unknown>): ItemDraft {
+export function handoffOf(parent: string, child: string, status: string, result: Record<string, unknown>, epoch = 1): ItemDraft {
   const s = (x: unknown) => (typeof x === "string" ? x : "");
   const v = result.verdict as { passed?: unknown; reasons?: unknown } | null | undefined;
   const verdict = v && typeof v === "object" && typeof v.passed === "boolean"
@@ -104,7 +104,7 @@ export function handoffOf(parent: string, child: string, status: string, result:
   const declared = verdict && s(result.summary) === verdictSummary(verdict) ? "" : s(result.summary);
   const summary = declared || s(result.report) || s(result.error) || (verdict ? "" : fallback);
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts.filter((a: any) => a && typeof a.ref === "string").map((a: any) => ({ name: s(a.name), ref: s(a.ref) })) : [];
-  return handoffDraft({ id: `itm-${parent}-handoff-${child}`, at: Date.now(), child: { agentId: child, status }, summary, verdict, artifacts });
+  return handoffDraft({ id: perEpoch(`itm-${parent}-handoff-${child}`, epoch), at: Date.now(), child: { agentId: child, status }, summary, verdict, artifacts });
 }
 
 export type KvEntry = ReturnType<typeof kvRow>;
@@ -184,9 +184,85 @@ function rowToAgent(r: any) {
      *  row that predates them. */
     profileVersion: r.profile_version == null ? null : Number(r.profile_version),
     profileSource: (r.profile_source as ProfileLayer | null) ?? null,
+    /** ADR-026 §1: what it had spent when its current attempt began (its earlier attempts'); its spend is this plus what
+     *  this attempt's runner reports. Null on its first attempt (and rows from before it). */
+    spentBase: r.spent_base ? (JSON.parse(r.spent_base as string) as Budget) : null,
+    /** ADR-026 §1: a message woke it into its current attempt (agent.continued): when, by whom, from which message, and
+     *  how its last attempt had ended. Null when its current attempt is its first, or a resume. */
+    continued: r.continued ? (JSON.parse(r.continued as string) as Continued) : null,
+    /** Capability agents.messages.model: a model/effort change a message asked for while it worked, applied when its
+     *  current attempt ends (its next one runs with it). */
+    nextTurn: r.next_turn ? (JSON.parse(r.next_turn as string) as NextTurn) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
+/** How a message woke an idle agent into a new attempt (agents_v2.continued). */
+export type Continued = { epoch: number; at: number; by: string; seq: number; from: "done" | "failed" | "cancelled" };
+/** A model or effort a message asked for (capability agents.messages.model). */
+export type NextTurn = { model: string | null; effort: string | null; seq: number; by: string };
+
+/** An idempotency key for an agent's change that can happen once per attempt (its start, end, cancel): the first
+ *  attempt's keys are as before, a later attempt's carry its epoch. */
+const perEpoch = (base: string, epoch: number) => (epoch > 1 ? `${base}-e${epoch}` : base);
+const addSpent = (a: Budget | null, b: Budget): Budget => {
+  if (!a) return b;
+  const out: Budget = { ...a };
+  for (const u of UNITS) if (b[u] !== undefined) out[u] = Math.round(((a[u] ?? 0) + b[u]!) * 1e6) / 1e6;
+  return out;
+};
+/** Whether the run is archived (scope_meta archived): read-only, its agents take no messages until it is restored. */
+async function archivedOf(db: any): Promise<{ at: number; by: string } | null> {
+  const r = await db.execute("SELECT v FROM scope_meta WHERE k = 'archived'");
+  return r.length ? (JSON.parse(r[0]!.v as string) as { at: number; by: string }) : null;
+}
+export const ARCHIVED_HINT = "restore to continue";
+
+/**
+ * ADR-026 §1, at the end of an attempt (in finish's transaction): messages its CLI never took (sent while the attempt was
+ * ending, held back for a model change, or never read by a CLI that reads none while it runs) start its next attempt
+ * now, unless the run is archived. True when it continued.
+ */
+async function continueIfUnread(tx: RawAccess, agentId: string): Promise<boolean> {
+  const a = ((await tx.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", agentId)) as any[]).map(rowToAgent)[0];
+  if (!a || !TERMINAL_AGENT.has(a.status) || (await archivedOf(tx))) return false;
+  const after = Number(((await tx.execute("SELECT delivered_seq FROM agents_v2 WHERE agent_id = ?", agentId)) as any[])[0]?.delivered_seq ?? 0);
+  const first = ((await tx.execute("SELECT seq, from_agent FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq LIMIT 1", agentId, after)) as any[])[0];
+  if (!first) return false;
+  await continueTx(tx, a, { by: String(first.from_agent), seq: Number(first.seq) });
+  return true;
+}
+
+/** The result of an agent's last finished attempt (its last agent.done / agent.failed), for a continued attempt's prompt. */
+function lastResultOf(rows: any[]): Record<string, unknown> | null {
+  try { return rows.length ? ((JSON.parse(String(rows[0].data)) as { result?: Record<string, unknown> }).result ?? null) : null; } catch { return null; }
+}
+
+/** A quiet daemon-written line in an agent's thread (item kind `note`): a model change, a session rebuilt from the thread. */
+function noteDraft(id: string, text: string): ItemDraft {
+  return threadNote({ id, at: Date.now(), text });
+}
+
+/**
+ * ADR-026 §1: an idle agent (its last attempt done, failed or cancelled) continues: its next attempt (epoch), running
+ * now, picks up its thread with the message `seq` as its first turn. Its earlier spend stays (spent_base), its declared
+ * result of the last attempt is cleared (the new attempt declares its own), and a model/effort the message asked for is
+ * applied to its spec. In the caller's transaction. Returns the new epoch.
+ */
+async function continueTx(tx: RawAccess, a: ScopeAgent, o: { by: string; seq: number; next?: NextTurn | null }): Promise<number> {
+  const epoch = a.epoch + 1, now = Date.now();
+  const from = a.status as Continued["from"];
+  const next = o.next ?? a.nextTurn;
+  const spec = next && a.spec ? { ...(a.spec as Record<string, unknown>), ...(next.model ? { model: next.model } : {}), ...(next.effort ? { effort: next.effort } : {}) } : a.spec;
+  const continued: Continued = { epoch, at: now, by: o.by, seq: o.seq, from };
+  await tx.execute(`UPDATE agents_v2 SET status = 'running', epoch = ?, spent_base = ?, continued = ?, next_turn = NULL, spec = ?, result = NULL, notice = NULL,
+    activity = NULL, paused_until = NULL, pause_requested = NULL, driver = NULL, driver_until = 0, heartbeat_at = ?, updated_at = ? WHERE agent_id = ?`,
+    epoch, JSON.stringify(a.spent ?? {}), JSON.stringify(continued), spec ? JSON.stringify(spec) : null, now, now, a.agentId);
+  // Its last attempt's declared result (`capcomd result`) isn't this attempt's.
+  await tx.execute("UPDATE kv SET deleted = 1, version = version + 1, updated_at = ? WHERE k = ? AND deleted = 0", now, `_result/${a.agentId}`);
+  await addEvent(tx, "AGENT_CONTINUED", a.agentId, { epoch, from, by: o.by, messageSeq: o.seq }, `continue-${a.agentId}-e${epoch}`);
+  return epoch;
+}
+
 
 function opRow(r: any) {
   return {
@@ -338,7 +414,7 @@ async function reapOrphans(c: any, parent: ScopeAgent): Promise<{ reaped: string
       if (TERMINAL_AGENT.has(a.status)) continue;
       await txn(c, async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET status = 'cancelled', driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", Date.now(), a.agentId);
-        await addEvent(tx, "AGENT_REAPED", a.agentId, { orphanOf: parent.agentId, parentStatus: parent.status === "running" ? "finished" : parent.status }, `reap-${a.agentId}`);
+        await addEvent(tx, "AGENT_REAPED", a.agentId, { orphanOf: parent.agentId, parentStatus: parent.status === "running" ? "finished" : parent.status }, perEpoch(`reap-${a.agentId}`, a.epoch));
       }, { name: "scopeReap" });
       out.reaped.push(a.agentId);
     }
@@ -446,6 +522,12 @@ export const scopeActor = actor({
       // ADR-026 §3: the last message seq the agent's CLI took (its supervisor said it), across attempts: a new attempt
       // never hands it a message again.
       await addColumn(database, "agents_v2", "delivered_seq", "INTEGER");
+      // ADR-026 §1: an idle agent continues as a new attempt: its earlier attempts' spend, what woke it, and a model or
+      // effort change queued for its next attempt (capability agents.messages.model), on the agent and its message.
+      await addColumn(database, "agents_v2", "spent_base", "TEXT");
+      await addColumn(database, "agents_v2", "continued", "TEXT");
+      await addColumn(database, "agents_v2", "next_turn", "TEXT");
+      await addColumn(database, "messages", "next_turn", "TEXT");
     },
   }),
 
@@ -515,7 +597,41 @@ export const scopeActor = actor({
       const rt = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'run_title'");
       const agentTitle = rt.length ? (({ title, setBy, at }: RunAgentTitle) => ({ title, setBy, at }))(JSON.parse(rt[0]!.v as string) as RunAgentTitle) : null;
       return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated,
-        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null, goalBranch, agentTitle };
+        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null, goalBranch, agentTitle, archived: await archivedOf(c.db) };
+    },
+
+    /**
+     * Capability runs.archive: the run becomes read-only (its agents take no messages) until it is restored. Refused
+     * while an agent of it is still pending, running or paused (stop the run first). Idempotent.
+     */
+    async archive(c, params: { by: string }) {
+      let out: { changed: boolean; archived: { at: number; by: string } | null } = { changed: false, archived: null };
+      await txn(c, async (tx: RawAccess) => {
+        if (!(await tx.execute("SELECT 1 FROM scope_meta WHERE k = 'init'")).length) fail("not_found", "run not found");
+        const had = await archivedOf(tx);
+        if (had) { out = { changed: false, archived: had }; return; }
+        const live = (await tx.execute("SELECT agent_id FROM agents_v2 WHERE status NOT IN ('done','failed','cancelled')")) as any[];
+        if (live.length) fail("conflict", `${live.length === 1 ? `agent ${live[0].agent_id} is` : `${live.length} agents are`} still working: stop the run before archiving it`);
+        const a = { at: Date.now(), by: params.by };
+        await tx.execute("INSERT OR REPLACE INTO scope_meta (k, v) VALUES ('archived', ?)", JSON.stringify(a));
+        await addEvent(tx, "RUN_ARCHIVED", null, { by: params.by }, `archive-${a.at}`);
+        out = { changed: true, archived: a };
+      }, { name: "scopeArchive" });
+      if (out.changed) agentsChanged(c);
+      return out;
+    },
+    /** Capability runs.archive: an archived run takes messages again (each agent is idle, as it was). Idempotent. */
+    async restore(c, params: { by: string }) {
+      let changed = false;
+      await txn(c, async (tx: RawAccess) => {
+        if (!(await tx.execute("SELECT 1 FROM scope_meta WHERE k = 'init'")).length) fail("not_found", "run not found");
+        if (!(await archivedOf(tx))) return;
+        await tx.execute("DELETE FROM scope_meta WHERE k = 'archived'");
+        await addEvent(tx, "RUN_RESTORED", null, { by: params.by }, `restore-${Date.now()}`);
+        changed = true;
+      }, { name: "scopeRestore" });
+      if (changed) agentsChanged(c);
+      return { changed };
     },
 
     /**
@@ -774,20 +890,26 @@ export const scopeActor = actor({
         // VM takes to come up doesn't read as "no heartbeat" (resume does the same). A takeover keeps the last heartbeat.
         await tx.execute("UPDATE agents_v2 SET driver = ?, driver_until = ?, heartbeat_at = CASE WHEN status = 'pending' THEN ? ELSE heartbeat_at END, status = CASE WHEN status = 'pending' THEN 'running' ELSE status END, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')",
           params.driver, now + params.ttlMs, now, now, params.agentId);
-        if (a.status === "pending") await addEvent(tx, "AGENT_STARTED", params.agentId, {}, `start-${params.agentId}`);
+        if (a.status === "pending") await addEvent(tx, "AGENT_STARTED", params.agentId, {}, perEpoch(`start-${params.agentId}`, a.epoch));
       }, { name: "scopeClaim" });
       return { ok: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]), instance: ENGINE_INSTANCE };
     },
 
-    async finish(c, params: { agentId: string; status: "done" | "failed"; result: Record<string, unknown>; spent?: Budget }) {
+    /** `readsMessages: false`: an agent with no CLI of its own (a scripted or fake one): it takes no message, so one
+     *  left unread doesn't continue it (its script would only run again). */
+    async finish(c, params: { agentId: string; status: "done" | "failed"; result: Record<string, unknown>; spent?: Budget; readsMessages?: boolean }) {
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
       if (TERMINAL_AGENT.has(a.status)) return { changed: false, agent: a };
+      // Its spend across attempts: what its earlier attempts spent, and this one's (ADR-026 §1). Wall time counts only
+      // while an attempt runs: the time it was idle in between is in none of them.
+      const spent = params.spent ? addSpent(a.spentBase, params.spent) : a.spent;
+      let continued = false;
       await txn(c, async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
-          params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
-        await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? a.spent, budget: a.budget }, `finish-${params.agentId}`);
+          params.status, JSON.stringify(params.result), JSON.stringify(spent), Date.now(), params.agentId);
+        await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent, budget: a.budget }, perEpoch(`finish-${params.agentId}`, a.epoch));
         // A goal-branch run is ready when its planner finished its work and no other planner is still at it: the user
         // then sees the goal branch against its base and opens a pull request (or keeps the branch). Once per run.
         if (params.status === "done" && !a.parent && (await plannerOf(tx, runIdOf(c))) === params.agentId) {
@@ -799,12 +921,16 @@ export const scopeActor = actor({
           }
         }
         await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.agentId);
-        // The parent's thread gets a hand-back card: the child's summary, its artifacts as links and media.
-        if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result));
+        // The parent's thread gets a hand-back card: the child's summary, its artifacts as links and media (one per attempt).
+        if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result, a.epoch));
+        // ADR-026 §1: a message its CLI never took (sent while this attempt was ending, or held back for a model change)
+        // starts its next attempt now: nothing sent to an agent of a run that isn't archived goes unread.
+        if (params.readsMessages !== false) continued = await continueIfUnread(tx, params.agentId);
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
       agentsChanged(c);
-      return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+      if (continued) await startDriver(runIdOf(c) ?? a.runId, params.agentId).catch(() => {});
+      return { changed: true, orphans, ...(continued ? { continued: true } : {}), agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
     /** ADR-019 §3: the supervisor checkpointed the agent's workspace and the engine pushed it to `ref`. */
@@ -845,7 +971,7 @@ export const scopeActor = actor({
       if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { changed: false, agent: a };
       await txn(c, async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET status = 'paused', paused_until = ?, pause_requested = NULL, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
-          params.until, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
+          params.until, JSON.stringify(params.result), JSON.stringify(params.spent ? addSpent(a.spentBase, params.spent) : a.spent), Date.now(), params.agentId);
         await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
       }, { name: "scopePause" });
       // Wake at the reset even when nobody awaits it (the engine host starts its driver). With the agent workflow
@@ -945,9 +1071,11 @@ export const scopeActor = actor({
      * spend) and the run's. `stop` names the limit to stop at (result.limit) when one is over.
      */
     async reportSpend(c, params: { agentId: string; spent: Budget; inboxAfter?: number }) {
-      const r = await c.db.execute("SELECT status FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      const r = await c.db.execute("SELECT status, spent_base FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length || TERMINAL_AGENT.has(r[0]!.status as string)) return { stop: null };
-      await c.db.execute("UPDATE agents_v2 SET spent = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", JSON.stringify(params.spent), params.agentId);
+      // Its earlier attempts' spend counts too (ADR-026 §1: turns and money across attempts; wall time only while one runs).
+      const base = r[0]!.spent_base ? (JSON.parse(r[0]!.spent_base as string) as Budget) : null;
+      await c.db.execute("UPDATE agents_v2 SET spent = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", JSON.stringify(addSpent(base, params.spent)), params.agentId);
       const meta = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       const runBudget = meta.length ? (JSON.parse(meta[0]!.v as string).budget as Budget) : {};
       const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
@@ -1098,22 +1226,45 @@ export const scopeActor = actor({
     },
 
     /** Mailbox: `send` appends (idempotent by key); `inbox` reads messages after a cursor. */
-    async sendMessage(c, params: { to: string; from: string; body: string; key?: string; skills?: AttachedSkill[] }) {
+    /**
+     * A message to an agent (idempotent by `key`). ADR-026 §1: every agent of a run that isn't archived takes messages.
+     * One whose last attempt ended (idle: done, failed, cancelled) continues: its next attempt starts with this message
+     * as its first turn, in this transaction (agent.continued). An archived run refuses (`archived`). `model`/`effort`
+     * (capability agents.messages.model) apply to its next turn: at once for an idle agent; for a working one, the
+     * message is held until its current turn ends, then it continues as a new attempt with them.
+     */
+    async sendMessage(c, params: { to: string; from: string; body: string; key?: string; skills?: AttachedSkill[]; model?: string | null; effort?: string | null }) {
       if (params.key) { const r = await c.db.execute("SELECT seq FROM messages WHERE idem_key = ?", params.key); if (r.length) return { seq: Number(r[0]!.seq), replayed: true }; }
       let seq = 0;
+      let continued: number | null = null;
       await txn(c, async (tx: RawAccess) => {
+        if (await archivedOf(tx)) fail("archived", `run ${runIdOf(c) ?? ""} is archived · ${ARCHIVED_HINT}`.replace("run  is", "this run is"));
+        const row = ((await tx.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.to)) as any[])[0];
+        const target = row ? rowToAgent(row) : null;
         const m = await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM messages");
         seq = Number(m[0]!.m) + 1;
         const skills = (params.skills ?? []).map((s) => ({ name: String(s.name), content: String(s.content) }));
-        await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key, skills) VALUES (?, ?, ?, ?, ?, ?, ?)", seq, params.to, params.from, params.body, Date.now(), params.key ?? null, skills.length ? JSON.stringify(skills) : null);
+        const change: NextTurn | null = target && (params.model || params.effort) ? { model: params.model ?? null, effort: params.effort ?? null, seq, by: params.from } : null;
+        await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key, skills, next_turn) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", seq, params.to, params.from, params.body, Date.now(), params.key ?? null, skills.length ? JSON.stringify(skills) : null, change ? JSON.stringify({ model: change.model, effort: change.effort }) : null);
         // 64 KB inline cap: longer bodies are stored in full as an attachment and the event carries a pointer.
         const inl = inlineOrAttach(redactShapes(params.body));
         if (inl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", inl.attachment.id, inl.attachment.sha256, inl.attachment.bytes, inl.attachment.mediaType, inl.body, Date.now());
         // The skills' names only: their SKILL.md goes to the agent (inbox, live delivery), not into the event log.
         await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length, text: inl.text, attachment: inl.attachment, skills: skills.map((s) => s.name) }, `msg-${seq}`);
+        if (!target) return;
+        const idle = TERMINAL_AGENT.has(target.status);
+        if (change) {
+          const spec = (target.spec ?? {}) as { model?: unknown; effort?: unknown };
+          const previous = { model: typeof spec.model === "string" ? spec.model : null, effort: typeof spec.effort === "string" ? spec.effort : null };
+          if (!idle) await tx.execute("UPDATE agents_v2 SET next_turn = ? WHERE agent_id = ?", JSON.stringify(change), target.agentId);
+          await addEvent(tx, "AGENT_MODEL_CHANGED", target.agentId, { model: change.model, effort: change.effort, previous, by: params.from, messageSeq: seq, applied: idle }, `model-${target.agentId}-${seq}`);
+          await putItemTx(tx, target.agentId, noteDraft(`itm-${target.agentId}-model-${seq}`, `${[change.model ? `model → ${change.model}` : "", change.effort ? `effort ${change.effort}` : ""].filter(Boolean).join(" · ")}${idle ? "" : " · from its next turn"}`));
+        }
+        if (idle) continued = await continueTx(tx, target, { by: params.from, seq, next: change });
       }, { name: "scopeSend" });
       messagesChanged(c, [params.to]);
-      return { seq };
+      if (continued !== null) { agentsChanged(c); await startDriver(runIdOf(c) ?? "", params.to).catch(() => {}); }
+      return { seq, ...(continued !== null ? { continued: true, epoch: continued } : {}) };
     },
     /** Full text of an attachment written by the 64 KB inline cap. */
     async getAttachment(c, params: { id: string }) {
@@ -1198,7 +1349,7 @@ export const scopeActor = actor({
         if (TERMINAL_AGENT.has(a.status)) continue;
         await txn(c, async (tx: RawAccess) => {
           await tx.execute("UPDATE agents_v2 SET status = 'cancelled', driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", Date.now(), a.agentId);
-          await addEvent(tx, "AGENT_CANCELLED", a.agentId, { reason: params.reason ?? null, by: params.agentId ?? "run" }, `cancel-${a.agentId}`);
+          await addEvent(tx, "AGENT_CANCELLED", a.agentId, { reason: params.reason ?? null, by: params.agentId ?? "run" }, perEpoch(`cancel-${a.agentId}`, a.epoch));
         }, { name: "scopeCancel" });
         cancelled.push(a.agentId);
         if (++i === 1) killpoint("scope.cancel.mid");
@@ -1509,7 +1660,7 @@ export const scopeActor = actor({
       let fired: number | null = null;
       await txn(c, async (tx: RawAccess) => {
         const me = (await tx.execute("SELECT status FROM agents_v2 WHERE agent_id = ?", params.agentId)) as any[];
-        if (me.length && TERMINAL_AGENT.has(String(me[0].status))) fail("conflict", `${params.agentId} has ended: nothing would read its wake-up`);
+        if (me.length && TERMINAL_AGENT.has(String(me[0].status))) fail("conflict", `${params.agentId}'s turn has ended: a message continues it (capcomd send), a wake can't`);
         await tx.execute("INSERT INTO wakes (wake_id, agent_id, idem_key, filter, note, state, at, created_at) VALUES (?, ?, ?, ?, ?, 'armed', ?, ?)",
           wakeId, params.agentId, idem, JSON.stringify(filter), params.note ? String(params.note).slice(0, 2000) : null, at, Date.now());
         const w = wakeRow((await tx.execute("SELECT * FROM wakes WHERE wake_id = ?", wakeId))[0]);
@@ -1566,8 +1717,35 @@ export const scopeActor = actor({
     async pullMessages(c, params: { agentId: string; after?: number }) {
       const r = (await c.db.execute("SELECT delivered_seq FROM agents_v2 WHERE agent_id = ?", params.agentId)) as any[];
       const after = Math.max(Number(params.after ?? 0), Number(r[0]?.delivered_seq ?? 0));
-      return ((await c.db.execute("SELECT seq, from_agent, body, skills FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, after)) as any[])
-        .map((m) => ({ seq: Number(m.seq), from: m.from_agent as string, body: m.body as string, skills: skillsOf(m.skills) }));
+      const out: { seq: number; from: string; body: string; skills: AttachedSkill[]; nextTurn?: true }[] = [];
+      for (const m of (await c.db.execute("SELECT seq, from_agent, body, skills, next_turn FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, after)) as any[]) {
+        // Capability agents.messages.model: a running CLI can't switch model, so this one (and what came after it) waits
+        // for the agent's next attempt; the runner ends its input at the end of this turn (`nextTurn`).
+        if (m.next_turn) { out.push({ seq: Number(m.seq), from: m.from_agent as string, body: "", skills: [], nextTurn: true }); break; }
+        out.push({ seq: Number(m.seq), from: m.from_agent as string, body: m.body as string, skills: skillsOf(m.skills) });
+      }
+      return out;
+    },
+    /**
+     * ADR-026 §5: what a continued attempt starts with: the messages after its durable cursor (the one that woke it and
+     * any sent since), and, when its earlier session can't be resumed, its thread to rebuild one from. Marks nothing:
+     * the CLI taking them moves the cursor (messagesDelivered).
+     */
+    async continuation(c, params: { agentId: string; items?: number }) {
+      const a = ((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId)) as any[]).map(rowToAgent)[0];
+      if (!a) return null;
+      const after = Number(((await c.db.execute("SELECT delivered_seq FROM agents_v2 WHERE agent_id = ?", params.agentId)) as any[])[0]?.delivered_seq ?? 0);
+      const messages = ((await c.db.execute("SELECT seq, from_agent, body, skills, at FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, after)) as any[])
+        .map((m) => ({ seq: Number(m.seq), from: m.from_agent as string, body: m.body as string, skills: skillsOf(m.skills), at: Number(m.at) }));
+      const earlier = ((await c.db.execute("SELECT seq, from_agent, body, at FROM messages WHERE to_agent = ? AND seq <= ? ORDER BY seq DESC LIMIT 50", params.agentId, after)) as any[])
+        .map((m) => ({ seq: Number(m.seq), from: m.from_agent as string, body: m.body as string, at: Number(m.at) }));
+      const items = ((await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? ORDER BY ord DESC LIMIT ?", params.agentId, Math.min(500, Math.max(1, params.items ?? 200)))) as any[]).map(itemRow);
+      return { continued: a.continued, task: a.task, result: lastResultOf(await c.db.execute("SELECT data FROM scope_events WHERE agent_id = ? AND type IN ('AGENT_DONE','AGENT_FAILED') ORDER BY seq DESC LIMIT 1", params.agentId)), messages, earlier, items };
+    },
+    /** ADR-026 §5 path 4: one quiet line in the agent's own thread (the fallback to a session rebuilt from its thread). */
+    async threadNote(c, params: { agentId: string; id: string; text: string }) {
+      await txn(c, async (tx: RawAccess) => { await putItemTx(tx, params.agentId, noteDraft(params.id, params.text)); }, { name: "scopeNote" });
+      return { ok: true };
     },
     /** Its CLI took the message `seq` (the supervisor said so): the durable delivery cursor moves up to it, never back. */
     async messagesDelivered(c, params: { agentId: string; seq: number }) {

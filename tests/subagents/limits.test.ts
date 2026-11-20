@@ -255,7 +255,8 @@ test("harness API (menu bar): steer message, pause, resume and cancel go through
   expect((await statusOf(run, b)).status).toBe("cancelled");
   expect((await lifecycle(run)).at(-1)).toBe("run.cancelled");
   expect(await post(`/v1/runs/${run}/cancel`)).toMatchObject({ status: 409, j: { code: "conflict" } });
-  expect(await post(`/v1/runs/${run}/agents/${b}/messages`, { body: "too late" })).toMatchObject({ status: 409, j: { code: "conflict" } });
+  // ADR-026 §1: a cancelled agent is idle, not done: a message (in a run that isn't archived) continues it.
+  expect(await post(`/v1/runs/${run}/agents/${b}/messages`, { body: "one more thing" })).toMatchObject({ status: 200, j: { to: b, continued: true } });
 }, 180_000);
 
 test("harness API (menu bar): pause one running agent while another works on; resume runs it on; a steer with skills echoes them", async () => {

@@ -90,7 +90,7 @@ test("the machine sleeps longer than the engine's lease: serve restarts its engi
   expect(run).toMatch(/^run-/);
   const agent = (await cj(["spawn", run, "--profile", "worker", "--task", "[hold:45] make the failing test pass", "--key", "w"])).j?.agentId;
   expect(agent).toMatch(/^agt-/);
-  const hold = join(vm, `${agent}-e1`, "hold.log");
+  const hold = join(vm, agent, "hold.log");
   for (let i = 0; i < 150 && !existsSync(hold); i++) await sleep(200);
   expect(existsSync(hold)).toBe(true);
 

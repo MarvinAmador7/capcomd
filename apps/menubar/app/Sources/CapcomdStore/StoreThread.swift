@@ -55,6 +55,13 @@ public enum Capability {
   public static let runsGoalBranch = "runs.goal_branch"
   /// `GET …/agents/{agentId}/thread/tail`: a thread's newest items first, and the pages above them on demand.
   public static let agentsThreadTail = "agents.thread_tail"
+  /// An agent is idle, not done (ADR-026 §1): a message to an agent whose turn ended continues it (`Agent.continued`,
+  /// agent.continued); its composer reads "<name> is idle. Send to continue."
+  public static let agentsIdle = "agents.idle"
+  /// `POST …/messages` takes `model` and `effort`: what the agent's next turns run with.
+  public static let agentsMessagesModel = "agents.messages.model"
+  /// `POST /v1/runs/{runId}/archive` and `/restore`; `Run.archived`: an archived run's composer gives way to Restore.
+  public static let runsArchive = "runs.archive"
 }
 
 extension CapcomdStore {
@@ -87,7 +94,11 @@ extension CapcomdStore {
         ? try await messenger.send(runId: runId, agentId: agentId, body: entry.body, skills: skills, idempotencyKey: entry.key)
         : try await messenger.send(runId: runId, agentId: agentId, body: entry.body, skills: skills, model: entry.model, effort: entry.effort, idempotencyKey: entry.key)
       state = .sent(seq: sent.seq)
-    } catch let e as MessageRefused { state = .failed(e.message) }
+    } catch let e as MessageRefused {
+      // The run was archived meanwhile: its composer gives way to Restore (the message wasn't sent).
+      if e.code == "archived" { setArchived(runId: runId, true); state = .failed("This run is archived. Restore it to continue.") }
+      else { state = .failed(e.message) }
+    }
     catch is Unauthorized { unauthorized = true; state = .failed("capcomd rejected the token") }
     catch DetailUnavailable.unsupported { state = .failed("This capcomd can't send messages from here yet") }
     catch { state = .failed("Couldn't reach capcomd") }
