@@ -359,7 +359,7 @@ export async function runNew(o: RunNewOpts) {
     sandbox = { name, source: had && !o.sandbox && had.name !== choice.name ? "run" : choice.source };
     let place: string = name ?? "fake";
     if (!name) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
-    const settings = had?.settings.idleLifetime !== undefined ? { idleLifetime: had.settings.idleLifetime } : (await import("../providers/settings")).settingsForRun(place);
+    const settings = had?.settings.idleLifetime !== undefined ? { ...had.settings } : (await import("../providers/settings")).settingsForRun(place);
     // Asked for (here, or by the first call of a retry), not the project's or the user's config: it beats every
     // agent's profile sandbox.provider (ADR-024 §9, 2026-11-08).
     const value = RS.runSandboxValue(name, settings, !!o.sandbox || !!had?.explicit);
@@ -1038,7 +1038,10 @@ async function ensureWorker(runId: string, a: ScopeAgent, w: any, prepared: Prep
   if (!wk || wk.state === "provisioning" || wk.state === "failed") {
     const spec = prepared ?? a.spec;
     const machine = pinnedMachine(a.spec);
-    await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(spec ? { agentSpec: spec as Record<string, unknown> } : {}) } : {}), ...(Object.keys(machine).length ? { machine } : {}) });
+    // ADR-026 §5 path 2: a message woke this idle agent, and its machine was parked when its turn ended: its worker
+    // wakes that machine and uses it (by the key recorded when it was parked), else makes a fresh one (path 3).
+    const parked = a.continued?.epoch === epoch ? await (await import("../agents/continue")).parkedMachine(runId, agentId).catch(() => null) : null;
+    await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(spec ? { agentSpec: spec as Record<string, unknown> } : {}) } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(parked ? { parked: { idemKey: parked.machineKey, vmId: parked.vmId, workerKey: parked.workerKey } } : {}) });
     wk = await w.getWorker({ workerId: agentId });
   }
   if ((await s.getAgent({ agentId }))?.status === "cancelled") { await w.drainWorker({ workerId: agentId }); return true; }
@@ -1140,8 +1143,12 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   if (mode === "script") { const d: any = (await resultOf(runId, agentId)).data; if (d?.spent) spent = { ...spent, ...parseBudgetLoose(d.spent) }; }
   if (costUsd > 0 && !pushed.already) await c.run.getOrCreate([runId]).chargeBudget({ runId, chargeId: `${agentId}-agent`, amount: costUsd });
   await w.taskDone({ workerId: agentId });
-  await w.drainWorker({ workerId: agentId });
-  if (await cancelled()) return (await s.getAgent({ agentId }))!;
+  // ADR-026 §6: a planner or lead whose turn ended keeps its machine, parked, for a message to wake (never one paused
+  // at a usage limit or by the operator: it resumes as a new attempt, as before); every other machine is destroyed.
+  const { parkable, parkAttempt } = await import("./park");
+  const parks = parkable(a) && rec.limit !== "quota" && rec.limit !== "paused" && !(await cancelled()) && (await parkAttempt(runId, a, w));
+  if (!parks) await w.drainWorker({ workerId: agentId });
+  if (await cancelled()) { if (parks) await (await import("./park")).dropParkedOf(runId, { agentId, agents: [] }); return (await s.getAgent({ agentId }))!; }
   // Plugin API §16.1: an orchestrate agent writes nothing. One whose checkout had changed files or new commits at the end
   // of a turn or of its run fails, naming them; nothing it wrote was committed or pushed (its children's work stands).
   const ow = rec.orchestrateWrites as import("../agents/runner").OrchestrateWrites | undefined;
@@ -1739,7 +1746,11 @@ export async function archiveRun(runId: string, by = "operator") {
   await assertEngine();
   const s = await existingActor("scope", [runId]).catch(() => null) as any;
   if (!s) throw new RelayError("not_found", `run ${runId} not found`, "Check run ids with `capcomd runs`.");
-  return { runId, ...(await s.archive({ by }).catch(asRelay)) };
+  const r = await s.archive({ by }).catch(asRelay);
+  // ADR-026 §6: its parked machines go (nothing wakes an archived run's agents); their saved sessions stay, since a
+  // restored run's agents continue their conversations on fresh machines.
+  await (await import("./park")).dropParkedOf(runId).catch(() => []);
+  return { runId, ...r };
 }
 export async function restoreRun(runId: string, by = "operator") {
   await assertEngine();
@@ -1823,6 +1834,8 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
     const wk = await w.getWorker({ workerId: a.agentId });
     if (wk && wk.state !== "destroyed") await w.drainWorker({ workerId: a.agentId });
   }
+  // ADR-026 §6: the cancelled agents' parked machines go too (an idle planner's, which the cancel itself doesn't touch).
+  await (await import("./park")).dropParkedOf(runId, agentId ? { agentId, agents: all } : {}).catch(() => []);
   let runEnded = false;
   if (!agentId) {
     await c.run.getOrCreate([runId]).cancel({ runId });

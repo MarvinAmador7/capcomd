@@ -41,6 +41,17 @@ export interface JobMachine {
 	createdAt: number;
 	ttlSeconds: number;
 }
+/** ADR-026 §6: an agent's machine parked (hibernated) when its turn ended, kept for a message to wake it. */
+export interface ParkedMachine {
+	/** When it was parked, and when it is deleted (its retention: the platform's delete-after, Docker's sweep, and its
+	 *  worker's own alarm). */
+	at: number;
+	deleteAt: number;
+	/** The provider's id for it, and the idempotency key its next attempt ensures it with (not one derived from the
+	 *  epoch: the machine key is carried across attempts). */
+	vmId: string;
+	idemKey: string;
+}
 /** An agent's worker VM: kept until the worker destroys the machine. */
 export interface AgentMachine {
 	name: string;
@@ -53,6 +64,8 @@ export interface AgentMachine {
 	pid: number;
 	createdAt: number;
 	ttlSeconds: number;
+	/** Set while the machine is parked (ADR-026 §6); a worker that takes it again writes its record anew, without. */
+	parked?: ParkedMachine;
 }
 export type MachineRecord = JobMachine | AgentMachine;
 /** What the ledger says about one machine: its record, or (a file that can't be read or parsed) only its name. */
@@ -114,6 +127,37 @@ export function recordAgentMachine(m: { idemKey: string; sandbox: string | null 
 		name: machineNameFor(m.idemKey), sandbox: m.sandbox ?? "unknown", kind: "agent", runId: m.runId, agentId: m.agentId, workerKey: [...m.workerKey],
 		pid: process.pid, createdAt: Date.now(), ttlSeconds: m.ttlSeconds,
 	}, env);
+}
+
+/**
+ * ADR-026 §6: marks an agent's machine parked (its record, as its worker wrote it at provisioning; written whole when
+ * that is missing). Never throws; false when it couldn't be written (then nothing finds it to wake: the next attempt
+ * gets a fresh machine, and the worker's own alarm still deletes this one).
+ */
+export function recordParked(m: { idemKey: string; sandbox: string | null | undefined; runId: string; agentId: string; workerKey: readonly string[]; ttlSeconds: number; parked: ParkedMachine }, env: Env = process.env): boolean {
+	const name = machineNameFor(m.idemKey);
+	const had = readMachineLedger(env)?.find((e) => e.name === name)?.record;
+	const base: AgentMachine = had && had.kind === "agent" ? had : {
+		name, sandbox: m.sandbox ?? "unknown", kind: "agent", runId: m.runId, agentId: m.agentId, workerKey: [...m.workerKey], pid: process.pid, createdAt: Date.now(), ttlSeconds: m.ttlSeconds,
+	};
+	return writeRecord({ ...base, workerKey: [...m.workerKey], parked: { ...m.parked } }, env);
+}
+
+const validParked = (p: unknown): p is ParkedMachine => {
+	const x = p as Partial<ParkedMachine> | null;
+	return !!x && typeof x === "object" && Number.isFinite(x.at) && Number.isFinite(x.deleteAt) && typeof x.vmId === "string" && !!x.vmId && typeof x.idemKey === "string" && !!x.idemKey;
+};
+
+/** The parked machines this capcomd recorded (ADR-026 §6), oldest first: all, or a place's, a run's or one agent's. */
+export function parkedMachines(o: { sandbox?: string; runId?: string; agentId?: string } = {}, env: Env = process.env): Array<AgentMachine & { parked: ParkedMachine }> {
+	const out: Array<AgentMachine & { parked: ParkedMachine }> = [];
+	for (const e of readMachineLedger(env) ?? []) {
+		const r = e.record;
+		if (!r || r.kind !== "agent" || !validParked(r.parked)) continue;
+		if ((o.sandbox && r.sandbox !== o.sandbox) || (o.runId && r.runId !== o.runId) || (o.agentId && r.agentId !== o.agentId)) continue;
+		out.push(r as AgentMachine & { parked: ParkedMachine });
+	}
+	return out.sort((a, b) => a.parked.at - b.parked.at || (a.name < b.name ? -1 : 1));
 }
 
 function validRecord(r: unknown, file: string): r is MachineRecord {

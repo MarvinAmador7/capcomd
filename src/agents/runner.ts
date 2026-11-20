@@ -207,6 +207,9 @@ export interface AgentRunOptions {
   onWorkspace?: (w: { path: "in_place" | "clone"; reason?: string; bytes: number; ms: number }) => void;
   /** ADR-026 §5: a continued attempt (task.continued): its thread and messages, its saved session, the fallback's line. */
   continuation?: ContinueHooks;
+  /** ADR-026 §5 path 2: the machine is the agent's parked one, woken: its checkout is used as it is when it is intact
+   *  (no clone, no fetch), else fetched again as on a fresh machine. */
+  parked?: boolean;
 }
 
 export class AgentError extends Error {
@@ -511,7 +514,8 @@ export type ContinuePlan = { mode: "resume"; sessionId: string; prompt: string; 
  * the CLI has started).
  */
 export async function continuePlan(hooks: ContinueHooks, where: { home: string; cwd: string }, task: AgentTask, setup: (s: SetupState) => void, onLog: ((lines: string[]) => void) | undefined, r: Redactor): Promise<ContinuePlan> {
-  setup({ phase: "restore" });
+  // §5 path 2: on its parked machine there is nothing to restore (its session is still there), so no such phase shows.
+  if (!hooks.parked) setup({ phase: "restore" });
   const c = await hooks.load();
   const messages = c?.messages ?? [];
   const lastSeq = messages.length ? Math.max(...messages.map((m) => m.seq)) : 0;
@@ -801,9 +805,27 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
       const claimed = await sh(`mkdir ${sq(`${T}/${TEMPLATE_CLAIM}`)} 2>/dev/null && printf %s ${sq(W)} > ${sq(`${T}/${TEMPLATE_CLAIM}/by`)} && echo claimed; true`);
       return claimed.stdout.includes("claimed") ? choice : chooseWorkspace({ ...facts, claimed: true });
     };
-    const workspace: WorkspaceChoice | null = opts.warmTemplate ? await warmWorkspace() : null;
+    // ADR-026 §5 path 2: on the agent's parked machine, woken, its checkout is still here. Used as it is when intact (on
+    // its branch, at the commit pushed for it, nothing uncommitted): no clone and no fetch. Else as on a fresh machine.
+    const keptCheckout = async (): Promise<string | null> => {
+      for (const dir of [repo, T]) {
+        const claimedHere = dir === T ? `[ "$(cat ${sq(`${T}/${TEMPLATE_CLAIM}/by`)} 2>/dev/null)" = ${sq(W)} ] || exit 1
+` : "";
+        const look = await sh(`cd ${sq(dir)} 2>/dev/null || exit 1
+${claimedHere}[ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = ${sq(task.branch)} ] || exit 1
+[ -z "$(git status --porcelain 2>/dev/null)" ] || exit 1
+git rev-parse HEAD`);
+        const head = look.code === 0 ? look.stdout.trim() : "";
+        if (/^[0-9a-f]{40,64}$/.test(head) && (!existing || head === existing)) return dir;
+      }
+      return null;
+    };
+    const kept = opts.parked && !task.review && !task.report && !task.rework ? await keptCheckout() : null;
+    if (opts.parked && !task.review) opts.onLog?.([kept ? "[capcomd] workspace: its parked machine's checkout, as it was (no clone, no fetch)" : "[capcomd] workspace: its parked machine's checkout isn't as it was pushed: fetched again"]);
+    const workspace: WorkspaceChoice | null = kept ? null : opts.warmTemplate ? await warmWorkspace() : null;
     const inPlace = workspace?.path === "in_place";
-    if (inPlace) repo = T;
+    if (kept) repo = kept;
+    else if (inPlace) repo = T;
     else {
       must(await sh(`rm -rf ${sq(repo)}`), "clean");
       // What `git clone --no-tags --branch <target>` made, from the host's mirror: every branch as origin/*, the
@@ -838,8 +860,8 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
         return { sha, already: true, costUsd: 0, turns: 0, stopReason: "already_pushed", events: 0, ...(stop?.trim() ? { limit: stop.trim() } : {}) };
       }
     }
-    if (startFrom) await viaHost("git fetch (continue)", () => bringFrom(repo));
-    if (!task.review) must(await git(["checkout", "-B", task.branch, start(startRef(task, branchExists))], repo), "git checkout");
+    if (startFrom && !kept) await viaHost("git fetch (continue)", () => bringFrom(repo));
+    if (!task.review && !kept) must(await git(["checkout", "-B", task.branch, start(startRef(task, branchExists))], repo), "git checkout");
     // In place, the local branches are what a fresh clone has: the target at its tip, and the task branch. Its
     // dependencies are already there (env build installed them for this lockfile).
     const local = inPlace ? must(await sh(`cd ${sq(repo)} && git branch -f --track ${sq(task.target)} ${sq(`origin/${task.target}`)} >/dev/null && git for-each-ref --format='%(refname:short)' refs/heads/ | while read -r b; do [ "$b" = ${sq(task.target)} ] || [ "$b" = ${sq(task.branch)} ] || git branch -D -q "$b"; done; [ -d node_modules ] && echo reused; true`), "git branch (target)") : null;

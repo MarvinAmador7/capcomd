@@ -124,8 +124,7 @@ async function admitted(c: any, p: StartAgent): Promise<boolean> {
   const row: any = (await c.db.execute("SELECT since, logged FROM agent_admission WHERE id = 1"))[0];
   const since = row ? Number(row.since) : Date.now();
   if (!row) await c.db.execute("INSERT OR IGNORE INTO agent_admission (id, since) VALUES (1, ?)", since);
-  const { machineNameFor } = await import("../providers/machines");
-  const r = await slots.request(machineNameFor(agentVmIdemKey(p.runId, p.agentId, p.epoch)), since);
+  const r = await slots.request(await slotName(p), since);
   const log = (line: string) => scopeOf(p.runId).then((s) => s.appendLog({ agentId: p.agentId, stream: "workflow", lines: [line] })).catch(() => {});
   if (r.admitted) {
     // No ask left pending: a scheduled event that fires later resets the actor's alarm under the workflow (STEP_WAKE_MS).
@@ -163,7 +162,19 @@ export async function freeSlot(p: StartAgent): Promise<void> {
     const { releaseSlot } = await import("../providers/capacity");
     const { machineNameFor } = await import("../providers/machines");
     releaseSlot(machineNameFor(agentVmIdemKey(p.runId, p.agentId, p.epoch)));
+    // A woken parked machine's slot was asked for under its own name (slotName). Parked again or deleted by now, it
+    // holds none either way.
+    const parked = await (await import("../agents/continue")).parkedMachine(p.runId, p.agentId);
+    if (parked) releaseSlot(parked.name);
   } catch { /* nothing held */ }
+}
+
+/** The machine name an attempt asks for a slot under: the agent's parked machine's, which this attempt wakes (ADR-026
+ *  §5 path 2: Docker counts it running under that name), else the one its epoch's key makes. */
+async function slotName(p: StartAgent): Promise<string> {
+  const { machineNameFor } = await import("../providers/machines");
+  const parked = await (await import("../agents/continue")).parkedMachine(p.runId, p.agentId).catch(() => null);
+  return parked?.name ?? machineNameFor(agentVmIdemKey(p.runId, p.agentId, p.epoch));
 }
 
 /** The worker actions behind the step wake (STEP_WAKE_MS); untraced: bookkeeping, not work. */

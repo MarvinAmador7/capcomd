@@ -4,8 +4,10 @@
 //
 //   1. warm      the CLI is still alive with its input open: the message is its next turn (phase 1, the runner's
 //                mailbox). An idle agent has no live CLI, so a continued attempt starts at 2.
-//   2. parked    its machine was hibernated: wake it and resume the CLI's session there (phase 3: `parkedMachine`
-//                below is the hook; it finds none yet, so every continued attempt gets a fresh machine).
+//   2. parked    its machine was hibernated when its turn ended (a planner or lead, ADR-026 §6): `parkedMachine` finds
+//                it, the attempt's worker wakes it (src/actors/worker.ts `takeParked`, by the key recorded when it was
+//                parked), and the CLI resumes its session there: the checkout and the session file are already in it,
+//                so nothing is restored. A machine that is gone or won't wake: one line in its log, and path 3.
 //   3. fresh     a new machine from the project's template, the agent's branch (or checkpoint) at its stable checkout
 //                path (`${workdir}/<agentId>/repo`), its saved CLI session restored under that path (src/sessions `restoreSession`),
 //                and the CLI resumed (`--resume <id>`) with the waking message as its first user turn.
@@ -41,6 +43,9 @@ export interface ContinueHooks {
   restore(o: { home: string; cwd: string }): Promise<{ sessionId: string; cli: "claude" | "codex" } | null>;
   /** §5 path 4: the one quiet line in its thread. */
   pickedUpFromThread(): Promise<void>;
+  /** §5 path 2: the attempt runs on the agent's parked machine, woken: its session is looked for there first, and no
+   *  "restoring the conversation" phase is shown. */
+  parked?: boolean;
 }
 
 /** The thread line of §5 path 4 (the app shows it as a muted divider). */
@@ -55,12 +60,30 @@ const LAST_MAX = 12 * 1024;
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 const one = (s: string) => cut(s.replace(/\s+/g, " ").trim(), LINE_MAX);
 
+/** An agent's parked machine (ADR-026 §6), as the machines ledger records it when its worker parks it. */
+export interface Parked {
+  /** The machine's idempotency key (its name at the provider is derived from it): carried across attempts. */
+  machineKey: string;
+  /** Its name at the provider (capcomd's prefix + a hash of the key). */
+  name: string;
+  vmId: string;
+  /** The place it is on. */
+  sandbox: string;
+  /** The worker that parked it (it hands it over to the next attempt's). */
+  workerKey: string[];
+  at: number;
+  deleteAt: number;
+}
+
 /**
- * Phase 3 hook (ADR-026 §6, §5 path 2): the agent's parked (hibernated) machine, to wake instead of making a new one.
- * None are parked yet: every continued attempt gets a fresh machine (path 3).
+ * ADR-026 §5 path 2: the agent's parked (hibernated) machine, to wake instead of making a new one; null when it has none
+ * (it was never parked, or it was deleted: its retention ran out, its run was archived, it was cancelled, the user
+ * deleted it). From the machines ledger (src/providers/machines.ts), which the worker writes when it parks it.
  */
-export async function parkedMachine(_runId: string, _agentId: string): Promise<{ machineKey: string } | null> {
-  return null;
+export async function parkedMachine(runId: string, agentId: string): Promise<Parked | null> {
+  const { parkedMachines } = await import("../providers/machines");
+  const m = parkedMachines({ runId, agentId }).filter((x) => x.parked.deleteAt > Date.now()).at(-1);
+  return m ? { machineKey: m.parked.idemKey, name: m.name, vmId: m.parked.vmId, sandbox: m.sandbox, workerKey: [...m.workerKey], at: m.parked.at, deleteAt: m.parked.deleteAt } : null;
 }
 
 /** The waking message(s) as the first user turn of a resumed session (§5 path 3): what changed, in capcomd's words. */

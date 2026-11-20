@@ -6,7 +6,7 @@
 import { dirname } from "node:path";
 import type { SandboxProvider, VmId } from "../providers/sandbox";
 import { agentSeam } from "../plugins/agents";
-import { readSession } from "./store";
+import { latestSession, readSession } from "./store";
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
@@ -37,6 +37,29 @@ export async function restoreSession(o: { runId: string; agentId: string; provid
     return { sessionId: ref.sessionId, cli: ref.cli };
   } catch (e) {
     log(`session: couldn't restore the saved session, so it starts a new one: ${String((e as Error)?.message ?? e).slice(0, 300)}`);
+    return null;
+  }
+}
+
+/**
+ * ADR-026 §5 path 2: the agent's parked machine was woken, so its CLI's session file is still where its CLI looks for
+ * `cwd` (nothing to restore). Returns the latest saved session's id and CLI when its file is there and not empty (the
+ * machine's own, unredacted, is never behind the host's copy); null otherwise (the caller restores it: path 3).
+ */
+export async function parkedSession(o: { runId: string; agentId: string; provider: SandboxProvider; machineId: VmId; home: string; cwd: string; onLog?: (lines: string[]) => void }): Promise<{ sessionId: string; cli: "claude" | "codex" } | null> {
+  const log = (line: string) => { try { o.onLog?.([`[capcomd] ${line}`]); } catch { /* best effort */ } };
+  try {
+    const ref = await latestSession(o.runId, o.agentId);
+    if (!ref) return null;
+    const seam = agentSeam(ref.cli)?.session;
+    if (!seam) return null;
+    const at = seam.place({ home: o.home, cwd: o.cwd, id: ref.sessionId, file: ref.file });
+    const wc = await o.provider.exec(o.machineId, ["sh", "-c", `[ -s ${q(at.path)} ] && wc -c < ${q(at.path)}`], { timeoutMs: 60_000 });
+    const bytes = wc.code === 0 ? Number(wc.stdout.trim()) : 0;
+    if (!(bytes > 0)) return null;
+    log(`session: its parked machine still has ${ref.cli} session ${ref.sessionId} (${bytes} bytes): nothing to restore`);
+    return { sessionId: ref.sessionId, cli: ref.cli };
+  } catch {
     return null;
   }
 }

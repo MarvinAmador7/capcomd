@@ -201,3 +201,32 @@ describe("Worker Machine - Transition Table", () => {
     });
   });
 });
+
+describe("Worker Machine - parked (ADR-026 §6)", () => {
+  const ready = () => transition(workerMachine, initialTransition(workerMachine, { workerId: "agt-1" })[0], { type: "VM_READY" as const, vmId: "vm-1" })[0];
+  const park = { type: "PARK" as const, at: 1000, deleteAt: 87_401_000 };
+
+  test("idle (its task done) or busy -> parked, with when it was parked and when it is deleted", () => {
+    const [p] = transition(workerMachine, ready(), park);
+    expect(p.value).toBe("parked");
+    expect(p.context).toMatchObject({ vmId: "vm-1", parked: { at: 1000, deleteAt: 87_401_000 } });
+    const busy = transition(workerMachine, ready(), { type: "ASSIGN" as const, taskId: "t", epoch: 1 })[0];
+    const [q] = transition(workerMachine, busy, park);
+    expect(q.value).toBe("parked");
+    expect(q.context.taskId).toBeUndefined();
+  });
+
+  test("parked -> draining (deleted) or released (the next attempt's worker took the machine); nothing else", () => {
+    const [p] = transition(workerMachine, ready(), park);
+    expect(transition(workerMachine, p, { type: "DRAIN" as const })[0].value).toBe("draining");
+    const [r] = transition(workerMachine, p, { type: "HANDED_OVER" as const, to: "run/agt-1/e2" });
+    expect(r.value).toBe("released");
+    // Released owns nothing: no drain, no park, nothing destroyed.
+    expect(r.can({ type: "DRAIN" as const })).toBe(false);
+    expect(r.can(park)).toBe(false);
+    expect(p.can({ type: "ASSIGN" as const, taskId: "t", epoch: 2 })).toBe(false);
+    // Only a worker with its machine can park: not while provisioning, draining or destroyed.
+    expect(initialTransition(workerMachine, { workerId: "agt-1" })[0].can(park)).toBe(false);
+    expect(transition(workerMachine, ready(), { type: "DRAIN" as const })[0].can(park)).toBe(false);
+  });
+});
