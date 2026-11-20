@@ -25,7 +25,7 @@ import { forgetMachine, machineNameFor, recordAgentMachine } from "../providers/
 import { sandboxCaps, sandboxName } from "../providers/registry";
 import { slotsFor } from "../providers/capacity";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
-import { runAgent, stoppedAt } from "../agents/runner";
+import { runAgent, SessionMissingError, stoppedAt } from "../agents/runner";
 import { activityReporter, setupReporter } from "../agents/activity";
 import { noteStep } from "../jobs/service";
 import { itemWriter } from "../agents/thread-store";
@@ -37,7 +37,7 @@ import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord, type ProfileMachine } from "../profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { env as envVar } from "../utils/env";
-import type { SandboxProvider } from "../providers/sandbox";
+import type { SandboxProvider, VmId } from "../providers/sandbox";
 import type { MergeConfig } from "../merge/config";
 import { admitStart, agentVmIdemKey, agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
 
@@ -324,10 +324,11 @@ export type PushBranchParams = {
  * ADR-026 §5: what a continued attempt's runner is given: the scope's record of the agent (its messages after its
  * cursor, its thread, its last hand-back), its saved session to restore in its machine, and the fallback's thread line.
  */
-function continueHooks(scope: any, o: { runId: string; agentId: string; provider: unknown; machineId: string }): import("../agents/continue").ContinueHooks {
+function continueHooks(scope: any, o: { runId: string; agentId: string; provider: SandboxProvider; machineId: VmId; fromThread?: boolean; onLog?: (lines: string[]) => void }): import("../agents/continue").ContinueHooks {
   return {
     load: async () => (await scope.continuation({ agentId: o.agentId })) ?? null,
-    restore: async ({ home, cwd }) => (await import("../agents/continue")).restoreSession({ runId: o.runId, agentId: o.agentId, provider: o.provider, machineId: o.machineId, home, cwd }),
+    // `fromThread`: its saved session was restored but its CLI couldn't find it (SessionMissingError): path 4 straight away.
+    restore: async ({ home, cwd }) => o.fromThread ? null : (await import("../sessions")).restoreSession({ runId: o.runId, agentId: o.agentId, provider: o.provider, machineId: o.machineId, home, cwd, ...(o.onLog ? { onLog: o.onLog } : {}) }),
     pickedUpFromThread: async () => {
       const { PICKED_UP_TEXT } = await import("../agents/continue");
       const a = await scope.getAgent({ agentId: o.agentId }).catch(() => null);
@@ -480,7 +481,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     // Its thread (harness.v1 thread items), written in order; flushed before the agent is reported finished. Agents
     // that may spawn get one too: the spool pump forwards only their capcomd calls, not their own events.
     const items = scope ? itemWriter(scope, workerId) : null;
-    const res = await runAgent(adapter, provider, vmId, {
+    const attempt = (fromThread: boolean) => runAgent(adapter, provider, vmId, {
       runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
       goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.continued ? { continued: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}),
       // A consolidator works as a reporting agent does (a read-only checkout of the target; nothing kept or pushed), with its own prompt.
@@ -495,7 +496,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       warmTemplate: sandboxCaps(runSource).isolation === "container" ? true : sandboxCaps(runSource).isolation === "vm" ? "vm" : false,
       ...(templates ? { onWorkspace: templates.onWorkspace } : {}),
       // ADR-026 §5: a continued attempt picks up its conversation: its saved session (path 3), else its thread (path 4).
-      ...(params.continued && scope ? { continuation: continueHooks(scope, { runId, agentId: workerId, provider, machineId: vmId }) } : {}),
+      ...(params.continued && scope ? { continuation: continueHooks(scope, { runId, agentId: workerId, provider, machineId: vmId, fromThread, onLog: (lines) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } }) } : {}),
       heartbeatMs: beatEvery,
       vmTtlSeconds: lifeSeconds,
       onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
@@ -561,7 +562,11 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
       // Read from the agent row isCancelled just fetched (the runner asks right after it), so no extra actor call per poll.
       ...(scope ? { isPaused: async () => pauseAsked } : {}),
-    }).finally(async () => { prep?.stop(); if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
+    });
+    const res = await attempt(false)
+      // ADR-026 §5 path 4: the session it was to continue wasn't there for its CLI after all: a fresh one from its thread.
+      .catch((e) => { if (e instanceof SessionMissingError && params.continued && scope) return attempt(true); throw e; })
+      .finally(async () => { prep?.stop(); if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
     sha = res.sha;
     costUsd = res.costUsd;
     turns = res.turns;

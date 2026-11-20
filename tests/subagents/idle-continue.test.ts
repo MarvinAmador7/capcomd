@@ -2,17 +2,19 @@
 //
 // Through a real agent CLI (fake claude in a host-exec FakeProvider, the supervisor feeding its stdin): a message to an
 // agent whose attempt ended (done, or cancelled, in a run that isn't archived) continues it as its next attempt (epoch),
-// at the agent's stable checkout path, with a fresh session whose prompt is rebuilt from its thread (no session is
-// saved yet: §5 path 4) and one quiet `note` item saying so; it answers. An archived run refuses (and takes messages
+// at the agent's stable checkout path, resuming its saved CLI session with the message as its next turn (§5 path 3), or,
+// with no session to resume (none saved, or its CLI can't find it), a fresh one whose prompt is rebuilt from its thread
+// (path 4) and one quiet `note` item saying so; it answers. An archived run refuses (and takes messages
 // again once restored); an await counts the idle agent as ended and waits again once it is woken; its wall time counts
 // only while it works (idle in between, it pauses), its turns across attempts; and a message can change the model its
 // next turn runs with: at once for an idle agent, after its current turn for a working one (held, then continued).
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../helpers/test-engine";
 import { capcomd, testPort } from "../helpers/engine";
+import { sessionDir } from "../../src/sessions";
 import { bareRepo } from "../merge/gitfixture";
 
 let engine: Engine;
@@ -77,7 +79,7 @@ const awaitOne = async (run: string, id: string) => (await cj(["await", run, id,
 const seen = (id: string, f: string) => { const p = join(dir, "vm", id, f); return existsSync(p) ? readFileSync(p, "utf8") : ""; };
 const items = async (run: string, id: string) => (await (await scope(run)).getItems({ agentId: id, limit: 500 })) as any[];
 
-test("a message to a done agent continues it: a new attempt at the same checkout, a session rebuilt from its thread, and it answers", async () => {
+test("a message to a done agent continues it: a new attempt at the same checkout, its saved session resumed, and it answers", async () => {
   const run = await newRun();
   const id = (await cj(["spawn", run, "--profile", "lead", "--task", "add the sum helper", "--key", "first"])).j?.agentId;
   const first = await awaitOne(run, id);
@@ -91,22 +93,61 @@ test("a message to a done agent continues it: a new attempt at the same checkout
   expect(second?.status).toBe("done");
   expect(second?.epoch).toBe(2);
   expect(second?.result?.summary).toBe("fixed sum");
-  // Its prompt: its thread rebuilt (path 4: nothing saved to resume), its task and last hand-back, then the new message.
+  // Path 3: the same conversation (--resume, its first turn there), and only the new message as its next turn.
+  const argv = seen(id, "argv.txt").split("\n");
+  expect(argv[argv.indexOf("--resume") + 1]).toMatch(/^[0-9a-f-]{36}$/);
+  expect(seen(id, "resumed.txt")).toContain("Task: add the sum helper");
   const prompt = seen(id, "prompt-seen.txt");
-  expect(prompt).toContain("Your earlier session couldn't be resumed");
-  expect(prompt).toContain("add the sum helper");
-  expect(prompt).toContain("Your last hand-back, in full:\nfixed sum");
   expect(prompt).toContain("now explain what you changed");
-  expect(prompt.indexOf("now explain")).toBeGreaterThan(prompt.indexOf("Your last hand-back"));
-  // One quiet line in its thread, and the event.
-  const notes = (await items(run, id)).filter((i) => i.kind === "note");
-  expect(notes.map((n) => n.text)).toEqual(["Picked up from the thread: the earlier session couldn't be resumed."]);
+  expect(prompt).not.toContain("Task: add the sum helper");
+  expect(prompt).not.toContain("couldn't be resumed");
+  expect((await items(run, id)).filter((i) => i.kind === "note")).toEqual([]);
   expect((await events(run, "AGENT_CONTINUED"))[0]).toMatchObject({ agentId: id, data: { epoch: 2, from: "done", by: "operator" } });
   expect((await events(run, "AGENT_DONE")).filter((e) => e.agentId === id)).toHaveLength(2);
   // The message isn't handed to it again: its cursor moved past it.
   const a = await (await scope(run)).getAgent({ agentId: id });
   expect(a!.continued).toMatchObject({ epoch: 2, from: "done" });
   expect(((await (await scope(run)).pullMessages({ agentId: id })) as any[])).toEqual([]);
+}, 180_000);
+
+/** Path 4's prompt and its one quiet thread line. */
+const expectFromThread = async (run: string, id: string) => {
+  const prompt = seen(id, "prompt-seen.txt");
+  expect(prompt).toContain("Your earlier session couldn't be resumed");
+  expect(prompt).toContain("add the sum helper");
+  expect(prompt).toContain("Your last hand-back, in full:\nfixed sum");
+  expect(prompt).toContain("now explain what you changed");
+  expect(prompt.indexOf("now explain")).toBeGreaterThan(prompt.indexOf("Your last hand-back"));
+  const notes = (await items(run, id)).filter((i) => i.kind === "note");
+  expect(notes.map((n) => n.text)).toEqual(["Picked up from the thread: the earlier session couldn't be resumed."]);
+  // A new session, not a resume.
+  const argv = seen(id, "argv.txt").split("\n");
+  expect(argv).toContain("--session-id");
+  expect(argv).not.toContain("--resume");
+};
+
+test("with no saved session to resume, it continues from its thread: the prompt rebuilt, and one quiet line saying so", async () => {
+  const run = await newRun();
+  const id = (await cj(["spawn", run, "--profile", "lead", "--task", "add the sum helper", "--key", "first"])).j?.agentId;
+  expect((await awaitOne(run, id))?.status).toBe("done");
+  rmSync(sessionDir(run, id), { recursive: true, force: true });
+  expect((await cj(["send", run, id, "now explain what you changed", "--key", "followup"])).j).toMatchObject({ continued: true, epoch: 2 });
+  const second = await awaitOne(run, id);
+  expect(second).toMatchObject({ status: "done", epoch: 2 });
+  await expectFromThread(run, id);
+}, 180_000);
+
+test("a restored session its CLI can't find: the same attempt starts over from its thread (no failure shown)", async () => {
+  const run = await newRun();
+  const id = (await cj(["spawn", run, "--profile", "lead", "--task", "add the sum helper", "--key", "first"])).j?.agentId;
+  expect((await awaitOne(run, id))?.status).toBe("done");
+  writeFileSync(join(dir, "vm", id, "lose-session"), "");
+  expect((await cj(["send", run, id, "now explain what you changed", "--key", "followup"])).j).toMatchObject({ continued: true, epoch: 2 });
+  const second = await awaitOne(run, id);
+  expect(second).toMatchObject({ status: "done", epoch: 2 });
+  expect(second?.result?.summary).toBe("fixed sum");
+  await expectFromThread(run, id);
+  expect(await events(run, "AGENT_FAILED")).toEqual([]);
 }, 180_000);
 
 test("a cancelled agent of a run that isn't archived takes a message too: it continues", async () => {

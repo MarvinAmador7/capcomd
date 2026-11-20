@@ -350,8 +350,7 @@ package final class DeskModel {
       for h in cols where all || keys.contains(.agent(h.agentId)) {
         let s = agents[h.agentId] ?? added[h.agentId] ?? { let n = AgentSlice(h); added[h.agentId] = n; return n }()
         s.set(h)
-        // The trail, the waking delay and the record come with the agent lifecycle (setupTrail, wakingShowsAtMs).
-        s.set(setupLine: store.preparing(runId: runId, agentId: h.agentId, name: h.name).map { SetupLineModel.of($0, name: h.name) })
+        setUp(s, runId: runId, h)
         s.set(composer: store.paneComposer(runId: runId, agentId: h.agentId, name: h.name))
         if let bots { s.set(bot: bots[h.agentId]) }
         if let asks { s.set(approval: asks[h.agentId]) }
@@ -613,10 +612,37 @@ package final class DeskModel {
   }
   package func closeAgentModelMenu(_ agentId: String) { agents[agentId]?.set(modelMenuOpen: false) }
 
-  /// Restore, from an archived run's composer (offered only where `PaneComposerState.canRestore`, which this branch
-  /// never sets): with the agent lifecycle merged it calls `CapcomdStore.restoreRun(runId:)`.
+  /// Its compact setup line (the trail, "Waking" after the 1 s delay) while it gets ready, and once a first start's
+  /// setup is done its record. The record's time is frozen when its line is seen to end; read later, it runs to the
+  /// last phase's start.
+  private func setUp(_ s: AgentSlice, runId: String, _ h: ColumnHeader) {
+    let a = store.runs[runId]?.agents[h.agentId]
+    let trail = store.setupTrail(runId: runId, agentId: h.agentId)
+    let lastAt = a?.setupMarks.last?.atMs
+    let steps = trail?.steps.map { t in
+      SetupLineModel.Step(line: t.line, state: t.state == .done ? .done : t.state == .now ? .now : .next, ms: t.ms, atMs: t.state == .now ? lastAt : nil)
+    } ?? []
+    let line = store.preparing(runId: runId, agentId: h.agentId, name: h.name)
+      .map { SetupLineModel.of($0, name: h.name, waking: a?.continuedAtMs != nil, steps: steps, showsAtMs: a?.wakingShowsAtMs) }
+    let wasSettingUp = s.setupLine != nil
+    s.set(setupLine: line)
+    // A wake's record goes above its turn's first row, which the thread knows: only a first start's is made here.
+    guard line == nil, a?.continuedAtMs == nil, let trail, let first = a?.setupMarks.first?.atMs, !trail.steps.contains(where: { $0.state == .now }) else {
+      if line != nil || a?.continuedAtMs != nil { s.set(setupRecord: nil) }
+      return
+    }
+    if s.setupRecord != nil { return }
+    let done = steps.filter { $0.state == .done }
+    let record = wasSettingUp ? SetupRecord(elapsedMs: trail.elapsedMs, steps: done)
+      : SetupRecord(elapsedMs: max(0, (lastAt ?? first) - first), steps: done.enumerated().map { i, st in i == done.count - 1 ? .init(line: st.line, state: .done) : st })
+    s.set(setupRecord: record)
+  }
+
+  /// Restore, from an archived run's composer (offered where `PaneComposerState.canRestore`): its agents take messages
+  /// again.
   package func restoreRun(agentId: String) {
-    guard runId(of: agentId) != nil else { return }
+    guard let runId = runId(of: agentId) else { return }
+    Task { await store.restoreRun(runId: runId) }
   }
 
   /// The model or effort for the agent's next turn (sent with its next message, where the daemon takes it).

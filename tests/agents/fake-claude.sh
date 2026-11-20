@@ -35,6 +35,7 @@
 # Sessions (ADR-026 §2), as claude 2.1.303 keeps them: --session-id ID writes $HOME/.claude/projects/<slug of $PWD>/ID.jsonl
 # (a line per message); --resume ID appends to that file in this directory's project folder, after writing how many
 # lines it found and its first user message to ../resumed.txt, or fails (exit 1, "No conversation found …") without it.
+# A ../lose-session file (once) makes a --resume lose its session first, as a CLI too far apart from the saved one would.
 prompt=""; stream=0; args=("$@"); sid=""; resume=""
 while [ $# -gt 0 ]; do case "$1" in
   -p) case "${2:-}" in -*|"") shift;; *) prompt="$2"; shift 2;; esac;;
@@ -47,6 +48,7 @@ sfile=""
 if [ -n "$sid" ]; then
   sdir="$HOME/.claude/projects/$(printf '%s' "$PWD" | sed 's/[^a-zA-Z0-9]/-/g')"; sfile="$sdir/$sid.jsonl"
   if [ -n "$resume" ]; then
+    [ -f ../lose-session ] && rm -f ../lose-session "$sfile"
     if [ ! -f "$sfile" ]; then echo "No conversation found with session ID: $resume" >&2; exit 1; fi
     { echo "lines=$(wc -l < "$sfile" | tr -d ' ')"; head -1 "$sfile"; } > ../resumed.txt
   else mkdir -p "$sdir"; : > "$sfile"; fi

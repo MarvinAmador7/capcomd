@@ -7,7 +7,7 @@
 //   2. parked    its machine was hibernated: wake it and resume the CLI's session there (phase 3: `parkedMachine`
 //                below is the hook; it finds none yet, so every continued attempt gets a fresh machine).
 //   3. fresh     a new machine from the project's template, the agent's branch (or checkpoint) at its stable checkout
-//                path (`${workdir}/<agentId>/repo`), its saved CLI session restored under that path (`restoreSession`),
+//                path (`${workdir}/<agentId>/repo`), its saved CLI session restored under that path (src/sessions `restoreSession`),
 //                and the CLI resumed (`--resume <id>`) with the waking message as its first user turn.
 //   4. thread    the session can't be resumed (none saved, a CLI too far apart, a corrupt file): a new session whose
 //                prompt is built from the thread (bounded, newest first, the full last hand-back), and one quiet line
@@ -54,16 +54,6 @@ const LAST_MAX = 12 * 1024;
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 const one = (s: string) => cut(s.replace(/\s+/g, " ").trim(), LINE_MAX);
-
-/**
- * TODO(ADR-026 phase 2, feat/durable-sessions): replace with `restoreSession` from src/sessions/ (INTERFACE.md, owned by
- * the sessions work) once it lands: it uploads the agent's saved session (and Claude's `<id>/` folder) into the machine
- * at the path its CLI expects for `cwd`, and returns its id. Until then nothing is saved, so every continued attempt
- * takes §5 path 4 (a fresh session built from the thread).
- */
-export async function restoreSession(_o: { runId: string; agentId: string; provider: unknown; machineId: string; home: string; cwd: string }): Promise<{ sessionId: string; cli: "claude" | "codex" } | null> {
-  return null;
-}
 
 /**
  * Phase 3 hook (ADR-026 §6, §5 path 2): the agent's parked (hibernated) machine, to wake instead of making a new one.

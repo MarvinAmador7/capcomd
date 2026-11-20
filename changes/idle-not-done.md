@@ -2,7 +2,9 @@
 
 - An agent whose work ended (done, failed or stopped) is now idle, not finished: a message to it (`capcomd send`, the
   app's message box, a parent's message) starts its next turn on a fresh machine, from its own branch or last
-  checkpoint, with its thread so far as its context. The send answers `continued: true`. Messages that arrive as an
+  checkpoint, in the same conversation: its saved Claude Code or Codex session is resumed with the message as the next
+  turn. When that session can't be resumed, it starts a new one with its thread so far as its context, and the thread
+  says so in one quiet line. The send answers `continued: true`. Messages that arrive as an
   attempt ends are never lost: the agent continues at once to read them.
 - `capcomd run archive <run>` makes a run read-only: its agents take no messages ("… is archived · restore to
   continue") until `capcomd run restore <run>`. A run can't be archived while an agent in it still works.

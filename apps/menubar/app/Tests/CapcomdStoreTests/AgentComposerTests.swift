@@ -36,7 +36,27 @@ final class AgentComposerTests: XCTestCase {
     c = s.paneComposer(runId: "run-x", agentId: "agt-1", name: "planner")
     XCTAssertFalse(c.isWorking)
     XCTAssertFalse(c.canStop)
-    XCTAssertFalse(c.canSend)                                                   // before the agent lifecycle, an ended agent reads nothing
+    XCTAssertFalse(c.canSend)                                                   // a daemon without agents.idle: nothing reads it
+    XCTAssertEqual(c.placeholder, "Tell planner…")
+  }
+
+  func testAnIdleAgentsBoxSendsToContinueItAndAnArchivedRunsOffersRestore() async {
+    let info = FakeInfo(); info.caps = [Capability.agentsIdle, Capability.runsArchive]
+    let s = CapcomdStore(messenger: FakeMessenger(), daemonInfo: info)
+    await s.refreshDaemonInfo()
+    event(s, "agent.spawned", seq: 1, data: ["profile": .string("planner")])
+    event(s, "agent.started", seq: 2)
+    event(s, "agent.done", seq: 3)
+    var c = s.paneComposer(runId: "run-x", agentId: "agt-1", name: "planner")
+    XCTAssertEqual(c.placeholder, "planner is idle. Send to continue.")
+    XCTAssertTrue(c.isIdle)
+    XCTAssertTrue(c.canSend)
+    XCTAssertFalse(c.isWorking)
+    s.setArchived(runId: "run-x", true)
+    c = s.paneComposer(runId: "run-x", agentId: "agt-1", name: "planner")
+    XCTAssertTrue(c.isArchived)
+    XCTAssertTrue(c.canRestore)
+    XCTAssertFalse(c.canSend)
   }
 
   func testTheNextTurnsModelRidesOnlyWhenTheDaemonTakesIt() async {

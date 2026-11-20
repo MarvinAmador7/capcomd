@@ -1,10 +1,5 @@
 import Foundation
 
-extension Capability {
-  /// `POST …/agents/{agentId}/messages` takes `model` and `effort`: the agent's next turn runs on them.
-  public static let agentsMessagesModel = "agents.messages.model"
-}
-
 /// What the pane's model chip says for one agent, and what its menu offers: the agent's own harness (it can't change
 /// mid-run), that harness's models and effort levels, and the pick for its next turn. Read-only (`editable` false) on a
 /// daemon that can't take a model with a message.
@@ -73,9 +68,7 @@ extension CapcomdStore {
 /// while the box is empty), whether its run is archived (a Restore line instead of the box), and its model chip. One
 /// value, made by `paneComposer`: the agent lifecycle (idle, archived, waking) changes what goes in it, not the view.
 ///
-/// Its first five fields are the agent lifecycle's `ComposerState` (feat/idle-not-done), field for field; on this branch
-/// `paneComposer` works them out from the agent's status, and with the lifecycle merged it copies them from
-/// `composerState(runId:agentId:name:)`.
+/// Its first five fields come from the agent lifecycle's `ComposerState` (`composerState(runId:agentId:name:)`).
 public struct PaneComposerState: Sendable, Hashable {
   /// "Tell planner…", or "planner is idle. Send to continue."
   public var placeholder: String
@@ -108,15 +101,20 @@ extension CapcomdStore {
   public func paneComposer(runId: String, agentId: String, name: String) -> PaneComposerState {
     let a = runs[runId]?.agents[agentId]
     let status = a?.status ?? .unknown
-    let working = status == .running && a?.wake == nil && a?.limit == nil
+    let life = composerState(runId: runId, agentId: agentId, name: name)
+    let working = (life.isWaking || status == .running) && a?.wake == nil && a?.limit == nil
     let skills: [String] = {
       guard capabilities.contains(Capability.steerSkills), case .loaded(let list)? = self.skills else { return [] }
       return list.map(\.name)
     }()
-    // The lifecycle half. With the agent lifecycle merged: `composerState(runId:agentId:name:)` (an idle agent takes
-    // messages there; here, before it, a daemon refuses them, so an ended agent's box doesn't send).
-    return PaneComposerState(placeholder: "Tell \(name)…", isWorking: working,
-                             canStop: working && capabilities.contains(Capability.agentPause), canSend: !status.isTerminal,
+    // An idle agent takes messages where the daemon continues it (agents.idle); an older one refuses them, so an ended
+    // agent's box doesn't send there. An archived run's take none until it is restored.
+    let continues = capabilities.contains(Capability.agentsIdle)
+    let canSend = !life.isArchived && (!status.isTerminal || continues)
+    return PaneComposerState(placeholder: life.isIdle && !continues ? "Tell \(name)…" : life.placeholder, isArchived: life.isArchived,
+                             isWorking: working, isWaking: life.isWaking, isIdle: life.isIdle && continues,
+                             canRestore: life.isArchived && capabilities.contains(Capability.runsArchive),
+                             canStop: working && capabilities.contains(Capability.agentPause), canSend: canSend,
                              skills: skills, model: agentModelChoice(runId: runId, agentId: agentId))
   }
 }
