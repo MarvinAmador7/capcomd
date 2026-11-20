@@ -15,6 +15,7 @@ import { checkImage, type StoredImage } from "./images";
 import { capBytes, oneLine, sanitize, tailBytes } from "./sanitize";
 import { claudeSummary, codexSummary, fxSummary } from "./summary";
 import { isClaudeNamingCall, isCodexNamingCall, isFxNamingCall } from "./naming";
+import { BOOKKEEPING_SYSTEM, isBookkeepingCommand, isBookkeepingTool } from "./bookkeeping";
 import { THREAD_FORMAT, type BlockNode, type ItemDraft, type LinkNode, type ToolDiffT, type ToolInfoT } from "./schema";
 
 const EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
@@ -80,7 +81,7 @@ export function threadBuilder(o: ThreadOptions) {
 		const item: ItemDraft = {
 			id: `${o.idPrefix}-${++n}`, rev: 1, kind: d.kind, status: d.status ?? "done", at: new Date(now()).toISOString(), durationMs: d.durationMs ?? null,
 			text: d.text, blocks: d.blocks ?? [], format: THREAD_FORMAT, redacted: d.redacted ?? false, tool: d.tool ?? null, error: d.error ?? null,
-			truncated: d.truncated ?? null, child: d.child ?? null,
+			truncated: d.truncated ?? null, child: d.child ?? null, ...(d.internal ? { internal: true } : {}),
 		};
 		items.set(item.id, item);
 		if (item.kind === "say" || item.kind === "result" || item.kind === "error") lastText = item.text.trim();
@@ -100,7 +101,9 @@ export function threadBuilder(o: ThreadOptions) {
 		const m = capBytes(sanitize(message), ERROR_MAX_BYTES);
 		return create({ kind: "error", text: m, blocks: plainBlocks(m), error: { message: m, code } });
 	};
-	const other = (summary: string): ItemDraft => create({ kind: "other", text: oneLine(summary) || "Event" });
+	const other = (summary: string, internal = false): ItemDraft => create({ kind: "other", text: oneLine(summary) || "Event", internal });
+	/** A CLI system event (BOOKKEEPING_SYSTEM): recorded, internal. */
+	const system = (subtype: string, summary: string): ItemDraft => other(summary, BOOKKEEPING_SYSTEM.has(subtype));
 	const thinking = (text: string, redacted: boolean): ItemDraft => {
 		if (redacted || !text.trim()) return create({ kind: "thinking", text: "", redacted: true });
 		const p = toBlocks(text, ctx);
@@ -108,9 +111,10 @@ export function threadBuilder(o: ThreadOptions) {
 	};
 	const fileLinks = (paths: unknown[]): LinkNode[] =>
 		paths.flatMap((p) => { const s = str(p); if (!s) return []; const l = classifyLink(s, workspacePath(s, ctx.root) ?? s, ctx); return l.target === "file" ? [l] : []; });
-	const openTool = (callId: string, t: Omit<ToolInfoT, "callId" | "isError" | "output">): ItemDraft => {
+	/** `internal`: the call is bookkeeping (BOOKKEEPING_CALLS): a wake, a wait, a poll of its own state. */
+	const openTool = (callId: string, t: Omit<ToolInfoT, "callId" | "isError" | "output">, internal = false): ItemDraft => {
 		const tool: ToolInfoT = { callId, name: oneLine(t.name, 200), kind: t.kind, summary: t.summary, isError: false, args: t.args, output: null, files: t.files, diff: t.diff };
-		const item = create({ kind: "tool", status: "open", text: tool.summary, tool });
+		const item = create({ kind: "tool", status: "open", text: tool.summary, tool, internal });
 		tools.set(callId, item.id);
 		callItems.set(callId, item.id);
 		return item;
@@ -188,7 +192,7 @@ export function threadBuilder(o: ThreadOptions) {
 						name, kind: claudeToolKind(name, input), summary: claudeSummary(name, input, rel), args: capBytes(json(input), ARGS_MAX_BYTES),
 						files: edits ? fileLinks([input.file_path ?? input.notebook_path]) : [],
 						diff: edits ? claudeInputDiff(name, input, ctx.root) : null,
-					}));
+					}, name === "Bash" ? isBookkeepingCommand(str(input.command)) : isBookkeepingTool(name)));
 				} else out.push(other(`Assistant ${bt || "block"}`));
 			}
 		} else if (type === "user" && Array.isArray(content)) {
@@ -234,7 +238,7 @@ export function threadBuilder(o: ThreadOptions) {
 			return [other(name ? `Not allowed: ${name}` : "A tool call wasn't allowed")];
 		}
 		const said = SYSTEM_SAID[subtype];
-		return said ? [other(said(raw))] : [];
+		return said ? [system(subtype, said(raw))] : [];
 	};
 
 	const codex = (raw: any): ItemDraft[] => {
@@ -254,7 +258,8 @@ export function threadBuilder(o: ThreadOptions) {
 						const args = item.type === "command_execution" ? str(item.command) : item.type === "mcp_tool_call" ? json(item.arguments) : item.type === "file_change" ? json(item.changes) : str(item.query);
 						const files = item.type === "file_change" && Array.isArray(item.changes) ? fileLinks(item.changes.filter((ch: any) => ch?.kind !== "delete").map((ch: any) => ch?.path)) : [];
 						// file_change carries paths and kinds, not lines: no diff (the files are links).
-						out.push(openTool(id, { name, kind: codexItemKind(item) ?? "tool", summary: codexSummary(item, rel), args: capBytes(args, ARGS_MAX_BYTES), files, diff: null }));
+						const internal = item.type === "command_execution" ? isBookkeepingCommand(str(item.command)) : item.type === "mcp_tool_call" && item.server === "capcomd" && isBookkeepingTool(str(item.tool));
+						out.push(openTool(id, { name, kind: codexItemKind(item) ?? "tool", summary: codexSummary(item, rel), args: capBytes(args, ARGS_MAX_BYTES), files, diff: null }, internal));
 					}
 					if (done) {
 						const failed = item.status === "failed" || (item.type === "command_execution" && item.exit_code != null && Number(item.exit_code) !== 0);
@@ -278,7 +283,7 @@ export function threadBuilder(o: ThreadOptions) {
 					out.push(d);
 					break;
 				}
-				case "error": if (done || type === "item.started") { const m = str(item.message); out.push(RETRYING.test(m) ? other(m) : errorItem(m || "error", null)); } break;
+				case "error": if (done || type === "item.started") { const m = str(item.message); out.push(RETRYING.test(m) ? system("codex_retry", m) : errorItem(m || "error", null)); } break;
 				default: if (done) out.push(other(`Codex ${str(item.type) || "item"}`));
 			}
 		} else if (type === "turn.failed") {
@@ -286,7 +291,7 @@ export function threadBuilder(o: ThreadOptions) {
 			out.push(errorItem(str(raw.error?.message) || "The turn failed", "turn_failed"));
 		} else if (type === "error") {
 			const m = str(raw.message) || str(raw.error?.message);
-			out.push(RETRYING.test(m) ? other(m) : errorItem(m || "error", null));
+			out.push(RETRYING.test(m) ? system("codex_retry", m) : errorItem(m || "error", null));
 		} else if (["thread.started", "turn.started", "turn.completed"].includes(type)) {
 			// Known and not shown.
 		} else out.push(other(`Unknown event: ${type || "?"}`));
@@ -313,7 +318,7 @@ export function threadBuilder(o: ThreadOptions) {
 				out.push(openTool(callId, {
 					name: mcp ? `${str(mcp.server)}.${str(mcp.tool)}` : name || str(u.kind) || "tool", kind: fxToolKind(name, input, mcp), summary: fxSummary(name, input, mcp, rel),
 					args: capBytes(name === "shell" ? str(input.command) || json(input) : json(input), ARGS_MAX_BYTES), files: edits ? fileLinks([input.path]) : [], diff: null,
-				}));
+				}, name === "shell" ? isBookkeepingCommand(str(input.command)) : mcp?.server === "capcomd" && isBookkeepingTool(str(mcp.tool))));
 			} else if (kind === "tool_call_update" && (u.status === "completed" || u.status === "failed")) {
 				const callId = str(u.toolCallId);
 				if (ignoredCalls.delete(callId)) return out;
@@ -327,7 +332,7 @@ export function threadBuilder(o: ThreadOptions) {
 				out.push(closed ?? other("A tool result for a call this thread didn't see"));
 			} else if (kind === "session_info_update" && u._meta?.fx?.modelResponseRecovery?.message) {
 				// fx waiting on the model (a rate limit, a dropped connection): progress, not a failure.
-				out.push(other(str(u._meta.fx.modelResponseRecovery.message).replace(/^\W+\s*/, "")));
+				out.push(system("fx_model_recovery", str(u._meta.fx.modelResponseRecovery.message).replace(/^\W+\s*/, "")));
 			}
 			// Known and not shown: title and context-window updates, a steering message fx replays, running output.
 		} else if (type === "result") {

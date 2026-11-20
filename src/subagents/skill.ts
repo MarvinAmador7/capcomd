@@ -72,24 +72,27 @@ ${notesAndLessons("<your agent id>")}
 - Never change .capcomd/context/ yourself.
 
 ## Before you finish
-Declare your result: \`capcomd result --summary "<your hand-back>"\`${tool("result")}, and make your final message
-the same text. Your parent reads it (and only it) to decide what to do with your work.
+Hand back: \`capcomd result --handback '<JSON>'\`${tool("result")}. Your parent reads it (and only it) to decide what to
+do with your work, and the person sees it as a card. Then end with the outcome in one line.
 ${HANDBACK}`;
 }
 
 /**
- * The shape of a hand-back: what a worker's summary looks like when its parent (and the person, in the app's thread,
- * where it renders as Markdown) reads it. Short, assertive and scannable: the outcome first, then a few bullets.
+ * The shape of a hand-back (ADR-026 §7): handback@1, typed, which the parent reads as fields and the app draws as a card
+ * (its prose form, src/schemas/builtin.ts handbackMarkdown, is what older readers get). Short, assertive and
+ * scannable: the outcome first, then what changed, how it was checked, risks and decisions.
  */
-export const HANDBACK = `Write the hand-back in Markdown, in this shape (about 80 words; newlines inside the quotes are fine):
-  Done: added the Home section to the desktop page.
-  - Changed: \`site/app/desktop/page.tsx\` (new section), \`site/CONTENT.md\` (table row).
-  - Checked: \`bun run typecheck\` passes; the page wasn't opened in a browser.
-  - Risk: the logo isn't dithered (its CSS mask doesn't render headless).
-  - Decide: keep the Google Fonts import, or self-host the fonts?
-The first line is the outcome in one sentence (Done, Partly done or Blocked: what). Then 2-5 bullets: what changed
-(files, briefly), how you checked it (the command and its result), deviations or risks (only if any), and anything
-your parent must decide. No story of how you worked, no restating the task.`;
+export const HANDBACK = `Your hand-back is handback@1, checked before it is recorded: one that doesn't fit is refused with what to fix,
+field by field, and nothing is recorded; fix it and run it again.
+  capcomd result --handback '{"status": "done", "outcome": "added the Home section to the desktop page",
+    "changed": [{"path": "site/app/desktop/page.tsx", "what": "new section"}, {"path": "site/CONTENT.md", "what": "table row"}],
+    "checked": [{"check": "bun run typecheck", "result": "passed"}, {"check": "the page in a browser", "result": "not run"}],
+    "risks": ["the logo isn't dithered: its CSS mask doesn't render headless"],
+    "decide": ["keep the Google Fonts import, or self-host the fonts?"]}'
+status: done, partly or blocked. outcome: one sentence, what you did (or what blocks you). changed: the files, briefly.
+checked: each command (or how you checked) and its result: passed, failed or not run. risks and decide: only if
+any. No story of how you worked, no restating the task. Only when it can't be said that way, hand back in prose:
+\`--summary "<the outcome in one sentence, then a few bullets>"\`.`;
 
 /** Every agent names its tab, Rex-style: injected into every real agent's instructions, so it stays short. */
 export function namingSkill(o: { mcp: boolean; planner?: boolean }): string {
@@ -229,7 +232,7 @@ ${wake ? `  capcomd await <agt…> --wake --note "<then what>"   |   wait-any <a
   capcomd merge --ref <agt> --require <vfyId> --key m-<child>          # only verified commits land
   capcomd fetch [branch…]                                               # the latest branches as origin/<branch>, to read
   capcomd check [branch|agt]                                            # the checks on that commit as it is (default: your target)`}
-  capcomd result --summary "<your hand-back: see below>"                # last thing before you exit
+${o.root ? `  capcomd result --summary "<your hand-back: see below>"                # last thing before you exit` : `  capcomd result --handback '<JSON>'                                    # your hand-back (see below): last thing before you exit`}
 ${o.orchestrate ? "" : `  capcomd job start -- <command>                                        # a long command (tests, a build) in the background:
                                                                         # "running" at once, its result comes as a message
 `}${wake ? wakeRules(o.mcp) : ""}
@@ -299,11 +302,17 @@ ${BRIEF_RULES}
 - \`capcomd help\` lists every command.
 
 ## Your hand-back
-Your \`capcomd result --summary\` is all your parent (or the person) reads of your work, rendered as Markdown; make
+${o.root ? `Your \`capcomd result --summary\` is all your parent (or the person) reads of your work, rendered as Markdown; make
 your final message the same text. The outcome first, in one sentence (Done, Partly done or Blocked: what). Then one
 bullet per child: what landed (verified, reviewed, merged) or what didn't, and why. Then a bullet for whether the
 checks ran on the combined code, and one for what is left or must be decided. No story of how you worked, no restating
-the task; newlines inside the quotes are fine.
+the task; newlines inside the quotes are fine.` : `Your \`capcomd result --handback\` is all your parent (or the person) reads of your work; then end with its outcome in
+one line. For your part as a whole: outcome, what landed; changed, the files that landed; checked, each child's
+verify and merge and the checks on the combined code, with their results; risks, what didn't land and why; decide,
+what your parent must decide.
+${HANDBACK}`}
+A child's typed hand-back is in its result as \`result.typed\` (\`{schema: "handback@1", value: {status, outcome,
+changed, checked, risks, decide}}\`; a reviewer's is review-verdict@1, \`{passed, findings}\`): read its fields.
 
 ## Notes and lessons
 ${notesAndLessons(o.agentId)}

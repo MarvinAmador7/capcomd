@@ -40,10 +40,10 @@ const existingScope = (runId: string) => existingActor("scope", [runId]);
 type Scope = NonNullable<Awaited<ReturnType<typeof existingScope>>>;
 /** Thread items in actor calls of at most ITEMS_PER_CALL rows (an item can be ~150 KB; a call answers at most 8 MB). */
 const ITEMS_PER_CALL = 25;
-async function itemsAfter(s: Scope, after: number, limit: number, agentId?: string): Promise<any[]> {
+async function itemsAfter(s: Scope, after: number, limit: number, agentId?: string, internal = true): Promise<any[]> {
 	const out: any[] = [];
 	for (let cur = after; out.length < limit;) {
-		const rows = (await s.getItems({ ...(agentId ? { agentId } : {}), after: cur, limit: Math.min(ITEMS_PER_CALL, limit - out.length) })) as any[];
+		const rows = (await s.getItems({ ...(agentId ? { agentId } : {}), after: cur, limit: Math.min(ITEMS_PER_CALL, limit - out.length), ...(internal ? {} : { shared: true }) })) as any[];
 		out.push(...rows);
 		if (rows.length < Math.min(ITEMS_PER_CALL, limit - out.length + rows.length)) break;
 		cur = rows.at(-1)!.seq;
@@ -52,11 +52,11 @@ async function itemsAfter(s: Scope, after: number, limit: number, agentId?: stri
 }
 
 /** One agent's items placed before `before` (null: the newest), newest first, in calls of ITEMS_PER_CALL rows. */
-async function itemsBefore(s: Scope, agentId: string, before: number | null, limit: number): Promise<any[]> {
+async function itemsBefore(s: Scope, agentId: string, before: number | null, limit: number, internal = true): Promise<any[]> {
 	const out: any[] = [];
 	for (let cur = before; out.length < limit;) {
 		const want = Math.min(ITEMS_PER_CALL, limit - out.length);
-		const rows = (await s.getItemsBefore({ agentId, ...(cur === null ? {} : { before: cur }), limit: want })) as any[];
+		const rows = (await s.getItemsBefore({ agentId, ...(cur === null ? {} : { before: cur }), limit: want, ...(internal ? {} : { shared: true }) })) as any[];
 		out.push(...rows);
 		if (rows.length < want) break;
 		cur = rows.at(-1)!.order;
@@ -378,17 +378,17 @@ export function rivetSource(): HarnessSource {
 			const b64 = r.mediaType.endsWith(";base64");
 			return { mime: b64 ? r.mediaType.slice(0, -7) : r.mediaType, bytes: new Uint8Array(Buffer.from(r.body, b64 ? "base64" : "utf8")) };
 		},
-		thread: async (runId, agentId, after, limit) => {
+		thread: async (runId, agentId, after, limit, internal = false) => {
 			const s = await existingScope(runId).catch(() => null);
 			const a = s ? await s.getAgent({ agentId }).catch(() => null) : null;
 			if (!s || !a) return null;
-			return itemsAfter(s, after, limit, agentId);
+			return itemsAfter(s, after, limit, agentId, internal);
 		},
-		threadBefore: async (runId, agentId, before, limit) => {
+		threadBefore: async (runId, agentId, before, limit, internal = false) => {
 			const s = await existingScope(runId).catch(() => null);
 			const a = s ? await s.getAgent({ agentId }).catch(() => null) : null;
 			if (!s || !a) return null;
-			return itemsBefore(s, agentId, before, limit);
+			return itemsBefore(s, agentId, before, limit, internal);
 		},
 		threadAfter: async (runId, after, limit) => existingScope(runId).then((s) => (s ? itemsAfter(s, after, limit) : [])).catch(() => []),
 		threadHead: async (runId) => Number(await existingScope(runId).then((s) => s?.itemsHead() ?? 0).catch(() => 0)),

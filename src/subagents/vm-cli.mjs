@@ -152,7 +152,8 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
   handoff --task T [--profile P] [--context JSON]
   events [--follow] [--after N | --since-seq N] [--until TYPE] [--timeout-ms N]
   budget [show]   grant <agt> --budget usd=1,turns=20 [--key K]  (more for a child, from what you have left)   heartbeat [note]
-  result --summary S [--artifact name=ref]… [--data JSON]
+  result --handback JSON [--summary S] [--artifact name=ref]… [--data JSON]   your typed hand-back (handback@1: status,
+        outcome, changed, checked, risks, decide), checked before it is recorded; or --summary S alone, in prose
   task add --title T [--data JSON] [--after tsk,…] [--key K] | list [--status S] | show <tsk>
        | claim [tsk] [--lease-ms N] | renew|release|done <tsk> --epoch E [--result JSON]
   kv get <k> | put <k> <json> [--key K] | cas <k> <json> --expect V | del <k> [--expect V] | list [--prefix P]
@@ -220,7 +221,8 @@ export function toCall(argv) {
       if (!words) usage('title "<2-4 lowercase words>": name what you\'re working on, e.g. capcomd title "login redirect"');
       return { op: "title", args: { title: words, ...(agent ? { agent } : {}), ...(fl.run !== undefined ? { run: true } : {}), key } };
     }
-    case "result": return { op: "result", args: { summary: fl.summary ?? pos.join(" "), artifacts: arr(fl.artifact).map((a) => { const [name, ref] = String(a).split(/=(.*)/s); return { name, ref: ref ?? name }; }), data: json(fl.data, "--data") } };
+    // --handback goes as written: the orchestrator parses and checks it, and says what to fix.
+    case "result": return { op: "result", args: { summary: fl.summary ?? pos.join(" "), artifacts: arr(fl.artifact).map((a) => { const [name, ref] = String(a).split(/=(.*)/s); return { name, ref: ref ?? name }; }), data: json(fl.data, "--data"), ...(fl.handback !== undefined ? { handback: String(fl.handback) } : {}), ...(fl.schema !== undefined ? { schema: String(fl.schema) } : {}) } };
     case "task": {
       const action = pos.shift();
       if (action === "add") return { op: "task", args: { action, title: fl.title, data: json(fl.data, "--data"), after: fl.after ? String(fl.after).split(",") : undefined, key } };
@@ -293,6 +295,31 @@ function exitFor(r) { return r.ok ? 0 : r.error?.retryable ? 75 : r.error?.code 
 
 // ── MCP (stdio, newline-delimited JSON-RPC) ─────────────────────────────────────────────────
 const S = (props, req = []) => ({ type: "object", properties: props, required: req });
+/** handback@1 (src/schemas/builtin.ts HANDBACK_V1, kept equal by tests/unit/schemas.test.ts): the result tool's
+ *  `handback`, so the model sees its fields. */
+const line = (maxLength, description) => ({ type: "string", minLength: 1, maxLength, description });
+export const HANDBACK_SCHEMA = {
+  type: "object",
+  description: "An agent's hand-back to its parent: the outcome first, then what changed, how it was checked, risks and decisions",
+  properties: {
+    status: { type: "string", enum: ["done", "partly", "blocked"], description: "done: the task is done; partly: some of it is; blocked: it can't go on without something or someone" },
+    outcome: line(300, "The outcome in one sentence: what was done (or what blocks it)"),
+    changed: {
+      type: "array", maxItems: 50, description: "The files it changed",
+      items: { type: "object", properties: { path: line(300, "Relative to the repository"), what: line(200, "What changed in it, briefly") }, required: ["path"] },
+    },
+    checked: {
+      type: "array", maxItems: 20, description: "How it was checked: each command (or way) and its result",
+      items: {
+        type: "object", required: ["check", "result"],
+        properties: { check: line(300, "The command, or how it was checked"), result: { type: "string", enum: ["passed", "failed", "not run"] }, note: line(300, "What it showed") },
+      },
+    },
+    risks: { type: "array", maxItems: 10, description: "Deviations from the task and risks, if any", items: line(300, "One deviation or risk") },
+    decide: { type: "array", maxItems: 10, description: "What the parent must decide, if anything", items: line(300, "One question") },
+  },
+  required: ["status", "outcome"],
+};
 const str = { type: "string" }, num = { type: "number" }, ids = { type: "array", items: { type: "string" } };
 export const TOOLS = [
   ["title", "Name your tab: 2-4 lowercase words for what you're working on (e.g. \"login redirect\"). Rename only when your focus really changes. `agent`: one of your children instead; `run: true` (the planner): the run.", S({ title: str, agent: str, run: { type: "boolean" }, key: str }, ["title"])],
@@ -322,7 +349,7 @@ export const TOOLS = [
   ["inspect", "Everything about one agent: record, children, awaits, VM, logs, events.", S({ agent: str, tail: num }, ["agent"])],
   ["logs", "Tail an agent's logs (fenced).", S({ agent: str, tail: num }, ["agent"])],
   ["heartbeat", "Report progress (keeps you from being flagged stuck).", S({ note: str })],
-  ["result", "Declare your structured result before you exit: summary, artifacts, data.", S({ summary: str, artifacts: { type: "array", items: S({ name: str, ref: str }) }, data: {} }, ["summary"])],
+  ["result", "Declare your result before you exit: your typed hand-back (`handback`, handback@1: checked before it is recorded; a payload that doesn't fit is refused with what to fix) or a `summary` in prose; artifacts, data.", S({ handback: HANDBACK_SCHEMA, schema: str, summary: str, artifacts: { type: "array", items: S({ name: str, ref: str }) }, data: {} })],
 ].map(([name, description, inputSchema]) => ({ name: `capcomd_${name}`, description, inputSchema }));
 
 /** The tools this agent's token lets it call (an agent that may not spawn sees no spawn, verify or merge tool). Its claims

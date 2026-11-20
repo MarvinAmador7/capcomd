@@ -1,6 +1,6 @@
 // Adapter behaviour beyond the golden sessions: dedupe, pairing, durations, suppression, unknown events, garbage.
 import { describe, expect, test } from "bun:test";
-import { handoffDraft, threadBuilder, ThreadItem, type ItemDraft } from "../src/index";
+import { handoffDraft, isBookkeepingCommand, isBookkeepingTool, threadBuilder, threadNote, ThreadItem, type ItemDraft } from "../src/index";
 
 const run = (cli: "claude" | "codex" | "fx", events: unknown[], o: { onImage?: (x: any) => void } = {}) => {
 	const b = threadBuilder({ cli, idPrefix: "itm-t", now: () => 0, link: { root: "/w/repo" }, ...o });
@@ -173,6 +173,58 @@ describe("hand-back", () => {
 		const both = handoffDraft({ id: "x", at: 0, child: { agentId: "agt-r", status: "done" }, summary: "Looks right.", verdict: { passed: true, reasons: [] } });
 		expect(both.text).toBe("**Passed review**\n\nLooks right.");
 		expect(handoffDraft({ id: "y", at: 0, child: { agentId: "agt-c", status: "done" }, summary: "Done." }).child).toEqual({ agentId: "agt-c", status: "done" });
+	});
+});
+
+describe("typed hand-back (ADR-026 §7)", () => {
+	test("handback@1 is the card's child.handback: every field present, strings cleaned; the blocks still say it", () => {
+		const d = handoffDraft({
+			id: "itm-p-handoff-t", at: 0, child: { agentId: "agt-c", status: "done" }, summary: "Done: added the page.\n- Changed: `a.ts`.",
+			handback: { status: "done", outcome: "added the page\u202e", changed: [{ path: "a.ts" }, { path: "" }], checked: [{ check: "bun test", result: "passed", note: "12 pass" }, { check: "x", result: "maybe" }], risks: ["  "], extra: 1 },
+		});
+		expect(ThreadItem.safeParse({ ...d, seq: 1, order: 1, agentId: "agt-p" }).success).toBe(true);
+		expect(d.child).toEqual({ agentId: "agt-c", status: "done", handback: {
+			status: "done", outcome: "added the page", changed: [{ path: "a.ts", what: null }], checked: [{ check: "bun test", result: "passed", note: "12 pass" }], risks: [], decide: [],
+		} });
+		expect(d.text).toStartWith("Done: added the page.");
+		// Not a hand-back (no status or outcome): no field, the summary as before.
+		expect(handoffDraft({ id: "z", at: 0, child: { agentId: "agt-c", status: "done" }, summary: "ok", handback: { outcome: "x" } }).child).toEqual({ agentId: "agt-c", status: "done" });
+	});
+	test("review-verdict@1's findings go on the verdict, with severity, file and line", () => {
+		const d = handoffDraft({
+			id: "itm-p-handoff-v", at: 0, child: { agentId: "agt-r", status: "done" }, summary: "",
+			verdict: { passed: false, reasons: ["src/add.ts:3: returns a - b"], findings: [{ text: "returns a - b", severity: "blocker", file: "src/add.ts", line: 3 }, { text: "no test", severity: "loud" }] },
+		});
+		expect(ThreadItem.safeParse({ ...d, seq: 1, order: 1, agentId: "agt-p" }).success).toBe(true);
+		expect((d.child as any).verdict.findings).toEqual([{ text: "returns a - b", severity: "blocker", file: "src/add.ts", line: 3 }, { text: "no test", severity: null, file: null, line: null }]);
+	});
+});
+
+describe("bookkeeping is internal (ADR-026 §7)", () => {
+	test("capcomd waits and polls are bookkeeping; work, and a command that does both, is not", () => {
+		for (const c of ["capcomd wake --in 10m --note 'look again'", "capcomd await agt-1 agt-2 --wake", "capcomd status", "capcomd inbox --after 3", "capcomd status agt-1 | jq .result",
+			"bash -lc 'capcomd tree'", "cd /w/repo && capcomd wait-any agt-1", "capcomd job output job-1", "/usr/local/bin/capcomd heartbeat working"]) expect(isBookkeepingCommand(c)).toBe(true);
+		for (const c of ["capcomd verify --ref agt-1 --wake", "capcomd spawn --task x", "capcomd job start -- npm test", "capcomd result --summary done", "capcomd await agt-1 && capcomd merge --ref agt-1 --require vfy-1",
+			"bun test", "echo capcomd status", ""]) expect(isBookkeepingCommand(c)).toBe(false);
+		expect(["mcp__capcomd__capcomd_wake", "capcomd_await", "capcomd_wait_any", "capcomd_job_output"].every(isBookkeepingTool)).toBe(true);
+		expect(["mcp__capcomd__capcomd_verify", "capcomd_spawn", "mcp__other__capcomd_wake", "Bash"].some(isBookkeepingTool)).toBe(false);
+	});
+	test("the builder marks a CLI's bookkeeping calls and system events internal, and nothing else", () => {
+		const { items } = run("claude", [
+			asst("m", { type: "tool_use", id: "a", name: "Bash", input: { command: "capcomd wake --in 5m" } }, { type: "tool_use", id: "b", name: "Bash", input: { command: "bun test" } },
+				{ type: "tool_use", id: "c", name: "mcp__capcomd__capcomd_status", input: {} }, { type: "text", text: "Waiting." }),
+			results({ type: "tool_result", tool_use_id: "a", content: "{}" }, { type: "tool_result", tool_use_id: "b", content: "ok" }, { type: "tool_result", tool_use_id: "c", content: "{}" }),
+			{ type: "system", subtype: "api_retry", attempt: 1, max_retries: 3 },
+			{ type: "rate_limit_event", rate_limit_info: { status: "rejected" } },
+		]);
+		expect(items.map((i) => [i.text, i.internal ?? false])).toEqual([
+			["Run capcomd wake --in 5m", true], ["Run bun test", false], [items[2]!.text, true], ["Waiting.", false],
+			["Retrying the model request (attempt 1 of 3)", true], ["Usage limit reached", false],
+		]);
+		// Every rev of a call keeps it (the open one and the done one).
+		expect(run("codex", [{ type: "item.started", item: { id: "i", type: "command_execution", command: "bash -lc 'capcomd inbox'" } }]).updates.every((u) => u.internal === true)).toBe(true);
+		expect(threadNote({ id: "n", at: 0, text: "scheduled", internal: true }).internal).toBe(true);
+		expect("internal" in threadNote({ id: "n", at: 0, text: "model → opus" })).toBe(false);
 	});
 });
 

@@ -8,6 +8,7 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
 import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
+import { listSchemas } from "../schemas";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, pluginClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import type { PluginDetail as HostPluginDetail, PluginProtocol, PluginSummary as HostPluginSummary } from "../../packages/plugin/src/host/host";
@@ -51,6 +52,8 @@ const err = (c: Context, status: 401 | 403 | 404 | 409 | 413 | 422 | 503 | 504, 
 export const ACTIVITY_MS = 1000;
 /** agent.thread_item_changed: the thread is polled at most this often, latest rev per item (at most four frames per item per second). */
 export const THREAD_MS = 250;
+/** A query flag set: `true` or `1`. */
+const asked = (v: string | undefined) => v === "true" || v === "1";
 /** GET …/thread: a page stops at about this many bytes of items (`next` says where to go on). */
 export const THREAD_PAGE_MAX_BYTES = 4 * 1024 * 1024;
 /** The daemon's plugin host as the gateway uses it (capabilities plugins and plugins.protocol, plugin API §9, §13.2). */
@@ -217,7 +220,7 @@ export function harnessApp(o: ServerOptions) {
 			}),
 			thread: os.agents.thread.handler(async ({ input }) => {
 				const limit = Math.min(input.limit ?? 200, THREAD_PAGE_MAX);
-				const items = await src.thread(input.runId, input.agentId, input.after ?? 0, limit + 1);
+				const items = await src.thread(input.runId, input.agentId, input.after ?? 0, limit + 1, asked(input.internal));
 				if (!items) throw nf(input.agentId);
 				// At most `limit` items and about THREAD_PAGE_MAX_BYTES of them (always at least one).
 				const page: typeof items = [];
@@ -234,7 +237,7 @@ export function harnessApp(o: ServerOptions) {
 			threadTail: os.agents.threadTail.handler(async ({ input }) => {
 				const limit = Math.min(input.limit ?? 100, THREAD_PAGE_MAX);
 				const cursor = await src.threadHead(input.runId);
-				const items = await src.threadBefore(input.runId, input.agentId, input.before ?? null, limit + 1);
+				const items = await src.threadBefore(input.runId, input.agentId, input.before ?? null, limit + 1, asked(input.internal));
 				if (!items) throw nf(input.agentId);
 				const page: typeof items = [];   // newest first
 				let bytes = 0;
@@ -281,6 +284,7 @@ export function harnessApp(o: ServerOptions) {
 			update: os.profiles.update.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		skills: { list: os.skills.list.handler(() => src.skills()) },
+		schemas: { list: os.schemas.list.handler(() => ({ schemas: listSchemas().map((s) => ({ id: s.id, name: s.name, version: s.version, description: s.description, schema: s.schema as unknown as Record<string, unknown> })) })) },
 		// ?sandbox= (capability sandboxes): one place's rows; a name that isn't a listed place is 404.
 		logins: { list: os.logins.list.handler(async ({ input }) => {
 			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);
@@ -1030,6 +1034,8 @@ export function harnessApp(o: ServerOptions) {
 				// ?thread=1: ephemeral agent.thread_item_changed frames (THREAD_STREAM_DOC). Only a connection that asked polls the
 				// run's thread writes, at most every threadMs, and sends the latest rev of each item it found; no SSE id.
 				const wantThread = c.req.query("thread") === "1";
+				// Capability agents.thread_internal: an agent's bookkeeping only with ?internal=1 (or true).
+				const wantInternal = /^(1|true)$/.test(c.req.query("internal") ?? "");
 				let durable = all.at(-1)?.seq ?? 0, threadN = 0;
 				const startThread = async () => {
 					if (!wantThread || closed) return;
@@ -1041,6 +1047,7 @@ export function harnessApp(o: ServerOptions) {
 							const latest = new Map<string, Awaited<ReturnType<HarnessSource["threadAfter"]>>[number]>();
 							for (const it of await src.threadAfter(runId, tcur, 500)) { latest.set(it.id, it); tcur = Math.max(tcur, it.seq); }
 							for (const it of latest.values()) {
+								if (it.internal && !wantInternal) continue;
 								const now = Date.now();
 								send("agent.thread_item_changed", {
 									v: 1, id: `evt_${runId}_thread_${it.id}_${it.rev}_${++threadN}`, scope: runId, seq: durable, entity: it.agentId, entitySeq: 0, type: "agent.thread_item_changed", typeVersion: 1,

@@ -162,6 +162,8 @@ export const TranscriptPage = z.object({
 	items: z.array(TranscriptItem),
 	next: z.number().int().nonnegative().nullable().describe("Pass as `after` for the next page; null at the end"),
 });
+/** Capability agents.thread_internal: a thread read that includes the agent's bookkeeping. */
+const InternalQuery = z.enum(["true", "1", "false", "0"]).optional().describe("Capability agents.thread_internal. `true` (or 1): include the agent's bookkeeping, the items marked `internal` (a wake armed, a check-in, a wait, a poll of its own state, a CLI system event). Default: left out (older daemons send them, unmarked)");
 /** GET …/thread: an agent's thread items (packages/agent-thread), by write cursor. */
 export const THREAD_PAGE_MAX = 500;
 export const ThreadPage = z.object({
@@ -182,6 +184,8 @@ export const THREAD_DOC = `An agent's thread: typed items with stable ids, each 
 Kinds: say, thinking (\`redacted\` when the CLI withheld it), tool (\`tool.summary\` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line). Render an unknown kind as a plain line of \`text\`.
 Every string in an item is agent-written plain text (x-untrusted): never HTML, never a link followed or media loaded without the user's click. Links carry the daemon's \`target\` (web: show \`host\`, and the full URL when \`mismatch\`; file, artifact, agent, run; none: plain text). Media: \`remote\` never loads by itself; \`attachment\` and \`inline\` come from GET /v1/runs/{runId}/attachments/{id}/content, \`workspace\` from GET /v1/runs/{runId}/agents/{agentId}/workspace?path=.
 Caps (block boundaries only): ${ITEM_MAX_BYTES} bytes of blocks and of \`text\` per item (whole trailing blocks dropped, \`truncated\` says how many); code blocks keep their first ${CODE_MAX_LINES} lines (\`truncatedLines\`); tables ${TABLE_MAX_ROWS} rows × ${TABLE_MAX_COLS} columns (\`truncatedRows\`/\`truncatedCols\`); a tool's \`diff\` its first ${DIFF_MAX_LINES} lines of ${DIFF_LINE_MAX_CHARS} characters at most (\`truncatedLines\`; \`added\`/\`removed\` count the whole change).
+Bookkeeping (capability agents.thread_internal): an agent's waits and polls (a wake armed or a check-in booked, a wait on other agents, a read of its own state, its inbox or the run's events) and its CLI's system events (a retried or fallen-back model request, a compacted conversation) are recorded with \`internal: true\` and left out of GET …/thread, …/thread/tail and \`?thread=1\` frames unless asked for with \`internal=true\` (\`internal=1\` on the stream); a client that asks shows them only on request.
+Typed hand-backs (capability agents.handback_typed): a handoff's \`child.handback\` is the child's handback@1 (status, outcome, changed, checked, risks, decide) when it gave one, and a reviewer's \`child.verdict.findings\` its review-verdict@1 findings; the blocks still say both in Markdown. GET /v1/schemas lists the schemas.
 Reserved for token streaming (not emitted yet): a say or thinking item may be \`open\` with its last block \`{t:"open", text}\` (the unfinished block as plain text) and \`rev\` rising as it grows. Live updates: \`?thread=1\` on a run stream (agent.thread_item_changed frames).`;
 
 /** Trace span (OpenTelemetry-shaped), from the run's trace file. */
@@ -228,6 +232,13 @@ export const RunFiles = z.object({
 export const FILES_DOC = `Files the run's agents changed, with lines added and removed: \`git diff --numstat\` of each agent's latest work (the commit it pushed, else its latest checkpoint) against where its branch left the run's target branch. One row per (agent, file), sorted by path; \`added\`/\`removed\` are null for binary files. Paths are agent-written (x-untrusted).
 \`agentId\` limits it to one agent; \`limit\` (default and max ${FILES_MAX}) caps the rows, and only the ${FILES_AGENTS_MAX} agents with the newest work are diffed: \`truncated\` says rows were left out, \`total\` counts the rows before the cut.
 Refetch when the run stream shows agent.checkpointed, agent.done, agent.failed, agent.paused or merge.succeeded with a seq above \`asOf\`. Work the daemon cannot read (no repository, a deleted branch) is a \`sources[].error\`, not an HTTP error.`;
+/** A registered payload schema (src/schemas): immutable once registered. */
+export const PayloadSchema = z.object({
+	id: z.string().describe("name@version, e.g. handback@1"),
+	name: z.string(), version: z.number().int().positive(),
+	description: z.string(),
+	schema: z.record(z.string(), z.unknown()).describe("The schema, in capcomd's bounded JSON Schema subset: type (object, string, number, integer, boolean, array), properties and required (an object is closed: other fields are refused), maxLength/minLength/enum, minimum/maximum, items/maxItems/minItems, description"),
+});
 export const Skill = z.object({
 	name: ProfileName,
 	description: z.string(),
@@ -638,6 +649,8 @@ export const CAPABILITIES = {
 	"runs.archive": "POST /v1/runs/{runId}/archive and /restore (the steer scope, an Idempotency-Key): an archived run is read-only, a message to its agents is 409 `archived` until it is restored; Run.archived; run.archived and run.restored on run streams and the lifecycle feed. Archiving is refused (409 conflict) while an agent of it works",
 	"agents.wake": "Waits between turns (ADR-026 §3): an agent ends its turn with a wake armed instead of waiting inside a tool call. agent.wake_armed, agent.woken and agent.wake_cancelled on run streams and the lifecycle feed (causes waiting, woken, wake_cancelled), and Agent.activity of kind wait with `wake` (what it waits for, since when) while it waits",
 	"agents.park": "Parked machines (ADR-026 §6): when a planner or lead (an orchestrate profile, or a root agent) ends its turn idle, its machine is parked (hibernated: boxd hibernate, Docker stop) instead of deleted, and a message to it wakes that machine and resumes its conversation there in a moment (Agent.activity setup shows no restore phase). A worker's machine is deleted when it ends, as before. Parked machines aren't shown with agents: GET /v1/sandboxes/{name}/resources lists them with state `parked`, their agent as owner and `deleteAfter` (when they are deleted), and Delete (capability sandboxes.actions) deletes only the machine (its agent stays idle; sandbox.resource_action `parked: true`). They are deleted when the place's `parkedRetention` setting (4 h, 24 h or 7 days; 24 h by default; recorded with each run) runs out, when more than 10 are parked at the place (the oldest first), when the run is archived or the agent cancelled. Descriptors' caps carry `hibernate` (memory, disk or none). A parked machine holds no memory slot",
+	"agents.thread_internal": "Thread items carry `internal: true` for an agent's bookkeeping (ADR-026 §7: a wake armed or a check-in booked, a wait on other agents, a poll of its own state, a CLI system event). GET …/thread and …/thread/tail leave them out unless asked for with `internal=true`, and `?thread=1` frames unless the stream asks with `internal=1`",
+	"agents.handback_typed": "Typed hand-backs (ADR-026 §7): GET /v1/schemas lists the registered payload schemas (handback@1, review-verdict@1; `name@version`, never changed once registered). An agent hands back with `capcomd result --handback JSON`, checked against handback@1 before it is recorded (a payload that doesn't fit is refused, field by field); a reviewer's verdict is recorded as review-verdict@1. Agent.result.typed is `{schema, value}`; a handoff thread item carries `child.handback` and `child.verdict.findings`",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -1415,10 +1428,10 @@ export const contract = {
 		}).input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(TRANSCRIPT_PAGE_MAX).optional() }))
 			.output(TranscriptPage),
 		thread: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/thread", description: `The agent's thread items (format ${THREAD_FORMAT}), paged by write cursor: \`after\` is the highest seq you have, \`limit\` at most ${THREAD_PAGE_MAX}. See "Agent threads" in docs/harness-contract.md.` })
-			.input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional() }))
+			.input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional(), internal: InternalQuery }))
 			.output(ThreadPage),
 		threadTail: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/thread/tail", description: `Capability agents.thread_tail. The agent's newest thread items by position (\`order\`): \`before\` (from a previous page) for the items above, \`limit\` at most ${THREAD_PAGE_MAX}. \`cursor\` is where GET …/thread (\`after\`) and live frames take over. See "Agent threads" in docs/harness-contract.md.` })
-			.input(z.object({ runId: z.string(), agentId: z.string(), before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional() }))
+			.input(z.object({ runId: z.string(), agentId: z.string(), before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional(), internal: InternalQuery }))
 			.output(ThreadTail),
 		workspace: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/workspace", description: "A file of the agent's latest work, raw bytes (workspace media). See \"Agent threads\" in docs/harness-contract.md." })
 			.input(z.object({ runId: z.string(), agentId: z.string(), path: z.string().min(1).max(1024) })).output(z.string().describe("The file's bytes")),
@@ -1520,6 +1533,9 @@ export const contract = {
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),
+	},
+	schemas: {
+		list: oc.route({ method: "GET", path: "/v1/schemas", description: "Capability agents.handback_typed. The registered payload schemas (ADR-026 §7), by id." }).output(z.object({ schemas: z.array(PayloadSchema) })),
 	},
 	events: {
 		replay: oc
