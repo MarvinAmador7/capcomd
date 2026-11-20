@@ -315,11 +315,10 @@ import PerfLoopKit
                   until: { !d.model.paletteOpen })
     let ok2 = !d.model.paletteOpen
     let over = ok1 && ok2 && d.model.nav.expanded
-    // Esc again collapses the pane, showing the last pick; the keyboard stays in it (`focus collapse`), as it was before
-    // the expand only by chance. Expanded again for the snapshot.
+    // Esc again collapses the pane, showing the last pick; the keyboard stays in it (`focus collapse`), not back in the
+    // sidebar's list, which had it before the expand. The rep ends collapsed, for the snapshot.
     let pane = paneView.map { FocusTarget.view($0) } ?? .identifier("the expanded pane")
     let collapsed = await paneStep(d, "collapse", panes: 1, .key(.escape), focus: pane) { !d.model.nav.expanded }
-    _ = await paneStep(d, "rest", panes: 1, .press("⇧⌘↩", item: "Expand Pane"), focus: pane) { d.model.nav.expanded }
     run.regions(d.paneRegions(1))
     run.record([
       Check("stays-expanded", stayed, notes.joined(separator: "; ").ifEmpty("every pick showed in the expanded pane, still expanded")),
