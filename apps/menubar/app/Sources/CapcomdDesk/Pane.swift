@@ -123,40 +123,22 @@ final class OpenedLayerView: NSView {
     if !expanded, animated {
       sidebar.layer?.add(Self.anim("opacity", from: 0, to: 1, duration: reduceMotion ? 0.15 : 0.2), forKey: "fade")
     }
-    moveKeyboard(expanded: expanded, had: had)
+    moveKeyboard(had: had)
   }
 
-  /// What had the keyboard before an expand gave it to the pane (the sidebar's list, another pane), and what the expand
-  /// gave it to.
-  private weak var keyBefore: NSView?
-  private weak var keyGiven: NSView?
-
-  /// The keyboard across expand and collapse. Expanding, it goes into the expanded pane: it stays on the pane's message
+  /// The keyboard across expand and collapse: it is in the pane either way. Expanding, it stays on the pane's message
   /// box or thread if it was there, else the pane takes it (its thread and message box, as a click in it does), and
-  /// hiding the sidebar no longer leaves it with nobody. Collapsing, it goes back to what had it before the expand if the
-  /// expand moved it and it hasn't moved since; else it stays where it is in the pane.
-  private func moveKeyboard(expanded: Bool, had: NSView?) {
+  /// hiding the sidebar no longer leaves it with nobody. Collapsing, it stays where it is in the pane (the message box or
+  /// the thread), and the pane takes it if it is elsewhere: it doesn't go back to what had it before the expand.
+  private func moveKeyboard(had: NSView?) {
     guard let w = window, let pane = deck.focusedPane else { return }
     let owner = { PaletteFocusReturn.Keeper.owner(w.firstResponder) }
-    if expanded {
-      keyBefore = nil; keyGiven = nil
-      if let had, had.isDescendant(of: pane) {
-        if owner() !== had, had.window === w, !had.isHiddenOrHasHiddenAncestor { w.makeFirstResponder(had) }
-        if owner()?.isDescendant(of: pane) == true { return }
-      }
-      keyBefore = had
-      if pane.takeKeyboard() { keyGiven = owner() }
-    } else {
-      defer { keyBefore = nil; keyGiven = nil }
-      let now = owner()
-      if let b = keyBefore, let g = keyGiven, now === g, b.window === w, !b.isHiddenOrHasHiddenAncestor {
-        // The sidebar's list takes the keyboard through its own focus (SidebarList), as ⌃⌘S's open does.
-        if b.isDescendant(of: sidebar) { w.makeFirstResponder(b); model.nav.focusList(); return }
-        if w.makeFirstResponder(b) { return }
-      }
-      if let now, now.window === w, now.isDescendant(of: pane), !now.isHiddenOrHasHiddenAncestor { return }
-      _ = pane.takeKeyboard()
+    if let had, had.isDescendant(of: pane), had.window === w, !had.isHiddenOrHasHiddenAncestor {
+      if owner() !== had { w.makeFirstResponder(had) }
+      if owner()?.isDescendant(of: pane) == true { return }
     }
+    if let now = owner(), now.window === w, now.isDescendant(of: pane), !now.isHiddenOrHasHiddenAncestor { return }
+    _ = pane.takeKeyboard()
   }
 
   func set(open o: Bool, animated: Bool, reduceMotion: Bool) {
