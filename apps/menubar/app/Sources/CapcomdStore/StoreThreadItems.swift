@@ -151,6 +151,7 @@ extension CapcomdStore {
     let messages = events.filter {
       if case .message(let from, _, _, _) = $0.kind { return from != agentId }
       if case .woke = $0.kind { return true }   // what woke it (agents.wake): a quiet line between its turns
+      if case .answered = $0.kind { return true }   // its question, answered (agents.ask): one line
       return false
     }
     // Read newest first, the thread shows from its top down; messages from before its first item wait with it.

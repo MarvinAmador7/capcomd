@@ -13,13 +13,16 @@ public enum AgentLife: Sendable, Hashable {
   case idle
   /// Its run is archived: the one state that takes no messages (Restore).
   case archived
+  /// ADR-026 §4: it asked a question and stopped until it is answered (its turn ended, idle-like): a message to it is
+  /// its answer and continues it.
+  case asked
 
   /// "Waking…" shows only after this long (ADR-026 §9.6).
   public static let wakingDelayMs = 1000
 
   /// The state word a header or a root row shows for it, or nil when its status says it (working, queued, paused…).
   public var word: String? {
-    switch self { case .active: nil; case .waking: "waking"; case .idle: "idle"; case .archived: "archived" }
+    switch self { case .active: nil; case .waking: "waking"; case .idle: "idle"; case .archived: "archived"; case .asked: "asked" }
   }
 }
 
@@ -30,6 +33,7 @@ extension Agent {
   /// What a person sees of it now (`nowMs`: the clock, for the waking delay); `archived`: its run is.
   public func life(archived: Bool, nowMs: Int) -> AgentLife {
     if archived { return .archived }
+    if asked != nil { return .asked }
     switch status {
     case .done, .failed, .cancelled, .handedOff: return .idle
     default: break
@@ -55,13 +59,15 @@ public struct ComposerState: Sendable, Hashable {
   public var isWorking: Bool
   /// Waking (after the 1 s delay): the box stays open throughout.
   public var isWaking: Bool
-  /// Idle: a message continues it as a new attempt.
+  /// Idle (or asked): a message continues it as a new attempt.
   public var isIdle: Bool
 
   public static func of(name: String, life: AgentLife, status: AgentStatus) -> ComposerState {
     switch life {
     case .archived: return .init(placeholder: "This run is archived.", isArchived: true, isWorking: false, isWaking: false, isIdle: false)
     case .idle: return .init(placeholder: "\(name) is idle. Send to continue.", isArchived: false, isWorking: false, isWaking: false, isIdle: true)
+    // ADR-026 §9.4: a plain message to an asked agent is its answer.
+    case .asked: return .init(placeholder: "Answer \(name)…", isArchived: false, isWorking: false, isWaking: false, isIdle: true)
     case .waking: return .init(placeholder: "Tell \(name)…", isArchived: false, isWorking: true, isWaking: true, isIdle: false)
     case .active: return .init(placeholder: "Tell \(name)…", isArchived: false, isWorking: status == .running, isWaking: false, isIdle: false)
     }

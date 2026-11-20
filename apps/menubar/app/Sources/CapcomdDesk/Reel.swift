@@ -953,7 +953,9 @@ struct Column: View {
         } else {
           ColdTail(agentId: agentId)
         }
-        if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
+        // A question (agents.ask): its card, then the box, whose message is its answer.
+        if let q = a.question { QuestionCard(card: q, focused: focused); ColumnComposer(agentId: agentId, name: a.header.name) }
+        else if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
         else if let l = a.limit { LimitBar(limit: l, focused: focused) }
         else if let g = a.goal, g.docks || g.outcome != nil { GoalDock(card: g) }
         else { ColumnComposer(agentId: agentId, name: a.header.name) }
@@ -1205,7 +1207,7 @@ struct ColumnComposer: View {
   private var compact: some View {
     DeskProbe.body("ColumnComposer", id: agentId)
     return HStack(spacing: 8) {
-      TextField("Tell \(name)…", text: $draft, axis: .vertical)
+      TextField(model.agent(agentId)?.question != nil ? "Answer \(name)…" : "Tell \(name)…", text: $draft, axis: .vertical)
         .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
         .focused($focused)
         .onSubmit(send)

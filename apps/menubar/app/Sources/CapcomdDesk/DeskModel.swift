@@ -28,6 +28,8 @@ package final class AgentSlice {
   package private(set) var bot: BotTraits? { didSet { Mutations.record("AgentSlice.bot", id: id) } }
   /// The approval this agent waits on, if any.
   package private(set) var approval: PendingApproval? { didSet { Mutations.record("AgentSlice.approval", id: id) } }
+  /// The question it asked and stopped on (capability agents.ask), as its card: asked of you or of an agent.
+  package private(set) var question: QuestionCardModel? { didSet { Mutations.record("AgentSlice.question", id: id) } }
   /// Whether the column shows its thread (DeskModel's warm set); a cold column is its header and box only.
   package private(set) var warm = false { didSet { Mutations.record("AgentSlice.warm", id: id) } }
   /// Its column is on screen (the tab is bracketed) / focused. Kept per agent so a scroll or a focus change re-renders
@@ -68,6 +70,7 @@ package final class AgentSlice {
   func set(_ h: ColumnHeader) { if header != h { header = h } }
   func set(bot b: BotTraits?) { if bot != b { bot = b } }
   func set(approval a: PendingApproval?) { if approval != a { approval = a } }
+  func set(question q: QuestionCardModel?) { if question != q { question = q } }
 }
 
 /// One agent's thread as its column shows it.
@@ -352,6 +355,7 @@ package final class DeskModel {
         s.set(h)
         setUp(s, runId: runId, h)
         s.set(composer: store.paneComposer(runId: runId, agentId: h.agentId, name: h.name))
+        s.set(question: store.questionCard(runId: runId, agentId: h.agentId))
         if let bots { s.set(bot: bots[h.agentId]) }
         if let asks { s.set(approval: asks[h.agentId]) }
       }
@@ -659,6 +663,13 @@ package final class DeskModel {
   package func decide(_ approvalId: String, _ d: ApprovalDecision) {
     if let a = store.approvals[approvalId], let id = store.waitingAgent(a) { needs.answered(agentId: id) }
     Task { _ = await store.decide(approvalId, d) }
+  }
+
+  /// Answer a question from its card (capability agents.ask): the option's words go to the asker as its answer.
+  package func answer(_ card: QuestionCardModel, with text: String) {
+    guard let runId = agents[card.askerId]?.header.runId else { return }
+    needs.answered(agentId: card.askerId)
+    Task { await store.answerQuestion(runId: runId, agentId: card.askerId, approvalId: card.approvalId, answer: text) }
   }
 }
 

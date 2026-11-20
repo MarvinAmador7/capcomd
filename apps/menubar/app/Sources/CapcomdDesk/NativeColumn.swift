@@ -277,7 +277,9 @@ struct ColumnBody: View {
         } else {
           ColdTail(agentId: agentId)
         }
-        if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) }
+        // A question (agents.ask): its card, then the box, whose message is its answer.
+        if let q = a.question { QuestionCard(card: q, focused: a.focused); ColumnComposer(agentId: agentId, name: a.header.name) }
+        else if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) }
         else if let l = a.limit { LimitBar(limit: l, focused: a.focused) }
         else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }

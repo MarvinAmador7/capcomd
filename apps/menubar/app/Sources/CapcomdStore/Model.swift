@@ -76,6 +76,8 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Capability agents.idle (ADR-026 §1): when a message woke this idle agent into its current attempt
   /// (`Agent.continued.at`, agent.continued). While it is set up again it is waking (`Agent.isWaking`).
   public var continuedAtMs: Int? = nil
+  /// Capability agents.ask (ADR-026 §4): the question it asked and stopped on, until it is answered: it is asked.
+  public var asked: AskedQuestion? = nil
   /// The setup phases reported for its current attempt, in order (`SetupTrail`); cleared when a message wakes it.
   public var setupMarks: [SetupMark] = []
   /// Read from `result` (the agent's result bag, field by field; `read(result:)`): what it cost, why it stopped, how its
@@ -134,15 +136,15 @@ public struct MergeOutcome: Sendable, Hashable {
   public init(state: String, target: String?) { self.state = state; self.target = target }
 }
 
-public enum StepStatus: Sendable, Hashable { case done, running, failed, queued, waiting, paused, stopped
+public enum StepStatus: Sendable, Hashable { case done, running, failed, queued, waiting, paused, stopped, asked
   /// SPEC §5 status symbols. Done has none.
   public var symbol: String? {
     switch self {
     case .done: nil; case .running: "smallcircle.filled.circle"; case .failed: "xmark.circle"; case .queued: "clock"; case .waiting: "hand.raised"
-    case .paused: "pause.circle"; case .stopped: "stop.circle"
+    case .paused: "pause.circle"; case .stopped: "stop.circle"; case .asked: "questionmark.circle"
     }
   }
-  public var tint: Tint { switch self { case .done: .grey; case .running: .blue; case .failed: .red; case .queued, .paused, .stopped: .tertiary; case .waiting: .amber } }
+  public var tint: Tint { switch self { case .done: .grey; case .running: .blue; case .failed: .red; case .queued, .paused, .stopped, .asked: .tertiary; case .waiting: .amber } }
 }
 
 public enum StepKind: String, Sendable, Hashable { case plan, fileRead, fileWrite, tool, shell, sandbox, model, network, git, retry, approval, agent, verify
@@ -199,6 +201,8 @@ public struct PendingApproval: Sendable, Hashable, Identifiable {
   /// A merge's asker (`subject.askedBy`): the agent waiting on the decision, usually the parent of `agentId` (whose
   /// work merges). Nil for an operator's merge and from older daemons.
   public var askedBy: String? = nil
+  /// A question's card (kind question, capability agents.ask): its options, reason, what waits on it, who it's asked of.
+  public var ask: QuestionAsk? = nil
 
   public init(id: String, runId: String?, agentId: String?, kind: String, question: UntrustedText, branchLine: String?,
               target: String? = nil, diff: ApprovalDiff? = nil, requestedAtMs: Int? = nil) {
@@ -211,6 +215,7 @@ public struct PendingApproval: Sendable, Hashable, Identifiable {
               target: kind == "merge" ? subject["target"]?.string.map { UntrustedText($0).plain } : nil,
               diff: kind == "merge" ? ApprovalDiff(subject: subject) : nil, requestedAtMs: requestedAtMs)
     askedBy = kind == "merge" ? subject["askedBy"]?.string : nil
+    ask = kind == "question" ? QuestionAsk(subject: subject) : nil
   }
 }
 
@@ -383,6 +388,9 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var depth: Int
   public var waiting: Bool            // this node has a pending approval
   public var descendantWaiting: Bool  // bubbled up for collapsed ancestors
+  /// It asked a question and stopped (capability agents.ask). Asked of the user, `waiting` says so too (amber); asked of
+  /// an agent, it is a quiet state.
+  public var asked = false
   public var children: [AgentNode]
   public var childrenOrNil: [AgentNode]? { children.isEmpty ? nil : children }   // for OutlineGroup
   /// This node's id and every descendant's, depth first.
@@ -390,6 +398,7 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var iconTint: Tint { waiting ? .amber : status == .running ? .blue : status == .failed ? .red : .grey }
   public var statusSymbol: StepStatus? {
     if waiting { return .waiting }
+    if asked { return .asked }
     switch status { case .running: return .running; case .failed: return .failed; case .pending: return .queued; case .paused: return .paused; case .cancelled: return .stopped; default: return nil }
   }
   /// How text names it ("lead · login redirect" asks; a notification): its profile and title, else the profile and
@@ -397,7 +406,7 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var label: String { AgentTitle.label(name: name, title: title, suffix: suffix) }
   /// VoiceOver label per SPEC §8.
   public var accessibilityLabel: String {
-    let state = waiting ? "waiting for approval" : status.rawValue.replacingOccurrences(of: "-", with: " ")
+    let state = waiting ? (asked ? "asked you a question" : "waiting for approval") : asked ? "asked" : status.rawValue.replacingOccurrences(of: "-", with: " ")
     return ([label, repo, state, "level \(depth + 1)"] as [String?]).compactMap { $0 }.joined(separator: ", ")
   }
 }
