@@ -35,6 +35,7 @@ on:
       - "src/utils/env.ts"
   # Run workflow on main warms the Swift build cache that PRs read.
   workflow_dispatch:
+  workflow_call:
 jobs:
   macos:
     runs-on: macos-15
