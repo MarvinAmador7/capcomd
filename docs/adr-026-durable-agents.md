@@ -1,6 +1,7 @@
 # ADR-026: Durable agents and threads
 
-**Status:** proposed (draft, 2026-11-19); the owner's decisions were made the same day and are marked **☑ Owner**. Builds on ADR-016 (primitives), ADR-017 (in-VM capcomd, the spool pump), ADR-019 (liveness, usage-limit pauses),
+**Status:** accepted; phases 1–4 built (2026-11-19 to 2026-11-20), see [Status of the build](#status-of-the-build). The
+owner's decisions were made on 2026-11-19 and are marked **☑ Owner**. Builds on ADR-016 (primitives), ADR-017 (in-VM capcomd, the spool pump), ADR-019 (liveness, usage-limit pauses),
 ADR-021 (sandbox provider surface) and ADR-022 (an agent's lifecycle as a Rivet workflow). Research: four spikes run on
 2026-11-19 (durable CLI sessions, boxd/Docker hibernation, event-driven waits with a working prototype on
 `spike/event-wake`, Vercel Board's source), and the products below.
@@ -68,7 +69,7 @@ conversation, Claude Code on the web starts fresh). Nobody gates what lands. cap
   in a stronger form. What capcomd lacks is how agents wait and get woken (watchers with a durable queue, schedules,
   filtered cursor waits), "ask and stop", typed payloads, and a richer task state machine.
 
-## Decision (proposed)
+## Decision
 
 ### 1. The thread is the record; an agent is never "done"
 
@@ -122,12 +123,14 @@ and for recovery.
   wakeups), and firing puts exactly one message in the agent's mailbox (idempotency key `wake-<id>`), in event-log
   order. In the VM: `capcomd verify|check|await|wait-any … --wake`, `capcomd wake …`; MCP: a `wake` flag and
   `capcomd_wake`.
-- **Schedules:** the timer form: an agent books its own check-in (`capcomd wake --in 5m --note "check CI"`).
-  Board's rules apply: a send id derived from `(schedule, n)`, missed slots skipped, cancelled when the target ends.
+- **Schedules:** the timer form: an agent books its own check-in (`capcomd wake --in 5m --note "check CI"`), or a
+  recurring one (`capcomd wake --every 30m [--times N]`). Board's rules apply: a send id derived from `(schedule, n)`,
+  missed slots skipped, cancelled when the target is cancelled or its run archived. A check-in that comes while the
+  agent is idle starts its next turn.
 - **A durable delivery cursor per agent:** the last message seq the CLI took, so a new attempt never re-delivers.
 - **Push delivery:** the scope broadcasts "messages changed" to the runner instead of a 5 s poll.
 - **A filtered, cursor-resumable wait** on the API (`GET /v1/events?scope=&after=&wait=&type=&agent=`), with Board's
-  before-or-after rule for state filters, for drivers and the app.
+  before-or-after rule for state filters, for drivers and the app. *(Not built in phase 1: in progress, 2026-11-21.)*
 - The in-VM CLI's waits stop being loops the model sees: `--wake` is what the skills and prompts teach, and capcomd sets
   `BASH_DEFAULT_TIMEOUT_MS` for the few blocking waits left.
 
@@ -179,7 +182,10 @@ idle lifetime); at most 10 parked machines per place; planners and leads hiberna
   `handback@1` (outcome, changed, checked, risks, decide) and `review-verdict@1` (passed, findings) first; the app renders
   them and keeps prose as the fallback.
 - Bookkeeping (wake arms, polls, check-ins, CLI system events) is recorded but marked internal and hidden by default;
-  only progress the user should read is shown.
+  only progress the user should read is shown. The agent's ••• menu has Show Bookkeeping, and a conversation rebuilt
+  from the thread leaves it out.
+- Registered schemas are listed at `GET /v1/schemas`; a typed hand-back that doesn't fit is refused with each field to
+  fix, and nothing is recorded.
 
 ### 8. Planner and lead guidance (from Board's swarm guide)
 
@@ -203,15 +209,56 @@ same files; dependencies stated (`needs`); post milestones, not heartbeats; neve
 
 ## Phases
 
-| Phase | What | Effort (spikes' estimates) | Fixes |
-|---|---|---|---|
-| 1 | §3 warm wake (production of the prototype: event types `agent.wake_armed`/`agent.woken`, a startup sweep for ops a wake waits on, visibility checks, push delivery, skills/prompts, `BASH_DEFAULT_TIMEOUT_MS`) + §8 guidance | 1–1.5 weeks | the polling loops (today's verify incident) |
-| 2 | §2 durable sessions + §1 idle-not-done + §5 waking without parking (paths 1, 3, 4) + the app's composer/states | 2–3 weeks | "nothing will read this message"; lost conversations |
-| 3 | §6 hibernation (path 2) | 3–5 days + a live boxd e2e | wake latency, cost |
-| 4 | §4 ask and stop, §7 typed hand-backs, schedules | 1–2 weeks | workers holding VMs while they wait for an answer |
-| later | Board's task board v2 (states, labels, `claim --ready --label --wait`, batch plans, a `task run` wrapper), path-scoped secrets and a Docker egress proxy (own ADR), a harness.v1 conformance suite | — | — |
+| Phase | What | Effort (spikes' estimates) | Fixes | Status |
+|---|---|---|---|---|
+| 1 | §3 warm wake (production of the prototype: event types `agent.wake_armed`/`agent.woken`, a startup sweep for ops a wake waits on, visibility checks, push delivery, skills/prompts, `BASH_DEFAULT_TIMEOUT_MS`) + §8 guidance | 1–1.5 weeks | the polling loops (today's verify incident) | built, except the filtered event wait |
+| 2 | §2 durable sessions + §1 idle-not-done + §5 waking without parking (paths 1, 3, 4) + the app's composer/states | 2–3 weeks | "nothing will read this message"; lost conversations | built |
+| 3 | §6 hibernation (path 2) | 3–5 days + a live boxd e2e | wake latency, cost | built; live boxd e2e not run yet |
+| 4 | §4 ask and stop, §7 typed hand-backs, schedules | 1–2 weeks | workers holding VMs while they wait for an answer | built |
+| later | Board's task board v2 (states, labels, `claim --ready --label --wait`, batch plans, a `task run` wrapper), path-scoped secrets and a Docker egress proxy (own ADR), a harness.v1 conformance suite | — | — | not started |
 
 All decisions are made; phase 2 adds the session store seam with its iCloud Drive provider (R2/S3 later).
+
+## Status of the build
+
+Built on 2026-11-19 and 2026-11-20 and merged into local `main` (not yet pushed). What users see is in the change notes:
+[`wake-between-turns`](../changes/wake-between-turns.md) (phase 1),
+[`durable-sessions`](../changes/durable-sessions.md) and [`idle-not-done`](../changes/idle-not-done.md) (phase 2),
+[`parked-planners`](../changes/parked-planners.md) and [`slow-machine-cleanup`](../changes/slow-machine-cleanup.md)
+(phase 3), [`ask-and-stop`](../changes/ask-and-stop.md) and [`typed-handbacks`](../changes/typed-handbacks.md)
+(phase 4).
+
+Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archive`, `agents.park`, `agents.ask`,
+`agents.thread_internal`, `agents.handback_typed`.
+
+**Beyond this ADR's text, decided while building:**
+
+- `capcomd send --model --effort` changes what an agent's next turns run with (phase 2).
+- `capcomd run archive|restore`; a run can't be archived while an agent in it still works.
+- A question can be passed up with `capcomd answer <qst> --up`; a cancelled agent's question is withdrawn.
+- A worker whose machine took more than 90 s to get ready the first time is still deleted (or parked) when it ends;
+  before the fix it was left `failed` and its machine ran until its idle lifetime.
+
+**Not built:**
+
+- The filtered, cursor-resumable event wait (§3): `GET /v1/events` takes only `scope` and `after`. In progress.
+- Session replicas beyond iCloud Drive (§2): the S3-compatible store (S3, R2, MinIO) and Vercel Blob, and plugins
+  registering their own store.
+- The "later" row above.
+
+**Not proven live:**
+
+- §6 on real boxd machines (parked, no keepalive while parked, a message wakes the same machine, archive deletes the
+  machine and keeps the session, a hand-deleted machine falls back to a fresh one). Built and covered by the fake
+  provider's scenarios; the live run waits for a working agent login.
+- Waking a Codex agent with a message against a real backend (see Consequences).
+
+**Open questions:**
+
+- A recurring schedule without `--times` has no end until its agent is cancelled or its run archived. Proposed: a
+  default of 24 check-ins.
+- The "Answered" line isn't rebuilt after the app reconnects (the API doesn't serve past questions).
+- A question card shows in the asker's thread but not yet in its parent's, as the board (DurableAsked-v3) draws it.
 
 ## Consequences
 
