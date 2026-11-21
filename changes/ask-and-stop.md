@@ -10,7 +10,7 @@
   it isn't its to decide. You can always answer, in the app or by sending the agent a message: a plain message to an
   asked agent is its answer, and your answer wins over an agent's. Either way the answer continues the same
   conversation. A cancelled agent's question is withdrawn.
-- The desktop app shows a question as a card in the asker's thread and its parent's: numbered options with keys, the
+- The desktop app shows a question as a card in the asker's thread: numbered options with keys, the
   advised one marked Recommended with the agent's reason under it, what waits on it, and Answer; once answered it
   becomes one line ("Answered · 100 req/min · 11:42", saying when it wasn't the recommendation and keeping your note).
   Asked agents read "asked" in the sidebar, the tree and the columns, and the message box of an asked agent sends the
