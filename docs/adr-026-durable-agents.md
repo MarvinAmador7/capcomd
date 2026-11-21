@@ -1,6 +1,6 @@
 # ADR-026: Durable agents and threads
 
-**Status:** accepted; phases 1–4 built (2026-11-19 to 2026-11-20), see [Status of the build](#status-of-the-build). The
+**Status:** accepted; phases 1–4 built (2026-11-19 to 2026-11-21), see [Status of the build](#status-of-the-build). The
 owner's decisions were made on 2026-11-19 and are marked **☑ Owner**. Builds on ADR-016 (primitives), ADR-017 (in-VM capcomd, the spool pump), ADR-019 (liveness, usage-limit pauses),
 ADR-021 (sandbox provider surface) and ADR-022 (an agent's lifecycle as a Rivet workflow). Research: four spikes run on
 2026-11-19 (durable CLI sessions, boxd/Docker hibernation, event-driven waits with a working prototype on
@@ -130,7 +130,8 @@ and for recovery.
 - **A durable delivery cursor per agent:** the last message seq the CLI took, so a new attempt never re-delivers.
 - **Push delivery:** the scope broadcasts "messages changed" to the runner instead of a 5 s poll.
 - **A filtered, cursor-resumable wait** on the API (`GET /v1/events?scope=&after=&wait=&type=&agent=`), with Board's
-  before-or-after rule for state filters, for drivers and the app. *(Not built in phase 1: in progress, 2026-11-21.)*
+  before-or-after rule for state filters, for drivers and the app. *(Built 2026-11-21, capability `events.wait`: waits poll every 500 ms, at most 45 s; the
+  answer's `reached` is the before-or-after rule.)*
 - The in-VM CLI's waits stop being loops the model sees: `--wake` is what the skills and prompts teach, and capcomd sets
   `BASH_DEFAULT_TIMEOUT_MS` for the few blocking waits left.
 
@@ -211,7 +212,7 @@ same files; dependencies stated (`needs`); post milestones, not heartbeats; neve
 
 | Phase | What | Effort (spikes' estimates) | Fixes | Status |
 |---|---|---|---|---|
-| 1 | §3 warm wake (production of the prototype: event types `agent.wake_armed`/`agent.woken`, a startup sweep for ops a wake waits on, visibility checks, push delivery, skills/prompts, `BASH_DEFAULT_TIMEOUT_MS`) + §8 guidance | 1–1.5 weeks | the polling loops (today's verify incident) | built, except the filtered event wait |
+| 1 | §3 warm wake (production of the prototype: event types `agent.wake_armed`/`agent.woken`, a startup sweep for ops a wake waits on, visibility checks, push delivery, skills/prompts, `BASH_DEFAULT_TIMEOUT_MS`) + §8 guidance | 1–1.5 weeks | the polling loops (today's verify incident) | built (the filtered event wait on 2026-11-21) |
 | 2 | §2 durable sessions + §1 idle-not-done + §5 waking without parking (paths 1, 3, 4) + the app's composer/states | 2–3 weeks | "nothing will read this message"; lost conversations | built |
 | 3 | §6 hibernation (path 2) | 3–5 days + a live boxd e2e | wake latency, cost | built; live boxd e2e not run yet |
 | 4 | §4 ask and stop, §7 typed hand-backs, schedules | 1–2 weeks | workers holding VMs while they wait for an answer | built |
@@ -221,15 +222,15 @@ All decisions are made; phase 2 adds the session store seam with its iCloud Driv
 
 ## Status of the build
 
-Built on 2026-11-19 and 2026-11-20 and merged into local `main` (not yet pushed). What users see is in the change notes:
-[`wake-between-turns`](../changes/wake-between-turns.md) (phase 1),
+Built from 2026-11-19 to 2026-11-21 and merged into local `main` (not yet pushed). What users see is in the change notes:
+[`wake-between-turns`](../changes/wake-between-turns.md) and [`events-wait`](../changes/events-wait.md) (phase 1),
 [`durable-sessions`](../changes/durable-sessions.md) and [`idle-not-done`](../changes/idle-not-done.md) (phase 2),
 [`parked-planners`](../changes/parked-planners.md) and [`slow-machine-cleanup`](../changes/slow-machine-cleanup.md)
 (phase 3), [`ask-and-stop`](../changes/ask-and-stop.md) and [`typed-handbacks`](../changes/typed-handbacks.md)
 (phase 4).
 
 Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archive`, `agents.park`, `agents.ask`,
-`agents.thread_internal`, `agents.handback_typed`.
+`agents.thread_internal`, `agents.handback_typed`, `events.wait`.
 
 **Beyond this ADR's text, decided while building:**
 
@@ -241,7 +242,6 @@ Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archi
 
 **Not built:**
 
-- The filtered, cursor-resumable event wait (§3): `GET /v1/events` takes only `scope` and `after`. In progress.
 - Session replicas beyond iCloud Drive (§2): the S3-compatible store (S3, R2, MinIO) and Vercel Blob, and plugins
   registering their own store.
 - The "later" row above.
@@ -255,6 +255,10 @@ Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archi
 
 **Open questions:**
 
+- `GET /v1/events` answers an object (`{events, cursor, reached, timedOut}`) only when `type`, `agent` or `wait` is
+  given, and the plain list otherwise, so current clients keep working. Always answering the object would be breaking.
+- The event wait polls; a push from the scope ("events appended") would make it immediate. The CLI and the in-VM
+  `capcomd await` don't use it yet.
 - A recurring schedule without `--times` has no end until its agent is cancelled or its run archived. Proposed: a
   default of 24 check-ins.
 - The "Answered" line isn't rebuilt after the app reconnects (the API doesn't serve past questions).
