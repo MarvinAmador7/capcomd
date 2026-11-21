@@ -6,7 +6,7 @@ import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
-import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, type EventsPage, type EventsQuery, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { listSchemas } from "../schemas";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
@@ -19,8 +19,9 @@ import { ProtocolError, type FrameSink } from "../../packages/plugin/src/host/pr
 import { PluginError, type PluginErrorCode } from "../../packages/plugin/src/errors";
 import type { PluginStore } from "../plugins/storage";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
-import { CreateRunError, entityOf, envelopes, isQuestionApproval, messagesOf, SendRefused, type CreateRunInput, type HarnessSource } from "./source";
-import { isoTs } from "./envelope";
+import { CreateRunError, entityOf, envelopes, isQuestionApproval, messagesOf, SendRefused, toEnvelope, type CreateRunInput, type HarnessSource } from "./source";
+import { isoTs, type HarnessEvent } from "./envelope";
+import { agentIds, EVENTS_PAGE_MAX, eventTypes, listParam, matches, reachedStates, type EventFilter } from "./events-wait";
 import { lifecycleEvents } from "./lifecycle";
 import { daemonEnvelope, harnessState, type HarnessState } from "./state";
 import { parseSettingsPatch } from "./sandboxes";
@@ -170,6 +171,55 @@ export function harnessApp(o: ServerOptions) {
 
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
+	/**
+	 * GET /v1/events with `type`, `agent` or `wait` (capability events.wait; src/api/events-wait.ts has the rules). Each
+	 * look reads every event after the cursor, so nothing appended between two looks is missed; the cursor ends at the
+	 * highest seq looked at. A run's log is read whole once (entitySeq counts from its start, as the plain replay's do),
+	 * then only what is new.
+	 */
+	const eventsPage = async (input: z.infer<typeof EventsQuery>, signal?: AbortSignal): Promise<z.infer<typeof EventsPage>> => {
+		let filter: EventFilter;
+		try { filter = { types: eventTypes(listParam(input.type)), agents: agentIds(listParam(input.agent)) }; } catch (e) {
+			throw new ORPCError("BAD_REQUEST", { message: (e as Error).message });
+		}
+		const scope = input.scope, after = input.after ?? 0;
+		if (scope !== "daemon" && !scope.startsWith("run-")) throw new ORPCError("BAD_REQUEST", { message: "type, agent and wait take a run or the daemon scope (a project's stream has only run.created)" });
+		const deadline = Date.now() + (input.wait ?? 0) * 1000;
+		// Before-or-after: the named agents' states, read before the events (a state changes with its event's append).
+		const agentsBefore = scope === "daemon" ? null : await src.agents(scope);
+		if (scope !== "daemon" && agentsBefore === null) throw nf(scope);
+		const log: HarnessEvent[] = [];
+		const counts = new Map<string, number>();
+		let cursor = after, read = 0;
+		const look = async (): Promise<HarnessEvent[]> => {
+			const fresh: HarnessEvent[] = scope === "daemon"
+				? state.daemonEvents(read).map(daemonEnvelope)
+				: (await src.events(scope, read)).map((e) => { const k = entityOf(scope, e); const n = (counts.get(k) ?? 0) + 1; counts.set(k, n); return toEnvelope(scope, e, n); });
+			const found: HarnessEvent[] = [];
+			for (const e of fresh) {
+				if (found.length >= EVENTS_PAGE_MAX) break; // a full page: the cursor stays on its last event
+				read = Math.max(read, e.seq);
+				if (scope !== "daemon") log.push(e);
+				if (e.seq <= cursor) continue;
+				cursor = e.seq;
+				if (matches(filter, e)) found.push(e);
+			}
+			return found;
+		};
+		// The daemon's events are kept in memory: read from the cursor. A run's whole log once, for entitySeq and `reached`.
+		if (scope === "daemon") read = after;
+		let events = await look();
+		if (events.length) return { events, cursor, reached: [], timedOut: false };
+		const reached = reachedStates(filter, agentsBefore, log, after);
+		if (reached.length) return { events: [], cursor, reached, timedOut: false };
+		while (Date.now() < deadline && !signal?.aborted) {
+			await new Promise((ok) => setTimeout(ok, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
+			if (signal?.aborted) break;
+			events = await look();
+			if (events.length) return { events, cursor, reached: [], timedOut: false };
+		}
+		return { events: [], cursor, reached: [], timedOut: input.wait !== undefined && input.wait > 0 };
+	};
 	const router = {
 		// The kernel's features, then the flags active plugins added (x.<plugin>.<flag>, plugin API §4.7.3).
 		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version, capabilities: [...CAPABILITY_NAMES, ...(o.pluginHost?.contributions.list("capability").map((e) => e.key) ?? [])] })),
@@ -328,7 +378,9 @@ export function harnessApp(o: ServerOptions) {
 			decide: os.frontDoor.decide.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		events: {
-			replay: os.events.replay.handler(async ({ input }) => {
+			replay: os.events.replay.handler(async ({ input, signal }) => {
+				// Capability events.wait: a filter or a wait answers a page (eventsPage, above); without one, the plain list.
+				if (input.type !== undefined || input.agent !== undefined || input.wait !== undefined) return eventsPage(input, signal);
 				if (input.scope === "daemon") return state.daemonEvents(input.after ?? 0).map(daemonEnvelope);
 				if (!input.scope.startsWith("run-")) return [];
 				return envelopes(input.scope, await src.events(input.scope, 0)).filter((e) => e.seq > (input.after ?? 0));
