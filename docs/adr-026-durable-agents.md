@@ -129,7 +129,7 @@ and for recovery.
   agent is idle starts its next turn.
 - **A durable delivery cursor per agent:** the last message seq the CLI took, so a new attempt never re-delivers.
 - **Push delivery:** the scope broadcasts "messages changed" to the runner instead of a 5 s poll.
-- **A filtered, cursor-resumable wait** on the API (`GET /v1/events?scope=&after=&wait=&type=&agent=`), with Board's
+- **A filtered, cursor-resumable wait** on the API (`GET /v1/events/wait?scope=&after=&wait=&type=&agent=`), with Board's
   before-or-after rule for state filters, for drivers and the app. *(Built 2026-11-21, capability `events.wait`: waits poll every 500 ms, at most 45 s; the
   answer's `reached` is the before-or-after rule.)*
 - The in-VM CLI's waits stop being loops the model sees: `--wake` is what the skills and prompts teach, and capcomd sets
@@ -234,6 +234,9 @@ Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archi
 
 **Beyond this ADR's text, decided while building:**
 
+- The filtered wait is its own route, `GET /v1/events/wait`, which always answers `{events, cursor, reached,
+  timedOut}`; `GET /v1/events` stays the plain list (one shape per route, nothing breaks).
+
 - `capcomd send --model --effort` changes what an agent's next turns run with (phase 2).
 - `capcomd run archive|restore`; a run can't be archived while an agent in it still works.
 - A question can be passed up with `capcomd answer <qst> --up`; a cancelled agent's question is withdrawn.
@@ -255,8 +258,6 @@ Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archi
 
 **Open questions:**
 
-- `GET /v1/events` answers an object (`{events, cursor, reached, timedOut}`) only when `type`, `agent` or `wait` is
-  given, and the plain list otherwise, so current clients keep working. Always answering the object would be breaking.
 - The event wait polls; a push from the scope ("events appended") would make it immediate. The CLI and the in-VM
   `capcomd await` don't use it yet.
 - A recurring schedule without `--times` has no end until its agent is cancelled or its run archived. Proposed: a

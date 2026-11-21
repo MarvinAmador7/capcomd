@@ -1,4 +1,4 @@
-// Capability events.wait (ADR-026 §3): GET /v1/events `type`, `agent` and `wait`, the page's cursor, and the
+// Capability events.wait (ADR-026 §3): GET /v1/events/wait's `type`, `agent` and `wait`, the page's cursor, and the
 // before-or-after rule for state filters.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -32,22 +32,35 @@ function setup(o: { agents?: any[]; pollMs?: number } = {}) {
 	let seq = log.length;
 	const append = (type: string, agentId: string | null, data: Record<string, unknown> = {}) => { log.push({ seq: ++seq, at: Date.now(), type, agentId, data }); return seq; };
 	const get = async (q: string) => {
+		const r = await app.request(`/v1/events/wait?${q}`, { headers: { authorization: `Bearer ${reader}` } });
+		return { status: r.status, body: (await r.json()) as any };
+	};
+	const replay = async (q: string) => {
 		const r = await app.request(`/v1/events?${q}`, { headers: { authorization: `Bearer ${reader}` } });
 		return { status: r.status, body: (await r.json()) as any };
 	};
-	return { app, log, append, get, state };
+	return { app, log, append, get, replay, state };
 }
 
-describe("GET /v1/events filters (events.wait)", () => {
+describe("GET /v1/events/wait (events.wait)", () => {
 	test("the capability is advertised", () => {
 		expect(CAPABILITY_NAMES).toContain("events.wait");
 	});
 
-	test("without type, agent or wait: the plain list as before", async () => {
+	test("GET /v1/events stays a plain list, whatever else is asked", async () => {
+		const { replay } = setup();
+		for (const q of ["scope=run-1&after=1", "scope=run-1&after=1&type=agent.started&wait=5"]) {
+			const r = await replay(q);
+			expect(Array.isArray(r.body)).toBe(true);
+			expect(r.body.map((e: any) => e.seq)).toEqual([2, 3, 4]);
+		}
+	});
+
+	test("no filter and no wait: a page of everything after the cursor", async () => {
 		const { get } = setup();
 		const r = await get("scope=run-1&after=1");
-		expect(Array.isArray(r.body)).toBe(true);
-		expect(r.body.map((e: any) => e.seq)).toEqual([2, 3, 4]);
+		expect(r.body.events.map((e: any) => e.seq)).toEqual([2, 3, 4]);
+		expect(r.body).toMatchObject({ cursor: 4, reached: [], timedOut: false });
 	});
 
 	test("type filter: only those types, cursor past what was scanned", async () => {
@@ -206,7 +219,7 @@ describe("GET /v1/events filters (events.wait)", () => {
 	});
 
 	test("bad params: the API's error shape", async () => {
-		const { get } = setup();
+		const { get, replay } = setup();
 		for (const q of ["scope=run-1&wait=46", "scope=run-1&wait=-1", "scope=run-1&wait=soon", "scope=nope&type=agent.done", "scope=prj-1&type=agent.done", "scope=run-1&type=Not%20A%20Type", `scope=run-1&agent=${encodeURIComponent("a b")}`]) {
 			const r = await get(q);
 			expect([q, r.status]).toEqual([q, 422]);
@@ -217,14 +230,14 @@ describe("GET /v1/events filters (events.wait)", () => {
 		expect(nf.status).toBe(404);
 		expect(nf.body.code).toBe("not_found");
 		// The plain replay keeps its old answer for an unknown run.
-		expect((await get("scope=run-nope")).body).toEqual([]);
+		expect((await replay("scope=run-nope")).body).toEqual([]);
 	});
 
 	test("a client that goes away ends the wait", async () => {
 		const { app } = setup();
 		const ac = new AbortController();
 		const t0 = Date.now();
-		const p = Promise.resolve(app.request("/v1/events?scope=run-1&after=4&type=agent.done&wait=30", { headers: { authorization: `Bearer ${reader}` }, signal: ac.signal })).catch(() => null);
+		const p = Promise.resolve(app.request("/v1/events/wait?scope=run-1&after=4&type=agent.done&wait=30", { headers: { authorization: `Bearer ${reader}` }, signal: ac.signal })).catch(() => null);
 		await Bun.sleep(50);
 		ac.abort();
 		await p;

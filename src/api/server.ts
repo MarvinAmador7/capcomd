@@ -172,7 +172,7 @@ export function harnessApp(o: ServerOptions) {
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
 	/**
-	 * GET /v1/events with `type`, `agent` or `wait` (capability events.wait; src/api/events-wait.ts has the rules). Each
+	 * GET /v1/events/wait (capability events.wait; src/api/events-wait.ts has the rules). Each
 	 * look reads every event after the cursor, so nothing appended between two looks is missed; the cursor ends at the
 	 * highest seq looked at. A run's log is read whole once (entitySeq counts from its start, as the plain replay's do),
 	 * then only what is new.
@@ -378,13 +378,12 @@ export function harnessApp(o: ServerOptions) {
 			decide: os.frontDoor.decide.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		events: {
-			replay: os.events.replay.handler(async ({ input, signal }) => {
-				// Capability events.wait: a filter or a wait answers a page (eventsPage, above); without one, the plain list.
-				if (input.type !== undefined || input.agent !== undefined || input.wait !== undefined) return eventsPage(input, signal);
+			replay: os.events.replay.handler(async ({ input }) => {
 				if (input.scope === "daemon") return state.daemonEvents(input.after ?? 0).map(daemonEnvelope);
 				if (!input.scope.startsWith("run-")) return [];
 				return envelopes(input.scope, await src.events(input.scope, 0)).filter((e) => e.seq > (input.after ?? 0));
 			}),
+			wait: os.events.wait.handler(({ input, signal }) => eventsPage(input, signal)),
 		},
 	};
 	const rpc = new OpenAPIHandler(router);

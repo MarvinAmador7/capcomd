@@ -677,13 +677,13 @@ export const CAPABILITIES = {
 	"agents.thread_internal": "Thread items carry `internal: true` for an agent's bookkeeping (ADR-026 §7: a wake armed or a check-in booked, a wait on other agents, a poll of its own state, a CLI system event). GET …/thread and …/thread/tail leave them out unless asked for with `internal=true`, and `?thread=1` frames unless the stream asks with `internal=1`",
 	"agents.handback_typed": "Typed hand-backs (ADR-026 §7): GET /v1/schemas lists the registered payload schemas (handback@1, review-verdict@1; `name@version`, never changed once registered). An agent hands back with `capcomd result --handback JSON`, checked against handback@1 before it is recorded (a payload that doesn't fit is refused, field by field); a reviewer's verdict is recorded as review-verdict@1. Agent.result.typed is `{schema, value}`; a handoff thread item carries `child.handback` and `child.verdict.findings`",
 	"agents.ask": "Ask and stop (ADR-026 §4): an agent asks a question (`capcomd ask`, `capcomd_ask` in its VM) and its turn ends: Agent.asked carries the question while it is open, agent.asked / agent.answered / agent.question_passed / agent.question_withdrawn on run streams and the lifecycle feed (causes asked, answered, passed_up, withdrawn), and an approval of kind question (subject: questionId, options with the recommended one first, why, holds, to) for every open question. Answer it with POST /v1/approvals/{approvalId}/decision (decision answer with `answer`, or approve for its recommendation), or with a plain message to the agent (POST …/agents/{agentId}/messages): either continues its conversation. A person's answer replaces an agent's. Schedules (ADR-026 §3): agent.wake_armed `every`/`times` for a recurring check-in, agent.woken `slot`/`skipped`, agent.wake_cancelled reason `archived`; a check-in outlives the agent's turn and continues it when it is idle",
-	"events.wait": `A filtered, cursor-resumable wait on GET /v1/events (ADR-026 §3): \`type\` and \`agent\` filter a scope's durable events, \`wait\` (seconds, at most ${EVENTS_WAIT_MAX_S}) holds the request until one matches; with any of them the answer is an EventsPage (\`events\`, \`cursor\` to resume from, \`reached\`, \`timedOut\`) instead of a plain list. A wait on agent.done, agent.failed, agent.cancelled, agent.paused or agent.asked of named agents already in that state answers at once with \`reached\``,
+	"events.wait": `GET /v1/events/wait, a filtered, cursor-resumable wait (ADR-026 §3): \`type\` and \`agent\` filter a scope's durable events, \`wait\` (seconds, at most ${EVENTS_WAIT_MAX_S}) holds the request until one matches; it answers an EventsPage (\`events\`, \`cursor\` to resume from, \`reached\`, \`timedOut\`). GET /v1/events is unchanged. A wait on agent.done, agent.failed, agent.cancelled, agent.paused or agent.asked of named agents already in that state answers at once with \`reached\``,
 } as const;
-/** Capability events.wait: GET /v1/events's filters and wait, and the page they answer with. */
+/** Capability events.wait: GET /v1/events/wait's filters and wait, and the page it answers. */
 const ListParam = z.union([z.string(), z.array(z.string())]).optional();
 export const EventsQuery = z.object({
 	scope: Scope,
-	after: z.coerce.number().int().nonnegative().optional().describe("Resume cursor: events with a seq above it (default 0). With a filter or a wait, pass the previous answer's `cursor`"),
+	after: z.coerce.number().int().nonnegative().optional().describe("Resume cursor: events with a seq above it (default 0). Pass the previous answer's `cursor`"),
 	type: ListParam.describe(`Capability events.wait. Only events of these types (exact names, e.g. agent.done; a legacy name such as AGENT_DONE is taken as its dotted one): the parameter repeated (\`type=a&type=b\`) or a comma list, at most ${EVENTS_TYPES_MAX}. 422 \`invalid\` for a name that isn't an event type`),
 	agent: ListParam.describe(`Capability events.wait. Only events about these agents (the event's agentId or entity): repeated or a comma list, at most ${EVENTS_AGENTS_MAX}`),
 	wait: z.coerce.number().int().min(0).max(EVENTS_WAIT_MAX_S).optional().describe(`Capability events.wait. Seconds to hold the request while nothing after \`after\` matches (0 to ${EVENTS_WAIT_MAX_S}; default 0: answer at once): it answers as soon as a matching event is appended, or with none (timedOut) when the wait runs out`),
@@ -699,10 +699,9 @@ export const EventsPage = z.object({
 	reached: z.array(EventsReached).describe("Before-or-after: with `agent` and a state-like type (agent.done, agent.failed, agent.cancelled, agent.paused, agent.asked), the named agents already in that state when no matching event came after the cursor (it happened before it). The answer comes at once, without waiting. Empty otherwise"),
 	timedOut: z.boolean().describe("The wait ran out with nothing matched (events and reached empty)"),
 });
-export const EVENTS_DOC = "Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream: a plain list. " +
-	`Capability events.wait: with \`type\`, \`agent\` or \`wait\`, only the matching events, as an EventsPage {events, cursor, reached, timedOut}; \`wait\` holds the request (at most ${EVENTS_WAIT_MAX_S} s) until a matching event is appended. ` +
+export const EVENTS_WAIT_DOC = `Capability events.wait. Durable events of one scope after \`after\`, filtered by \`type\` and \`agent\`, as an EventsPage {events, cursor, reached, timedOut}; \`wait\` holds the request (at most ${EVENTS_WAIT_MAX_S} s) until a matching event is appended. ` +
 	"Resume from `cursor`: it moves past the events that didn't match, and never past one that did. A wait on a state-like event (agent.done, agent.failed, agent.cancelled, agent.paused, agent.asked) of named agents already in that state answers at once with `reached` (Board's before-or-after rule). " +
-	"Run and daemon scopes; with a filter or a wait, a project scope is 422 `invalid` and a run that doesn't exist 404 `not_found`.";
+	"Run and daemon scopes: a project scope is 422 `invalid` (its stream has only run.created) and a run that doesn't exist 404 `not_found`.";
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
 	CAPABILITY_NAMES.map((k) => `\`${k}\`: ${CAPABILITIES[k]}`).join("; ") + ".";
@@ -1590,9 +1589,13 @@ export const contract = {
 	},
 	events: {
 		replay: oc
-			.route({ method: "GET", path: "/v1/events", description: EVENTS_DOC })
+			.route({ method: "GET", path: "/v1/events", description: "Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream." })
+			.input(z.object({ scope: Scope, after: z.coerce.number().int().nonnegative().optional() }))
+			.output(z.array(HarnessEvent)),
+		wait: oc
+			.route({ method: "GET", path: "/v1/events/wait", description: EVENTS_WAIT_DOC })
 			.input(EventsQuery)
-			.output(z.union([z.array(HarnessEvent), EventsPage])),
+			.output(EventsPage),
 		stream: oc
 			.route({ method: "GET", path: "/v1/streams/{scope}/events", inputStructure: "detailed", description: STREAM_DOC })
 			.input(z.object({ params: z.object({ scope: Scope }), query: z.object({ feed: z.enum(["lifecycle"]).optional().describe("Run scopes: lifecycle events only"), activity: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.activity_changed frames (at most one per agent per second)"), thread: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.thread_item_changed frames (at most four per item per second)") }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
