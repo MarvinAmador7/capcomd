@@ -1727,7 +1727,7 @@ export async function messageNote(runId: string, to: string): Promise<string | n
 }
 
 /** What a message that woke an idle agent says it did (ADR-026 §1). */
-export const continuedNote = (to: string) => `${to} was idle: this message is its next turn (it continues the same thread on a fresh machine)`;
+export const continuedNote = (to: string) => `${to} was idle: this message is its next turn (it continues the same thread, on its parked machine if it has one, else a fresh one)`;
 
 /**
  * `capcomd send`: append a message to `to`'s mailbox (idempotent by key), with a note when it won't be read right away.

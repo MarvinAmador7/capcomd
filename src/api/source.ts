@@ -458,7 +458,7 @@ export function memorySource(seed: Partial<{
 				const epoch = (epochs.get(`${runId}\u0000${to}`) ?? 1) + 1;
 				epochs.set(`${runId}\u0000${to}`, epoch);
 				push(runId, { at: Date.now(), type: "AGENT_CONTINUED", agentId: to, data: { epoch, from, by: "operator", messageSeq: seq } });
-				return { seq, note: `${to} was idle: this message is its next turn (it continues the same thread on a fresh machine)`, continued: true };
+				return { seq, note: `${to} was idle: this message is its next turn (it continues the same thread, on its parked machine if it has one, else a fresh one)`, continued: true };
 			}
 			return { seq, note: null };
 		},
