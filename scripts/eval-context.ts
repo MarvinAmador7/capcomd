@@ -195,6 +195,9 @@ async function runStep(env: Record<string, string>, runId: string, step: Step, p
     while (watching) {
       const l = await cli(["logs", runId, agentId, "--tail", "5000"], env);
       for (const t of triggered((l.j?.lines ?? []).map((x: any) => String(x.line ?? "")), items, new Set(pushed.keys()))) {
+        // A push is for a working agent: since ADR-026 a message to one that has ended continues it (a new turn).
+        const now = (await cli(["await", runId, agentId, "--timeout-ms", "1"], env)).j?.agents?.[0];
+        if (!watching || TERMINAL.has(now?.status)) break;
         const s = await cli(["send", runId, agentId, pushText(t.item, t.file, files)], env);
         if (s.code === 0) pushed.set(t.item.file, t.file);
       }
@@ -208,6 +211,12 @@ async function runStep(env: Record<string, string>, runId: string, step: Step, p
   }
   watching = false;
   await watcher;
+  // A push that raced the agent's end continued it: score it once that turn has ended too.
+  while (agent && Date.now() < deadline) {
+    const w = await cli(["await", runId, agentId, "--timeout-ms", String(Math.min(300_000, deadline - Date.now()))], env, 330_000);
+    agent = w.j?.agents?.[0] ?? agent;
+    if (TERMINAL.has(agent.status)) break;
+  }
   const prompt = arm.context ? deliveredPrompt(agentId) : null;
   const delivered = { ...(inline ? { inlined: inline.inlined } : {}), ...(arm.triggered ? { pushed: [...pushed.keys()] } : {}), ...(prompt ?? {}) };
   if (!agent || !TERMINAL.has(agent.status)) { await cli(["cancel", runId, agentId, "--reason", "eval timeout"], env); return { agentId, status: "timeout", verdict: { success: false, error: "the agent didn't finish in time" }, metrics: null, delivered }; }
