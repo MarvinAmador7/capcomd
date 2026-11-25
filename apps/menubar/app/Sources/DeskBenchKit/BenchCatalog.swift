@@ -5,9 +5,9 @@ import PerfLoopHost
 import PerfLoopKit
 import PerfLoopProbe
 
-/// deskbench as a PerfLoopHost bench: the scenarios (Scenarios.swift), the fixtures (Fixtures.swift, parametric), the
-/// guards (Guards.swift), the probes, what `profile` may pass on (TracePrivacy.swift) and the look, registered on a
-/// `Bench`. The bench executable gives the scenarios' drivers, the knobs and the `built-within` guard; the tests give
+/// deskbench as a PerfLoopHost bench: the scenarios (Scenarios.swift), the fixtures (Fixtures.swift, parametric, and
+/// captured ones as `file:PATH`), the guards (Guards.swift), the probes, what `profile` may pass on (TracePrivacy.swift)
+/// and the look, registered on a `Bench`. The bench executable gives the scenarios' drivers, the knobs and the `built-within` guard; the tests give
 /// stand-ins and read the manifest back the way perfloop's runner reads it, with no window.
 public enum BenchCatalog {
   public static let app = "capcomd-desktop"
@@ -15,8 +15,8 @@ public enum BenchCatalog {
   /// The app forces the dark look on every view (`.preferredColorScheme(.dark)`, the search panel's `darkAqua`): it
   /// follows no system appearance, so the bench draws dark and lists only that (`--set appearance=dark`).
   public static let appearances = ["dark"]
-  /// `--fixture file:PATH` (or `file:NAME`, under the fixtures folder): a captured fixture (CapturedFixture.swift).
-  public static let fixtureSchemes = ["file"]
+  /// What `items` takes besides a whole number (`Fixtures.itemsProblem`): the manifest's `fixtures[].accepts`.
+  public static let itemsAccepts = "N or LO-HI"
   /// Module name prefixes whose frames are the app's (CapcomdDesk, CapcomdUI, CapcomdStore, …).
   public static let appModules = ["Capcomd"]
 
@@ -47,37 +47,34 @@ public enum BenchCatalog {
     for f in Fixtures.all {
       bench.fixture(f.name, summary: f.summary, parametric: f.parametric?.mapValues { Double($0[0])...Double($0[1]) })
     }
+    // `--fixture file:PATH` (or `file:NAME`, under the fixtures folder): a captured fixture (CapturedFixture.swift),
+    // checked before a rep runs; the run's fixture is the spec as asked.
+    bench.fixtureScheme("file") { spec in
+      if let p = Fixtures.problem(spec) { throw CatalogError(p) }
+      return Fixture(spec, summary: "a captured fixture")
+    }
+    // `items=40-60`: an explicit range of items a thread, beyond the number a sweep varies.
+    bench.fixtureValues("items", accepts: itemsAccepts) { Fixtures.itemsProblem($0) }
     bench.defaultFixture = Scenarios.defaultFixture
     bench.knobs(knobs)
+    // Every scenario runs inside the bench's SwiftUI app (`bench.attach()`: its scene's window, its menu bar and the
+    // app's commands), as `host: app` says.
     for s in Scenarios.all {
       let kind: ScenarioKind = switch s.kind { case .latency: .latency; case .smooth: .smooth; case .isolation: .isolation }
       bench.scenario(s.name, summary: s.summary, kind: kind, guards: Guards.forScenario(s.name), guardParams: Guards.params(for: s.name),
                      frameGuards: frameGuards(s), params: s.params, budget: "\(s.budget) (\(s.rule))", latencyBudgetMs: s.latencyBudgetMs, fixture: s.fixture,
-                     body(s.name) ?? { _ in throw CatalogError("\(s.name) has no driver in this build") })
+                     host: .app, body(s.name) ?? { _ in throw CatalogError("\(s.name) has no driver in this build") })
     }
     bench.guard(Guards.builtWithin, builtWithin)
     return bench
   }
 
-  /// The manifest the runner reads (`describe --json`): PerfLoopHost's, with what this bench takes beyond its defaults:
-  /// captured fixtures (`file:`) and the one look the app draws in.
+  /// The manifest the runner reads (`describe --json`): PerfLoopHost's, with the one look the app draws in.
   @MainActor
   public static func manifest(_ bench: Bench) -> Manifest {
     var m = bench.manifest()
-    m.fixtureSchemes = fixtureSchemes
     m.appearances = appearances
     return m
-  }
-
-  /// A `--fixture` the bench takes beyond its listed names (`file:PATH`), registered under exactly that name for this
-  /// process, so the run's result says the fixture it was asked for. nil when `spec` needs nothing (a listed name,
-  /// `NAME@k=v`), else the problem with it.
-  @MainActor
-  public static func register(fixture spec: String, on bench: Bench) -> String? {
-    guard spec.hasPrefix(CapturedFixture.prefix) else { return nil }
-    if let p = Fixtures.problem(spec) { return p }
-    if !bench.fixtures.contains(where: { $0.name == spec }) { bench.fixture(spec, summary: "a captured fixture") }
-    return nil
   }
 }
 

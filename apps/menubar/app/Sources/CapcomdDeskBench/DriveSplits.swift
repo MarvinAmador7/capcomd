@@ -8,9 +8,8 @@ import PerfLoopKit
 
 /// Splits and expand in the opened window (design/desktop/rex RexSplit, RexExpanded; SPEC §2.1): ⌘D / ⇧⌘D / ⌘W,
 /// focus moving between panes, a thread item arriving in one split, ⇧⌘↩ and Esc, and switching agents while expanded.
-/// The shortcuts are the app's menu items (DeskCommands, a SwiftUI `Commands`), which only a SwiftUI app scene has:
-/// the bench calls what each item calls (DESKBENCH.md, What PerfLoopHost can't host). Clicks are real
-/// (`run.click`). Checks read the real window: the pane views in it (DeskPaneProbe), their frames, their thread's
+/// The shortcuts are the app's menu items (DeskCommands, a SwiftUI `Commands`), pressed through the bench app's real menu
+/// bar (`run.press`, which records the item that fired); clicks are real (`run.click`). Checks read the real window: the pane views in it (DeskPaneProbe), their frames, their thread's
 /// scroll view; each pane's thread is an ink region. Each rep starts from one pane and ends with its scenario's panes
 /// on screen, for the snapshot.
 @MainActor enum DriveSplits {
@@ -44,11 +43,22 @@ import PerfLoopKit
     await d.quiet(timeoutMs: 3000)
   }
 
-  /// One latency step: `act` (a menu item's action, or real input), until `done` holds, to the frame after it; the
-  /// panes' threads judged for ink after it.
-  static func paneStep(_ d: Desk, _ name: String, panes: Int, _ act: @escaping () -> Void, done: @escaping () -> Bool) async -> Bool {
+  /// What a step does: keys pressed through the menu bar (the item they must fire), a key no menu item has (Esc: the
+  /// window's own key handling), or a call into the model where no key does it (a pick from Search's results).
+  enum Act {
+    case press(String, item: String)
+    case key(HostRun.Key)
+    case call(() -> Void)
+  }
+
+  /// One latency step: `act`, until `done` holds, to the frame after it; the panes' threads judged for ink after it.
+  static func paneStep(_ d: Desk, _ name: String, panes: Int, _ act: Act, focus: FocusTarget? = nil, done: @escaping () -> Bool) async -> Bool {
     if !d.window.isKeyWindow { d.window.makeKeyAndOrderFront(nil); _ = await d.nextCommit() }
-    await d.run.step(name, timeoutMs: 3000, until: done) { act() }
+    switch act {
+    case .press(let keys, let item): await d.run.press(keys, expect: item, expectFocus: focus, name: name, timeoutMs: 3000, until: done)
+    case .key(let k): await d.run.key(k, expectFocus: focus, name: name, timeoutMs: 3000, until: done)
+    case .call(let f): await d.run.step(name, timeoutMs: 3000, until: done) { f() }
+    }
     let ok = done()
     // A pane that now shows an agent whose thread isn't read yet is blank until its first page lands: judge the ink
     // once the threads have rows (or 2 s on).
@@ -74,12 +84,12 @@ import PerfLoopKit
     for c in 0..<run.int("cycles", 2) {
       let base = d.model.panes.agents
       let want = d.model.nextAgentForSplit()
-      var ok = await paneStep(d, "split-right#\(c)", panes: base.count + 1, { d.model.split(down: false) }) { d.panesShown().count == base.count + 1 }
+      var ok = await paneStep(d, "split-right#\(c)", panes: base.count + 1, .press("⌘D", item: "Split Right")) { d.panesShown().count == base.count + 1 }
       let (m1, d1) = panesMatch(d)
       opened = opened && ok && m1 && d.model.panes.columns.count == 2
       nextInTree = nextInTree && d.model.panes.focusedAgent == want
       if !(ok && m1) { notes.append("⌘D#\(c): \(d1)") }
-      ok = await paneStep(d, "split-down#\(c)", panes: base.count + 2, { d.model.split(down: true) }) { d.panesShown().count == base.count + 2 }
+      ok = await paneStep(d, "split-down#\(c)", panes: base.count + 2, .press("⇧⌘D", item: "Split Down")) { d.panesShown().count == base.count + 2 }
       let (m2, d2) = panesMatch(d)
       let shown = d.panesShown()
       let stacked = shown.filter { abs($0.frame.minX - (shown.last?.frame.minX ?? -1)) < 1 }.count == 2
@@ -87,14 +97,14 @@ import PerfLoopKit
       if !(ok && m2 && stacked) { notes.append("⇧⌘D#\(c): \(d2), stacked \(stacked) \(shown.map { "\($0.frame)" })") }
       for k in 0..<2 {
         let n = d.panesShown().count
-        ok = await paneStep(d, "close#\(c).\(k)", panes: n - 1, { d.model.foldShortcut() }) { d.panesShown().count == n - 1 }
+        ok = await paneStep(d, "close#\(c).\(k)", panes: n - 1, .press("⌘W", item: "Fold into the Title Bar")) { d.panesShown().count == n - 1 }
         let (m3, d3) = panesMatch(d)
         closed = closed && ok && m3
         if !(ok && m3) { notes.append("⌘W#\(c).\(k): \(d3)") }
       }
     }
     // The end state for the snapshot: one split right, at rest.
-    _ = await paneStep(d, "rest", panes: 2, { d.model.split(down: false) }) { d.panesShown().count == 2 }
+    _ = await paneStep(d, "rest", panes: 2, .press("⌘D", item: "Split Right")) { d.panesShown().count == 2 }
     run.regions(d.paneRegions(2))
     run.record([
       Check("split-right", opened, notes.filter { $0.hasPrefix("⌘D") }.joined(separator: "; ").ifEmpty("⌘D added a pane beside the focused one, focused, every time")),
@@ -117,7 +127,9 @@ import PerfLoopKit
     for (i, by) in [-1, -1, 1, 1].enumerated() {
       let want = d.model.panes.neighbour(by)?.agent
       let t = run.now
-      let ok = await paneStep(d, "ctrl-\(by > 0 ? "right" : "left")#\(i)", panes: 3, { d.model.moveFocus(by) }) { d.panesShown().first(where: \.focused)?.agent == want }
+      let ok = await paneStep(d, "ctrl-\(by > 0 ? "right" : "left")#\(i)", panes: 3, .press(by > 0 ? "⌃→" : "⌃←", item: by > 0 ? "Next Agent" : "Previous Agent")) {
+        d.panesShown().first(where: \.focused)?.agent == want
+      }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" || $0.view == "PaneEntryRow" }
       let (m, dd) = panesMatch(d)
       moved = moved && ok && m
@@ -159,7 +171,7 @@ import PerfLoopKit
     let rate = max(1, run.int("itemsPerSecond", 20)), secs = max(1, run.int("seconds", 3))
     let assigned = d.model.sidebar.assignments
     var start = 0.0, end = 0.0, sent = 0
-    await run.work("split-burst \(rate)/s", ink: d.paneRegions(3)) {
+    await run.step("split-burst \(rate)/s", timeoutMs: 20_000, ink: d.paneRegions(3)) {
       start = run.now
       while sent < rate * secs {
         let item = Fixtures.liveItem(world: &w, agentId: target, text: "Live item \(sent + 1) in a split pane.")
@@ -187,14 +199,22 @@ import PerfLoopKit
 
   // MARK: pane-expand
 
-  /// Two panes, the focused one's thread scrolled up from its foot; ⇧⌘↩ gives it the window, Esc gives it back,
-  /// `toggles` times. Expanded: that pane's view fills the window, the sidebar and the other pane hide. Back: the same
-  /// panes in the same frames, the thread at the same distance from its foot, the same views (nothing rebuilt).
+  /// What has the keyboard in the window: the edited field, else the first responder (nil: nothing).
+  static func keyboardOwner(_ w: NSWindow) -> NSView? {
+    if let t = w.firstResponder as? NSTextView, t.isFieldEditor { return t.delegate as? NSView }
+    return w.firstResponder as? NSView
+  }
+
+  /// Two panes, the focused one's thread scrolled up from its foot, the keyboard in the sidebar's list; ⇧⌘↩ (through the
+  /// menu bar) gives the pane the window, Esc (a real key: the expanded pane's arrows-in takes it) gives it back,
+  /// `toggles` times. Expanded: that pane's view fills the window, the sidebar and the other pane hide, and the keyboard
+  /// is in that pane. Back: the same panes in the same frames, the same rows of the thread in view, the keyboard still in
+  /// the pane (not back in the list), the same views (nothing rebuilt).
   static func paneExpand(_ run: HostRun) async throws {
     let d = try await onePane(run)
     await split(d, [false])
-    let names = ["thread", "expanded", "collapsed-same", "scroll-kept", "no-rebuild"]
-    guard let focused = d.panesShown().first(where: \.focused), let sv = d.threadScroll(in: focused.view) else {
+    let names = ["thread", "keyboard-outside", "expanded", "collapsed-same", "scroll-kept", "no-rebuild"]
+    guard let focused = d.panesShown().first(where: \.focused), let sv = d.threadScroll(in: focused.view), let probe = focused.view as? DeskPaneProbe else {
       return run.record(names.map { Check($0, false, "no focused pane or no thread scroll view in it") })
     }
     // Up from the foot by a screen or what the thread has.
@@ -207,14 +227,22 @@ import PerfLoopKit
       await d.quiet(quietMs: 150, timeoutMs: 2000)
     }
     let foot = fromFoot(sv)
+    let rows = probe.rowsInView
     let before = d.panesShown().map { ($0.agent, $0.frame) }
     let views = d.panesShown().map { ObjectIdentifier($0.view) }
     let full = d.content.convert(d.content.bounds, to: nil).integral
     var expandedOK = true, back = true, kept = true, same = true, notes: [String] = []
     var threadBodies = 0
+    // The keyboard starts outside the pane (the sidebar's list), so each Esc's `focus` says it stayed in the pane.
+    let start = keyboardOwner(d.window)
+    let outside = start.map { !$0.isDescendant(of: focused.view) } ?? false
     for i in 0..<run.int("toggles", 4) {
+      // The keyboard: into the expanded pane, and on Esc it stays in that pane (the owner's call, 19 November 2026; it
+      // used to go back to the sidebar's list). `expectFocus` on both steps.
       var t = run.now
-      var ok = await paneStep(d, "expand#\(i)", panes: 1, { d.model.toggleExpand() }) { d.panesShown().count == 1 && d.panesShown().first?.frame == full }
+      var ok = await paneStep(d, "expand#\(i)", panes: 1, .press("⇧⌘↩", item: "Expand Pane"), focus: .view(focused.view)) {
+        d.panesShown().count == 1 && d.panesShown().first?.frame == full
+      }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let e = d.panesShown()
       let ex = ok && e.count == 1 && e[0].expanded && e[0].frame == full && d.sidebarScrollView(scrollable: false) == nil
@@ -222,34 +250,47 @@ import PerfLoopKit
       expandedOK = expandedOK && ex
       if !ex { notes.append("expand#\(i): \(e.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), sidebar \(d.sidebarScrollView(scrollable: false) != nil)") }
       t = run.now
-      ok = await paneStep(d, "esc#\(i)", panes: 2, { d.model.collapsePane() }) { d.panesShown().count == 2 }
+      ok = await paneStep(d, "esc#\(i)", panes: 2, .key(.escape), focus: .view(focused.view)) { d.panesShown().count == 2 }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let after = d.panesShown()
       let b = ok && after.map(\.agent) == before.map(\.0) && after.map(\.frame) == before.map(\.1) && !d.model.nav.expanded
       back = back && b
       if !b { notes.append("esc#\(i): \(after.map { "\($0.agent) \($0.frame)" }) vs \(before.map { "\($0.0) \($0.1)" })") }
+      // The place is the rows in view (written in this PR): points from the foot don't name the same rows in a lazy stack.
       let sv2 = d.threadScroll(in: after.first { $0.agent == focused.agent }?.view ?? focused.view)
-      let k = sv2 === sv && abs(fromFoot(sv) - foot) <= 2
+      let now = probe.rowsInView
+      let k = sv2 === sv && !rows.isEmpty && now == rows
       kept = kept && k
-      if !k { notes.append("scroll#\(i): \(Stats.round(foot, 1)) → \(Stats.round(Double(sv2.map(fromFoot) ?? -1), 1)) pt from the foot; same scroll view \(sv2 === sv)") }
+      if !k {
+        notes.append("scroll#\(i): rows in view \(Self.rowList(rows)) → \(Self.rowList(now)); \(Stats.round(foot, 1)) → \(Stats.round(Double(sv2.map(fromFoot) ?? -1), 1)) pt from the foot; same scroll view \(sv2 === sv)")
+      }
       same = same && after.map { ObjectIdentifier($0.view) } == views
     }
     // The end state for the snapshot: expanded, at rest.
-    _ = await paneStep(d, "rest", panes: 1, { d.model.toggleExpand() }) { d.panesShown().count == 1 }
+    _ = await paneStep(d, "rest", panes: 1, .press("⇧⌘↩", item: "Expand Pane")) { d.panesShown().count == 1 }
     run.regions(d.paneRegions(1))
     run.record([
       Check("thread", true, "the focused pane's thread, \(Stats.round(up, 1)) pt up from its foot"),
+      Check("keyboard-outside", outside, "before the first expand the keyboard was in \(start.map { String(describing: type(of: $0)) } ?? "nothing")\(outside ? ", outside the pane" : "")"),
       Check("expanded", expandedOK, notes.filter { $0.hasPrefix("expand") }.joined(separator: "; ").ifEmpty("⇧⌘↩ gave the focused pane the whole window, sidebar and other pane hidden")),
       Check("collapsed-same", back, notes.filter { $0.hasPrefix("esc") }.joined(separator: "; ").ifEmpty("Esc brought back the same panes in the same frames")),
-      Check("scroll-kept", kept && up > 0, notes.filter { $0.hasPrefix("scroll") }.joined(separator: "; ").ifEmpty("the thread kept its place \(Stats.round(foot, 1)) pt from its foot (scrolled up \(Stats.round(up, 1)) pt)")),
+      Check("scroll-kept", kept && up > 0, notes.filter { $0.hasPrefix("scroll") }.joined(separator: "; ")
+        .ifEmpty("the thread kept the same rows in view (\(Self.rowList(rows)); \(Stats.round(foot, 1)) pt from its foot, scrolled up \(Stats.round(up, 1)) pt)")),
       Check("no-rebuild", same, "the pane views stayed the same objects; PaneThread bodies over all toggles: \(threadBodies)"),
     ])
+  }
+
+  /// Rows by the end of their ids, first and last (`7 rows a1b2…c3d4`).
+  static func rowList(_ ids: [String]) -> String {
+    guard let f = ids.first, let l = ids.last else { return "none" }
+    return "\(ids.count) rows \(f.suffix(6))…\(l.suffix(6))"
   }
 
   // MARK: expand-switch
 
   /// Expanded, other agents picked as the palette's ↩ picks them (`show(run:agent:)`): it stays expanded and the pane
-  /// shows each one; ⌘K opens over it and closes.
+  /// shows each one; ⌘K opens over it and closes; Esc collapses it with the keyboard still in the pane; ⇧⌘↩ expands it
+  /// again, with its thread's rows in view.
   static func expandSwitch(_ run: HostRun) async throws {
     let d = try await onePane(run)
     d.model.expandPane()
@@ -261,20 +302,36 @@ import PerfLoopKit
     for i in 0..<run.int("switches", 4) {
       let target = cols[(i * 3 + 2) % cols.count]
       let runId = d.model.openRunId!
-      let ok = await paneStep(d, "switch#\(i)", panes: 1, { d.model.show(run: runId, agent: target) }) { d.panesShown().first?.agent == target }
+      let ok = await paneStep(d, "switch#\(i)", panes: 1, .call { d.model.show(run: runId, agent: target) }) { d.panesShown().first?.agent == target }
       let p = d.panesShown()
       let good = ok && d.model.nav.expanded && p.count == 1 && p[0].agent == target && p[0].expanded && p[0].frame == full
       stayed = stayed && good
       if !good { notes.append("switch#\(i) to \(target): \(p.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), model expanded \(d.model.nav.expanded)") }
     }
-    // ⌘K over the expanded pane (its menu item's action), and Esc (a real key: the palette's own key handling).
-    let ok1 = await paneStep(d, "palette", panes: 1, { d.model.togglePalette() }) { d.model.paletteOpen }
-    await run.key(.escape, name: "palette-esc", timeoutMs: 3000, until: { !d.model.paletteOpen })
+    // ⌘K over the expanded pane (through the menu bar), and Esc (a real key: the palette's own key handling). Esc gives
+    // the keyboard back to the pane the palette opened over (the check `focus palette-esc`, written in this PR).
+    let paneView = d.paneView()?.view
+    let ok1 = await paneStep(d, "palette", panes: 1, .press("⌘K", item: "Search…")) { d.model.paletteOpen }
+    await run.key(.escape, expectFocus: paneView.map { FocusTarget.view($0) } ?? .identifier("the expanded pane"), name: "palette-esc", timeoutMs: 3000,
+                  until: { !d.model.paletteOpen })
     let ok2 = !d.model.paletteOpen
+    let over = ok1 && ok2 && d.model.nav.expanded
+    // Esc again collapses the pane, showing the last pick; the keyboard stays in it (`focus collapse`), not back in the
+    // sidebar's list, which had it before the expand. Then ⇧⌘↩ expands it again: its thread must show rows (the ink of
+    // `pane-1` after `re-expand`, and the check `re-expanded`); this left the pane blank in a third of the reps before
+    // 2026-11-20. The rep ends expanded, for the snapshot.
+    let pane = paneView.map { FocusTarget.view($0) } ?? .identifier("the expanded pane")
+    let collapsed = await paneStep(d, "collapse", panes: 1, .key(.escape), focus: pane) { !d.model.nav.expanded }
+    let again = await paneStep(d, "re-expand", panes: 1, .press("⇧⌘↩", item: "Expand Pane"), focus: pane) {
+      d.model.nav.expanded && d.panesShown().first?.expanded == true
+    }
+    let rowsBack = (d.paneView()?.view as? DeskPaneProbe)?.rowsInView ?? []
     run.regions(d.paneRegions(1))
     run.record([
       Check("stays-expanded", stayed, notes.joined(separator: "; ").ifEmpty("every pick showed in the expanded pane, still expanded")),
-      Check("palette-over", ok1 && ok2 && d.model.nav.expanded, "⌘K opened \(ok1) and Esc closed \(ok2) over the expanded pane; still expanded \(d.model.nav.expanded)"),
+      Check("palette-over", over, "⌘K opened \(ok1) and Esc closed \(ok2) over the expanded pane; still expanded \(over)"),
+      Check("collapsed", collapsed, "Esc collapsed the pane after the picks: \(collapsed)"),
+      Check("re-expanded", again && !rowsBack.isEmpty, "⇧⌘↩ expanded it again: \(again); its thread shows \(Self.rowList(rowsBack))"),
     ])
   }
 }

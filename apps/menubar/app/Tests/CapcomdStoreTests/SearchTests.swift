@@ -155,6 +155,53 @@ final class SearchTests: XCTestCase {
     XCTAssertEqual(home.filter(\.common).map(\.title.text), ["New project", "Settings"])
   }
 
-  // A keystroke's cost with hundreds of items is DeskBench's `palette-type` (the `search` fixture, release build, key to
-  // frame ≤ 16.7 ms), not a wall-clock assert here: a debug build under a loaded or parallel run made that one flaky.
+  // MARK: speed
+
+  /// 300+ items (agents, projects, asks, commands): what a keystroke costs. The guard is the work, counted: the first
+  /// key matches every item once, and each next key only the items the previous key matched (a longer query never
+  /// matches more), so a query typed a key at a time scores far less than the whole index once per key. Time is printed,
+  /// and asserted only loosely, as the best of several runs (one slow run on a shared CI Mac is the Mac, not the
+  /// search): under a 60 Hz frame even in a debug build. The bench's `palette-type` measures a keystroke in the app.
+  func testAKeystrokeIsFastWithHundredsOfItems() {
+    var i = SearchIndex()
+    let words = ["matchkey", "proration", "invoice", "shards", "backfill", "login", "redirect", "billing", "nightly", "bumps", "parser", "schema"]
+    var runs: [String] = []
+    for p in 0..<12 {
+      let run = "run-\(p)"; runs.append(run)
+      let project = "\(words[p % words.count]) \(words[(p + 5) % words.count])"
+      i.set(agents: (0..<25).map { a in
+        SearchItem(id: "agent.\(run)-\(a)", group: .agents, title: "\(words[(a + p) % words.count]) \(words[(a * 7) % words.count]) \(a)",
+                   subtitle: "\(project) · worker", icon: .bot(runId: run, agentId: "\(a)"), action: .agent(runId: run, agentId: "\(a)"), agentId: "\(run)-\(a)")
+      }, run: run)
+    }
+    i.set(runs: runs)
+    i.set(projects: (0..<12).map { SearchItem(id: "project.\($0)", group: .projects, title: "project \(words[$0])", icon: .place(sandbox: "docker"), action: .project(runId: "run-\($0)")) })
+    i.set(commands: SearchCommands.make(SearchCommandContext(menu: nil, projectTitle: nil, focusedAsk: nil, follow: true, homeShown: false)))
+    XCTAssertGreaterThanOrEqual(i.count, 300)
+    let typed = Array("match inv")
+    var scored: [Int] = [], found: [Int] = []
+    var best = [Double](repeating: .infinity, count: typed.count)
+    for round in 0..<5 {
+      var prefix = "", matched: Set<String>?
+      for (k, c) in typed.enumerated() {
+        prefix.append(c)
+        var work = SearchIndex.Work()
+        let t = ProcessInfo.processInfo.systemUptime
+        let r = i.search(prefix, among: matched, work: &work)
+        best[k] = min(best[k], (ProcessInfo.processInfo.systemUptime - t) * 1000)
+        if round == 0 { scored.append(work.scored); found.append(r.matched.count) }
+        matched = r.matched
+      }
+    }
+    // The work: every item once for the first key, then only what the key before matched.
+    XCTAssertEqual(scored.first, i.count)
+    for k in 1..<typed.count { XCTAssertEqual(scored[k], found[k - 1], "key \(k + 1) ('\(String(typed.prefix(k + 1)))') scored more than the previous key matched") }
+    XCTAssertGreaterThan(found.last ?? 0, 0)
+    let total = scored.reduce(0, +)
+    // Scoring the whole index on every key would be typed.count × count; narrowing keeps it well under half of that.
+    XCTAssertLessThan(total, typed.count * i.count / 2, "\(typed.count) keys scored \(total) items in all (\(scored))")
+    let worst = best.max() ?? 0
+    print("search: \(i.count) items; scored per key \(scored) (\(total) in all), matched \(found); best of 5 runs per key (ms): \(best.map { String(format: "%.3f", $0) }.joined(separator: " ")), worst \(String(format: "%.3f", worst))")
+    XCTAssertLessThan(worst, 16.7, "the best of 5 runs of a keystroke took over a frame")
+  }
 }

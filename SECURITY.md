@@ -30,4 +30,9 @@ Claude Code, Codex or Rivet themselves (report those upstream; tell us if capcom
 
 ## Supported versions
 
-Fixes go into the latest release. While capcomd is 0.x, upgrade to the newest version to get them.
+Fixes go into the latest release. While capcomd is 0.x, upgrade to the newest version to get them. A security fix
+may also be released for the previous minor when upgrading isn't practical; the advisory says which versions it covers.
+
+Verify a download: every release file has a `.sha256`, the npm package has provenance (`npm audit signatures`), and
+the release notes say whether the binaries and the app carry GitHub build attestations
+(`gh attestation verify <file> --repo MarvinAmador7/capcomd`).

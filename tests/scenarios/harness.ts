@@ -60,7 +60,8 @@ export async function world(name: string, extraEnv: Record<string, string> = {},
     CAPCOMD_SCRIPT_AWAIT_POLL_MS: "150", CAPCOMD_TRACE_DIR: join(dir, "traces"), ...extraEnv,
   };
   const port = await testPort();
-  const engine = new Engine(`scn-${name}`, { port, dataDir: join(dir, "engine") });
+  // Movable: a failed first start whose port block something else holds comes up on a fresh port (engine.port, below).
+  const engine = new Engine(`scn-${name}`, { port, dataDir: join(dir, "engine"), movable: true });
   // The engine process reads the same env (kv caps, fake sandbox, repo).
   const saved = { ...process.env };
   Object.assign(process.env, env);
@@ -69,7 +70,7 @@ export async function world(name: string, extraEnv: Record<string, string> = {},
   for (const k of opts.engineOmit ?? []) { omitted[k] = process.env[k]; delete process.env[k]; }
   await engine.start(opts.killpoint ?? null);
   for (const [k, v] of Object.entries(omitted)) if (v !== undefined) process.env[k] = v;
-  env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
+  env.CAPCOMD_ENDPOINT = engine.endpoint;
   process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
   const cj = async (args: string[]) => {
     const x = await capcomd([...args, "--json"], { ...env, PWD: dir });

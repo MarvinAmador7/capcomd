@@ -5,12 +5,12 @@ import DeskBenchKit
 import PerfLoopHost
 import PerfLoopKit
 
-/// Search ⌘K's scenarios (`palette-open`, `palette-type`, `palette-keys`), on a fixture with hundreds of searchable items
-/// (`search`: 60 projects, ~200 agents, asks, the commands). The palette opens as its menu item's action does (the bench
-/// has no app menu: see DESKBENCH.md, What PerfLoopHost can't host); every key after that is real input on the app's
-/// own event queue (`run.type`, `run.key`), to whatever has the keyboard: the palette's field editor, its key handling.
-/// Each step's latency is to the first frame after what the key did held; checks read the UI's own state, and the
-/// palette is an ink region (its own panel with `search.host=panel`, its place in the window otherwise).
+/// Search ⌘K's scenarios (`palette-first`, `palette-open`, `palette-type`, `palette-keys`), on a fixture with hundreds of searchable items
+/// (`search`: 60 projects, ~200 agents, asks, the commands). ⌘K is pressed through the app's menu bar (`run.press`:
+/// Project › Search…); every key after that is real input on the app's own event queue (`run.type`, `run.key`), to
+/// whatever has the keyboard: the palette's field editor, its key handling. Each step's latency is to the first frame
+/// after what the key did held; checks read the UI's own state, and the palette is an ink region (its own panel with
+/// `search.host=panel`, its own hosting view in the window otherwise, drawn alone).
 @MainActor struct Palette {
   let d: Desk
   var run: HostRun { d.run }
@@ -22,21 +22,23 @@ import PerfLoopKit
   /// The palette shows: its panel, or (in the window) the model says so.
   var shown: Bool { inPanel ? panel != nil : model.paletteOpen }
 
-  /// The palette as an ink region: the panel's content, or the palette's rect in the window (fixed metrics: its width
-  /// for the window, its height for these results), placed when called.
+  /// The palette as an ink region: the panel's content, or in the window the palette's own hosting view drawn by
+  /// itself (`drawnAlone`: its ink is its own, not the reel's behind it).
   func region() -> InkRegion {
     if inPanel { return .find("palette") { [self] in panel?.contentView } }
-    let b = d.content.bounds, w = SearchMetrics.width(for: b.width)
-    let h = SearchMetrics.queryHeight + 0.5 + SearchMetrics.listHeight(model.search.sections, query: model.paletteQuery) + SearchMetrics.footer
-    return .rect("palette", CGRect(x: (b.width - w) / 2, y: SearchMetrics.top, width: w, height: h))
+    return InkRegion.find("palette") { [d] in
+      var found: NSView?
+      d.walk(d.content) { if found == nil, $0 is SearchOverlayHost, !$0.isHiddenOrHasHiddenAncestor { found = $0 } }
+      return found
+    }.drawnAlone()
   }
 
-  /// ⌘K's action (the menu item calls `togglePalette`), and the frame that shows the palette with its results.
+  /// ⌘K through the menu bar (Project › Search…), and the frame that shows the palette with its results.
   func open(_ name: String) async {
     if model.paletteOpen { model.closePalette(); _ = await d.nextCommit() }
     // The keys after it reach the palette only while the window has the keyboard: start from there.
     if !d.window.isKeyWindow { d.window.makeKeyAndOrderFront(nil); _ = await d.nextCommit() }
-    await run.step(name, timeoutMs: 3000, until: { model.paletteOpen && shown }) { model.togglePalette() }
+    await run.press("⌘K", expect: "Search…", name: name, timeoutMs: 3000, until: { model.paletteOpen && shown })
     await run.ink([region()], after: name)
   }
 
@@ -101,6 +103,37 @@ import PerfLoopKit
     // Snapshots end with the palette up: a child panel is drawn into them; the overlay is in the window anyway.
     run.atClose { d.model.closePalette() }
     return Palette(d: d)
+  }
+
+  // MARK: palette-first
+
+  /// The first ⌘K after the window opens: the rep's desk shown and its warming done (the threads of the columns on
+  /// screen and next to them: no main-thread stretch over 2 ms for 300 ms), then ⌘K is the first thing pressed, once.
+  /// The palette has never shown in this window, so this is the open that pays for whatever the palette hasn't built
+  /// yet. One measured step: the scenario's latency is that ⌘K's. The palette stays up for the snapshot.
+  static func paletteFirst(_ run: HostRun) async throws {
+    let d = try Desk(run)
+    try await d.show()
+    await d.quiet()
+    run.atClose { d.model.closePalette() }
+    let p = Palette(d: d)
+    // AppKit's first-use work done ahead, at rest (AppKitWarmup; knob desk.prewarm): what each took, before the ⌘K.
+    let warm = { (name: String) in d.events.last { $0.name == name }?.value }
+    let k = DeskKnobs.prewarm.value
+    let menuUs = warm("warm.menu.us"), fieldUs = warm("warm.field.us")
+    let warmed = (!k.menu || menuUs != nil) && (!k.field || fieldUs != nil) && warm("warm.menu.fired") == nil && warm("warm.field.refused") == nil
+    let took = { (us: Int?) in us.map { "\(Stats.round(Double($0) / 1000, 2)) ms" } ?? "not done" }
+    await p.open("first")
+    let groups = p.model.search.sections.map(\.group)
+    let asks = p.model.search.index.asks.count
+    run.regions([p.region()])
+    run.record([
+      Check("warmed-ahead", warmed, "desk.prewarm=\(k.rawValue): the menu's first key equivalent \(took(menuUs))\(warm("warm.menu.fired") != nil ? " (an item fired)" : "")\(warm("warm.menu.skipped").map { " (skipped: \($0 == 2 ? "an item has the key" : "no event"))" } ?? ""), the first field focus \(took(fieldUs))\(warm("warm.field.refused") != nil ? " (refused)" : ""), before ⌘K"),
+      Check("shown", p.model.paletteOpen && p.shown, "palette open \(p.model.paletteOpen), shown \(p.shown)"),
+      Check("items", p.model.search.index.count >= 200, "\(p.model.search.index.count) searchable items (agents, projects, asks, commands)"),
+      Check("empty-search", groups.first == (asks > 0 ? .needsYou : .recent) && groups.last == .commands && groups == groups.sorted(),
+            "groups \(groups.map(\.title)); \(asks) asks"),
+    ])
   }
 
   // MARK: palette-open

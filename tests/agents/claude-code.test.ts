@@ -203,7 +203,10 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
   }, 60_000);
 
   test("spinning (ADR-019 §2): the same call again and again is a notice, the work is checkpointed, then a stop that keeps it", async () => {
-    const s = await setup("[spin] go round", { CAPCOMD_AGENT_STUCK_REPEATS: "3" });
+    // The notice at 3 calls asks the supervisor for a checkpoint (taken at its next heartbeat) and the stop comes at 6:
+    // the fake waits after its 3rd call until that checkpoint is made, so a slow machine can't see the stop's kill
+    // first (the stop keeps the work anyway, but this test is about the notice's checkpoint).
+    const s = await setup("[spin] [spin-checkpoint:3] go round", { CAPCOMD_AGENT_STUCK_REPEATS: "3" });
     const notices: Array<{ kind: string; detail: string } | null> = [];
     const reports: SupervisorReport[] = [];
     const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, heartbeatMs: 100, onNotice: (n) => notices.push(n), onReport: (x) => reports.push(x) });

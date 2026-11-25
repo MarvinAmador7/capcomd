@@ -64,6 +64,7 @@ final class OpenedLayerView: NSView {
   private let main = Flipped()
   private let pane: NSHostingView<AnyView>
   private let deck: PaneDeckView
+  private let model: DeskModel
   private var open: Bool
   private var expanded = false
   private var placed: (size: CGSize, expanded: Bool)?
@@ -78,6 +79,7 @@ final class OpenedLayerView: NSView {
     sidebar = NSHostingView(rootView: root(SidebarView()))
     pane = NSHostingView(rootView: root(PaneArea()))
     deck = PaneDeckView(model: model)
+    self.model = model
     self.open = open
     super.init(frame: .zero)
     wantsLayer = true
@@ -111,6 +113,8 @@ final class OpenedLayerView: NSView {
   /// The panes: what they show, and whether the focused one has the window. Expanding (or collapsing) lays the window
   /// out once, at its final frames; a click fades the sidebar back in on the way out.
   func set(deck d: PaneDeckInput, animated: Bool, reduceMotion: Bool) {
+    // What has the keyboard, before the re-frame hides the sidebar or the other panes (a hidden view loses it).
+    let had = window.flatMap { PaletteFocusReturn.Keeper.owner($0.firstResponder) }
     deck.update(d, animated: animated, reduceMotion: reduceMotion)
     guard d.expanded != expanded else { return }
     expanded = d.expanded
@@ -119,6 +123,22 @@ final class OpenedLayerView: NSView {
     if !expanded, animated {
       sidebar.layer?.add(Self.anim("opacity", from: 0, to: 1, duration: reduceMotion ? 0.15 : 0.2), forKey: "fade")
     }
+    moveKeyboard(had: had)
+  }
+
+  /// The keyboard across expand and collapse: it is in the pane either way. Expanding, it stays on the pane's message
+  /// box or thread if it was there, else the pane takes it (its thread and message box, as a click in it does), and
+  /// hiding the sidebar no longer leaves it with nobody. Collapsing, it stays where it is in the pane (the message box or
+  /// the thread), and the pane takes it if it is elsewhere: it doesn't go back to what had it before the expand.
+  private func moveKeyboard(had: NSView?) {
+    guard let w = window, let pane = deck.focusedPane else { return }
+    let owner = { PaletteFocusReturn.Keeper.owner(w.firstResponder) }
+    if let had, had.isDescendant(of: pane), had.window === w, !had.isHiddenOrHasHiddenAncestor {
+      if owner() !== had { w.makeFirstResponder(had) }
+      if owner()?.isDescendant(of: pane) == true { return }
+    }
+    if let now = owner(), now.window === w, now.isDescendant(of: pane), !now.isHiddenOrHasHiddenAncestor { return }
+    _ = pane.takeKeyboard()
   }
 
   func set(open o: Bool, animated: Bool, reduceMotion: Bool) {
@@ -213,6 +233,12 @@ final class PaneDeckView: NSView {
     model.focusPane(s.paneId)
   }
   override var isFlipped: Bool { true }
+
+  /// The focused pane's view, while it shows.
+  var focusedPane: NativeColumnView? {
+    guard !isHidden else { return nil }
+    return slots.first { $0.paneId == input.layout.focused && !$0.view.isHidden }?.view
+  }
 
   func update(_ i: PaneDeckInput, animated: Bool, reduceMotion: Bool) {
     guard i != input else { return }
@@ -438,7 +464,7 @@ struct PaneSplitSlot: View {
         PaneButton(symbol: "rectangle.split.1x2", help: "Split down (⇧⌘D)", label: "Split down") { model.split(down: true) }
       } else {
         PaneButton(symbol: "xmark", help: "Close this split", label: "Close this split", size: 12) {
-          withAnimation(reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.2)) { model.closePane(pane.id) }
+          paneMotion(reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.2)) { model.closePane(pane.id) }
         }
       }
     }
@@ -456,16 +482,22 @@ struct PaneExpandSlot: View {
     if let pane {
       if pane.expanded {
         SideButton(symbol: "arrow.down.right.and.arrow.up.left", on: true, help: "Collapse pane (Esc)", label: "Collapse pane") {
-          withAnimation(reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.2)) { model.collapsePane() }
+          paneMotion(reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.2)) { model.collapsePane() }
         }
         .modifier(EscLeaves())
       } else {
         PaneButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Expand pane (⇧⌘↩)", label: "Expand pane") {
-          withAnimation(reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.22)) { model.expandPane(pane.id) }
+          paneMotion(reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.22)) { model.expandPane(pane.id) }
         }
       }
     }
   }
+}
+
+/// A pane control's action: animated when clicked, at once from the keyboard (Esc on arrows-in, or a focused button's
+/// Space), as ⇧⌘↩ and ⌘W are: key presses don't animate.
+@MainActor func paneMotion(_ animation: Animation, _ action: () -> Void) {
+  if NSApp?.currentEvent?.type == .keyDown { action() } else { withAnimation(animation, action) }
 }
 
 /// A pane header's icon button (RexSplit `.ph .ctl .ib`: 26 pt, 7 pt corners, #7D7D85; the hover wash).

@@ -1,10 +1,15 @@
 // The watchdog's progress from real activity (docs/spec/plugin-api.md §16.4), the whole way: fake claude workers in a
-// host-exec FakeProvider, spawned through a daemon with the watchdog on and a stall limit of 8 s, far shorter than the
+// host-exec FakeProvider, spawned through a daemon with the watchdog on and a stall limit of 10 s, far shorter than the
 // 10 minutes between checkpoints. The in-VM supervisor fingerprints each checkout at its heartbeats, the runner reads
 // the CLI's Bash calls, and the worker hands both to the scope as `worked` (src/actors/worker.ts), which the watchdog
 // hears as agent.changed. One worker edits a file for 16 s, one waits on a 10 s command, one sits silent for 16 s: only
-// the silent one gets `stalled`, and its notice says what was seen. (A job and its polls holding the clock:
-// tests/scenarios/watchdog-progress.test.ts.)
+// the silent one gets `stalled`, and its notice says what was seen. (tests/scenarios/watchdog-progress.test.ts has the
+// same with the reports faked and a 90 s limit, and a job and its polls holding the clock.)
+//
+// What the clock counts that the agents can't help: it starts when an agent is claimed, before its machine is made and
+// its checkout cloned, and a foreground command takes at most the stall limit off it. So the command is exactly the
+// limit (without the hold alone it reaches the limit; a longer one would leave its excess on the clock, by design), and
+// each worker starts once the one before it is working, so three machines aren't set up at once on a small runner.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -13,7 +18,7 @@ import { Engine } from "../helpers/test-engine";
 import { capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 
-const STALLED_MS = 8_000;
+const STALLED_MS = 10_000;
 let engine: Engine;
 let env: Record<string, string>;
 const saved = { ...process.env };
@@ -63,12 +68,22 @@ const cj = async (args: string[]) => {
   return { ...x, j };
 };
 
-test("with an 8 s limit: a worker editing files and one waiting on a command aren't flagged, a silent one is", async () => {
+test("with a 10 s limit: a worker editing files and one waiting on a command aren't flagged, a silent one is", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
+  // Each worker is spawned once the one before it is working: its CLI's first line is in its log.
+  const working = async (id: string) => {
+    for (let i = 0; i < 300; i++) {
+      if (((await cj(["logs", run, id])).j?.lines ?? []).some((l: any) => l.stream === "agent" && !String(l.line).startsWith("[capcomd]"))) return;
+      await Bun.sleep(100);
+    }
+    throw new Error(`${id} never started working`);
+  };
   const spawn = async (task: string, key: string) => (await cj(["spawn", run, "--profile", "worker", "--task", task, "--key", key])).j?.agentId as string;
   const editor = await spawn("[editing:16] keep editing the notes", "editor");
-  const commander = await spawn("[command:10] run the tests", "commander");
+  await working(editor);
+  const commander = await spawn(`[command:${STALLED_MS / 1000}] run the tests`, "commander");
+  await working(commander);
   const silent = await spawn("[quiet:16] think it over", "silent");
   for (const id of [editor, commander, silent]) expect(id).toMatch(/^agt-/);
   const agents = (await cj(["await", run, editor, commander, silent, "--timeout-ms", "90000"])).j?.agents ?? [];

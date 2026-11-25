@@ -60,22 +60,31 @@ test("a worker without the in-VM CLI that keeps working is not flagged stuck", a
   const sp = await cj(["spawn", run, "--profile", "worker", "--task", "[slower] make the failing test pass", "--key", "slow"]);
   const id = sp.j?.agentId;
   expect(id).toMatch(/^agt-/);
-  // Watch it while it works: past the 4 s stuck window (1.5 s let a loaded CI runner's output gaps read as stuck) it
-  // must carry an engine heartbeat and no stuck flag.
+  // Watch it while it works: past the 4 s stuck window it must carry an engine heartbeat and no stuck flag. Only the
+  // looks taken while its CLI works count: from its first log line to its last step (the log lines' own times). Before
+  // that its machine comes up and its checkout is cloned, after it its work is committed and pushed: nothing in the VM
+  // beats then, and on a slow runner either can outlast a 4 s window (at the default 5 minutes it never does).
   const t0 = Date.now();
   let seen = 0;
-  let flagged: string | undefined;
+  const looks: Array<{ from: number; to: number; stuck?: string }> = [];
   for (let i = 0; i < 200; i++) {
     await Bun.sleep(150);
+    const from = Date.now();
     const j = (await cj(["inspect", run, id])).j;
     if (j?.status !== "running") { if (j?.status && j.status !== "pending") break; continue; }
-    if (j.stuck) flagged = j.stuck;
+    looks.push({ from, to: Date.now(), ...(j.stuck ? { stuck: j.stuck } : {}) });
     if (Date.now() - t0 > 5000 && j.heartbeatAt) seen++;
   }
-  expect(flagged).toBeUndefined();
   expect(seen).toBeGreaterThan(0);
   const aw = await cj(["await", run, id, "--timeout-ms", "60000"]);
   expect(aw.j?.agents?.[0]?.status).toBe("done");
+  const lines: Array<{ at: number; stream: string; line: string }> = (await cj(["logs", run, id])).j?.lines ?? [];
+  const own = lines.filter((l) => l.stream === "agent" && !l.line.startsWith("[capcomd]"));
+  const steps = own.filter((l) => /^say step \d+$/.test(l.line));
+  expect(steps.length).toBe(40); // [slower]: 40 steps, 0.25 s apart
+  const working = looks.filter((l) => l.from >= own[0]!.at && l.to <= steps[steps.length - 1]!.at);
+  expect(working.length).toBeGreaterThan(5); // ~10 s of work, looked at every ~0.5 s
+  expect(working.filter((l) => l.stuck)).toEqual([]);
 }, 120_000);
 
 test("no change in the workspace (noChangeAfterMs): an agent that works but changes nothing is stopped as spinning", async () => {
