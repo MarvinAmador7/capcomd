@@ -35,6 +35,7 @@ on:
       - "src/utils/env.ts"
   # Run workflow on main warms the Swift build cache that PRs read.
   workflow_dispatch:
+  workflow_call:
 # A new revision of the same PR supersedes its previous results.
 concurrency:
   group: capcomd-menubar-${{ github.event.pull_request.number || github.run_id }}
