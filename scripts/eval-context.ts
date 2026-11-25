@@ -220,9 +220,12 @@ async function runStep(env: Record<string, string>, runId: string, step: Step, p
  *  attempt's own; null on a live one. */
 function deliveredPrompt(agentId: string): { brief: string[]; skills: string[] } | null {
   if (LIVE) return null;
+  // An agent keeps one directory across its attempts (`<workdir>/<agentId>`, ADR-026 §2; the last attempt's prompt is
+  // there); a runner without one used a directory per attempt (`<agentId>-e<epoch>`).
   const vm = common.CAPCOMD_AGENT_WORKDIR!, attempt = (d: string) => Number(d.slice(agentId.length + 2));
+  const stable = join(vm, agentId, "append-system.txt");
   const last = (existsSync(vm) ? readdirSync(vm) : []).filter((d) => d.startsWith(`${agentId}-e`)).sort((x, y) => attempt(x) - attempt(y)).pop();
-  const f = last ? join(vm, last, "append-system.txt") : null;
+  const f = existsSync(stable) ? stable : last ? join(vm, last, "append-system.txt") : null;
   const s = f && existsSync(f) ? readFileSync(f, "utf8") : "";
   return { brief: briefItems(s).map((i) => i.file), skills: skillBlocks(s) };
 }
