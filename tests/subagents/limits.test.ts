@@ -338,13 +338,13 @@ test("a usage limit pauses the agent with its work kept; other agents on the log
 test("waiting through a pause: a wait that ends while the agent is paused waits again (the run recipe's way)", async () => {
   rmSync(quotaLedger, { force: true });
   const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:15] short limit", "--key", "through"])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:30] short limit", "--key", "through"])).j?.agentId;
   await until(run, id, "paused");
   process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
   let pausedWaits = 0;
-  // The first 12 s wait ends while it is paused (its reset is 15 s from the pause); the next one sees it woken and done
-  // (a wait that ends while it runs again is a timeout like any other).
-  const r: any = await awaitThroughPauses(run, id, { timeoutMs: 12_000, onPaused: () => pausedWaits++ });
+  // The first 25 s wait ends while it is paused (its reset is 30 s from the pause); the next one sees it woken and done
+  // (a wait that ends while it runs again is a timeout like any other), with 20 s for the wake on a slow runner.
+  const r: any = await awaitThroughPauses(run, id, { timeoutMs: 25_000, onPaused: () => pausedWaits++ });
   // It woke by itself at the provider's reset while it was awaited.
   expect(r.agents[0]).toMatchObject({ status: "done", epoch: 2 });
   expect(pausedWaits).toBeGreaterThan(0);
