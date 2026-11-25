@@ -32,6 +32,8 @@ import { toRelayError, type ErrorCode } from "../core/errors";
 import type { FrontDoorOps, FrontOp } from "./front-door";
 
 export const HEARTBEAT_MS = 15_000;
+/** events.wait's look interval while its scope pushes its appends (a fallback for a tell lost while reconnecting). */
+export const WAIT_FALLBACK_MS = 5000;
 
 /** What a raw-bytes route serves a file as (see the routes). */
 export function servedType(bytes: Uint8Array, hint: string | null): { type: string; inline: boolean } {
@@ -67,7 +69,7 @@ export type GatewayHost = {
 	contributions: Pick<ContributionStore, "list">;
 };
 export type ServerOptions = {
-	source: HarnessSource; clients?: () => ClientRecord[]; plugins?: () => z.infer<typeof Plugins>["plugins"]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState;
+	source: HarnessSource; clients?: () => ClientRecord[]; plugins?: () => z.infer<typeof Plugins>["plugins"]; heartbeatMs?: number; pollMs?: number; waitFallbackMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState;
 	/** A plugin route's handler deadline (plugin API §4.7.3; default ROUTE_DEADLINE_MS). */
 	routeDeadlineMs?: number;
 	/** The plugin host behind GET /v1/plugins/{name}, the controls and the out-of-process protocol (absent: 404 / 409). */
@@ -154,6 +156,9 @@ export function harnessApp(o: ServerOptions) {
 	const clients = o.clients ?? (() => loadClients());
 	const heartbeatMs = o.heartbeatMs ?? HEARTBEAT_MS;
 	const pollMs = o.pollMs ?? 500;
+	// events.wait's look interval while its scope pushes appends: only a fallback. A server given its own pollMs (tests)
+	// keeps that one.
+	const waitFallbackMs = o.waitFallbackMs ?? o.pollMs ?? WAIT_FALLBACK_MS;
 	const activityMs = o.activityMs ?? ACTIVITY_MS;
 	const threadMs = o.threadMs ?? THREAD_MS;
 	const routeDeadlineMs = o.routeDeadlineMs ?? ROUTE_DEADLINE_MS;
@@ -176,6 +181,11 @@ export function harnessApp(o: ServerOptions) {
 	 * look reads every event after the cursor, so nothing appended between two looks is missed; the cursor ends at the
 	 * highest seq looked at. A run's log is read whole once (entitySeq counts from its start, as the plain replay's do),
 	 * then only what is new.
+	 *
+	 * A wait looks again as soon as its scope says it appended (the run scope's eventsChanged through the source's
+	 * subscribeEvents, the daemon's onDaemonEvent), subscribed before its first look: an append after that look tells it,
+	 * one before it is in it. A tell only says "look now"; the look still decides. A slow poll (waitFallbackMs) stays,
+	 * for a tell lost while the feed reconnects; with no push from the source, it polls every pollMs as before.
 	 */
 	const eventsPage = async (input: z.infer<typeof EventsQuery>, signal?: AbortSignal): Promise<z.infer<typeof EventsPage>> => {
 		let filter: EventFilter;
@@ -208,17 +218,36 @@ export function harnessApp(o: ServerOptions) {
 		};
 		// The daemon's events are kept in memory: read from the cursor. A run's whole log once, for entitySeq and `reached`.
 		if (scope === "daemon") read = after;
-		let events = await look();
-		if (events.length) return { events, cursor, reached: [], timedOut: false };
-		const reached = reachedStates(filter, agentsBefore, log, after);
-		if (reached.length) return { events: [], cursor, reached, timedOut: false };
-		while (Date.now() < deadline && !signal?.aborted) {
-			await new Promise((ok) => setTimeout(ok, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
-			if (signal?.aborted) break;
-			events = await look();
+		// Subscribed before the first look (a wait only): a tell that comes while no nap is waiting makes the next nap
+		// return at once, so one during a look isn't lost.
+		let told = false, wake: (() => void) | null = null;
+		const poke = () => { if (wake) { const w = wake; wake = null; w(); } else told = true; };
+		const unsubscribe = (input.wait ?? 0) > 0 && !signal?.aborted
+			? (scope === "daemon" ? state.onDaemonEvent?.(poke) : src.subscribeEvents?.(scope, poke)) ?? null
+			: null;
+		const napMs = unsubscribe ? waitFallbackMs : pollMs;
+		const nap = (ms: number) => new Promise<void>((ok) => {
+			if (told || signal?.aborted) { told = false; ok(); return; }
+			const t = setTimeout(() => { wake = null; ok(); }, ms);
+			wake = () => { clearTimeout(t); ok(); };
+		});
+		signal?.addEventListener("abort", poke);
+		try {
+			let events = await look();
 			if (events.length) return { events, cursor, reached: [], timedOut: false };
+			const reached = reachedStates(filter, agentsBefore, log, after);
+			if (reached.length) return { events: [], cursor, reached, timedOut: false };
+			while (Date.now() < deadline && !signal?.aborted) {
+				await nap(Math.max(1, Math.min(napMs, deadline - Date.now())));
+				if (signal?.aborted) break;
+				events = await look();
+				if (events.length) return { events, cursor, reached: [], timedOut: false };
+			}
+			return { events: [], cursor, reached: [], timedOut: input.wait !== undefined && input.wait > 0 };
+		} finally {
+			signal?.removeEventListener("abort", poke);
+			unsubscribe?.();
 		}
-		return { events: [], cursor, reached: [], timedOut: input.wait !== undefined && input.wait > 0 };
 	};
 	const router = {
 		// The kernel's features, then the flags active plugins added (x.<plugin>.<flag>, plugin API §4.7.3).

@@ -71,6 +71,13 @@ export interface HarnessSource {
 	agents(runId: string): Promise<O<typeof Agent>[] | null>;
 	/** Durable events of a run scope after `after` (legacy names; the server maps them to envelopes). */
 	events(runId: string, after: number): Promise<RawEvent[]>;
+	/**
+	 * Capability events.wait's push: `onAppend` is called after the run scope appends a durable event (committed: a read
+	 * then sees it), and whenever the feed (re)connects, since an append then may not have reached it. Only a "look now":
+	 * the waiter still reads the log after its cursor. The answer unsubscribes; null (or no hook) when this source can't
+	 * push, and the wait polls. Called only for a run that exists.
+	 */
+	subscribeEvents?(runId: string, onAppend: () => void): (() => void) | null;
 	transcript(runId: string, agentId: string, after: number, limit: number): Promise<O<typeof TranscriptItem>[] | null>;
 	attachment(runId: string, id: string): Promise<O<typeof Attachment> | null>;
 	/** An agent's thread items after `after` (seq), in write order; null when the run or agent is unknown. Its
@@ -195,7 +202,7 @@ export function envelopes(runId: string, evs: RawEvent[], projectId: string | nu
 export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
 	return evs.filter((e) => e.type === "MESSAGE_SENT" || e.type === "message.sent").map((e) => ({
 		seq: Number(e.data.seq), from: e.agentId ?? "operator", to: typeof e.data.to === "string" ? e.data.to : JSON.stringify(e.data.to), at: isoTs(e.at),
-		text: (e.data.text as string | null) ?? null, attachment: (e.data.attachment as any) ?? null,
+		text: (e.data.text as string | null) ?? null, attachment: (e.data.attachment as any) ?? null, ...(e.data.internal === true ? { internal: true as const } : {}),
 	}));
 }
 
@@ -288,7 +295,13 @@ export function memorySource(seed: Partial<{
 	brainProposals: Record<string, O<typeof BrainProposal>[]>;
 	brainFails: Record<string, string>;
 }> = {}): HarnessSource & {
-	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
+	/** Appends to a run's log (and tells its events.wait subscribers). */
+	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent;
+	/** Tells a run's events.wait subscribers its log grew (for a test that appends to a seeded log itself). */
+	notify(runId: string): void;
+	/** events.wait subscribers now listening, in all runs or in one. */
+	eventListeners(runId?: string): number;
+	decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
 	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[]; turn?: { model: string | null; effort: string | null } }>;
 	/** Machines deleted at a provider (an orphan's Delete), in order. */
@@ -356,7 +369,10 @@ export function memorySource(seed: Partial<{
 		},
 		...seed.surface,
 	});
-	const push = (runId: string, e: Omit<RawEvent, "seq">) => { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; };
+	// events.wait's push: subscribers by run, told after each append.
+	const listeners = new Map<string, Set<() => void>>();
+	const notify = (runId: string) => { for (const f of [...(listeners.get(runId) ?? [])]) f(); };
+	const push = (runId: string, e: Omit<RawEvent, "seq">) => { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); notify(runId); return r; };
 	// Agent state changes as the scope actor writes them (a running agent pauses at once here: there is no runner).
 	const STEP: Record<RunAction, { from: string[]; to: O<typeof AgentStatus>; type: string; data: (by: string) => Record<string, unknown>; noop: string }> = {
 		pause: { from: ["pending", "running"], to: "paused", type: "AGENT_PAUSED", data: (by) => ({ result: { limit: "paused", by }, until: null }), noop: "no pending or running agent to pause" },
@@ -396,6 +412,15 @@ export function memorySource(seed: Partial<{
 		decided,
 		created,
 		push,
+		notify,
+		eventListeners: (runId) => runId === undefined ? [...listeners.values()].reduce((n, l) => n + l.size, 0) : listeners.get(runId)?.size ?? 0,
+		subscribeEvents: (runId, onAppend) => {
+			// Each call its own subscription, even with the same function: the answer removes only it.
+			const f = () => onAppend();
+			const set = listeners.get(runId) ?? new Set<() => void>();
+			listeners.set(runId, set.add(f));
+			return () => { set.delete(f); if (!set.size && listeners.get(runId) === set) listeners.delete(runId); };
+		},
 		delivered,
 		destroyed,
 		brainSent,
@@ -433,7 +458,7 @@ export function memorySource(seed: Partial<{
 				const epoch = (epochs.get(`${runId}\u0000${to}`) ?? 1) + 1;
 				epochs.set(`${runId}\u0000${to}`, epoch);
 				push(runId, { at: Date.now(), type: "AGENT_CONTINUED", agentId: to, data: { epoch, from, by: "operator", messageSeq: seq } });
-				return { seq, note: `${to} was idle: this message is its next turn (it continues the same thread on a fresh machine)`, continued: true };
+				return { seq, note: `${to} was idle: this message is its next turn (it continues the same thread, on its parked machine if it has one, else a fresh one)`, continued: true };
 			}
 			return { seq, note: null };
 		},

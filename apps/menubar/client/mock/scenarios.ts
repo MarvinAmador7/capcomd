@@ -467,7 +467,7 @@ Bun.serve({
       setTimeout(() => threadWrite(run, agent.id, say), 2500);
       setTimeout(() => threadWrite(run, agent.id, call), 3500);
       setTimeout(() => threadWrite(run, agent.id, { ...call, rev: 2, status: "done", durationMs: 2300, tool: { ...call.tool, output: "42 pass\n0 fail" } }), 5800);
-      return Response.json({ runId: run.id, to: agent.id, from: "operator", seq: mseq, note: idle ? `${agent.id} was idle: this message is its next turn (it continues the same thread on a fresh machine)` : null, ...(idle ? { continued: true } : {}) });
+      return Response.json({ runId: run.id, to: agent.id, from: "operator", seq: mseq, note: idle ? `${agent.id} was idle: this message is its next turn (it continues the same thread, on its parked machine if it has one, else a fresh one)` : null, ...(idle ? { continued: true } : {}) });
     }
     if (p === "/v1/runs" && req.method === "POST") {   // runs.create (harness #49): accepted, starts nothing here
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");

@@ -45,6 +45,8 @@ export function harnessState(path: string | null = defaultStatePath(), opts: { n
 		writeFileSync(tmp, JSON.stringify(d), { mode: 0o600 });
 		renameSync(tmp, path);
 	};
+	// Capability events.wait's push for the daemon scope: told after each daemon event is recorded.
+	const daemonListeners = new Set<() => void>();
 	{
 		const maxSeq = Math.max(0, ...Object.values(d.runSeq), ...(d.daemonEvents ?? []).map((e) => e.seq));
 		const fixSeq = !(d.nextSeq > maxSeq);
@@ -78,8 +80,18 @@ export function harnessState(path: string | null = defaultStatePath(), opts: { n
 			const ev: DaemonEvent = { seq: d.nextSeq++, at: now(), type: e.type, entity: e.entity, entitySeq: (seqs[e.entity] = (seqs[e.entity] ?? 0) + 1), text: e.text, data: e.data };
 			d.daemonEvents = [...(d.daemonEvents ?? []), ev].slice(-DAEMON_EVENTS_MAX);
 			save();
+			for (const f of [...daemonListeners]) try { f(); } catch { /* a listener's failure isn't the recorder's */ }
 			return ev;
 		},
+		/** Calls `onAppend` after each daemon event is recorded (events.wait's push: a "look now", not the event); the
+		 *  answer unsubscribes. */
+		onDaemonEvent(onAppend: () => void): () => void {
+			const f = () => onAppend();
+			daemonListeners.add(f);
+			return () => { daemonListeners.delete(f); };
+		},
+		/** How many onDaemonEvent subscribers are listening. */
+		daemonListeners: () => daemonListeners.size,
 		/** The daemon's own events after `after` (seq), oldest first. */
 		daemonEvents: (after = 0): DaemonEvent[] => (d.daemonEvents ?? []).filter((e) => e.seq > after),
 		/** Confirmed deletion (a run.deleted lifecycle event was seen): drop the run's seq. The seq is never reused. */

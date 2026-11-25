@@ -11,13 +11,16 @@ const runId = process.argv[2];
 if (!runId) { console.error("usage: vm-cleanup-check.ts <runId>"); process.exit(2); }
 const endpoint = process.env.CAPCOMD_ENDPOINT ?? "http://127.0.0.1:6420";
 const client: any = createClient({ endpoint });
-const agents: Array<{ agentId: string }> = await client.scope.getOrCreate([runId]).listAgents({}).catch(() => []);
-const workerIds = [`${runId}-worker-1`, ...agents.map((a) => a.agentId)];
-const workers = await Promise.all(workerIds.map(async (workerId) => {
-  const w = await client.worker.getOrCreate([runId, workerId]).getWorker({ workerId }).catch(() => null);
-  return { workerId, state: w?.state ?? "missing", context: w?.context ?? null };
+const agents: Array<{ agentId: string; epoch?: number }> = await client.scope.getOrCreate([runId]).listAgents({}).catch(() => []);
+// Each attempt of an agent has its own worker (ADR-026: a message continues an idle agent as its next epoch, whose
+// worker is keyed `[run, agent, e<N>]`); only the first is created here when missing, as before.
+const slots: Array<{ workerId: string; key: string[]; create: boolean }> = [{ workerId: `${runId}-worker-1`, key: [runId, `${runId}-worker-1`], create: true }];
+for (const a of agents) for (let e = 1; e <= Number(a.epoch ?? 1); e++) slots.push({ workerId: a.agentId, key: e > 1 ? [runId, a.agentId, `e${e}`] : [runId, a.agentId], create: e === 1 });
+const workers = await Promise.all(slots.map(async ({ workerId, key, create }) => {
+  const w = await (create ? client.worker.getOrCreate(key) : client.worker.get(key)).getWorker({ workerId }).catch(() => null);
+  return { workerId, label: key.slice(1).join("/"), state: w?.state ?? "missing", context: w?.context ?? null };
 }));
-for (const w of workers) if (w.state !== "missing" || w.workerId.endsWith("-worker-1")) console.log(`worker ${w.workerId}: state=${w.state} vm=${w.context?.vmId ?? "none"}`);
+for (const w of workers) if (w.state !== "missing" || w.workerId.endsWith("-worker-1")) console.log(`worker ${w.label}: state=${w.state} vm=${w.context?.vmId ?? "none"}`);
 const { keys, vmIds } = runVmKeys(runId, workers);
 const names = keys.map((k) => vmNameFor(k));
 console.log(`checking ${names.length} VM name(s) for ${agents.length} agent(s)`);
