@@ -1,6 +1,6 @@
 ---
 name: commits-and-releases
-description: capcomd's standard for commits, pull requests, changelog entries and cutting a GitHub release (rc and stable). Use when committing, opening or merging a PR, writing a CHANGELOG line, or when a maintainer asks to cut, tag or ship a release.
+description: capcomd's standard for commits, pull requests, change notes and the release cycle (alpha, beta, rc, stable; tagging, watching and verifying a release). Use when committing, opening or merging a PR, writing a change note, or when a maintainer asks to cut, tag, promote or ship a release.
 ---
 # Commits, PRs and releases in capcomd
 
@@ -29,17 +29,22 @@ this file in the same PR).
   checklist); add how it was tested (commands run and results, failures included).
 - Before saying it's done: `bun run typecheck`, `bun run test:fast`, and for anything under `src/`
   `bun run test:scenarios`. Report a failure as a failure.
-- Anything a user would notice gets a line under `## Unreleased` in `CHANGELOG.md` in the same PR (below).
+- Anything a user would notice gets a change note in `changes/` in the same PR (below).
 - Merge only with green CI. If another PR merged since your last green run, merge `main` into yours and re-run CI
   first: PRs that pass alone have broken `main` together.
 - Don't touch `version` in `package.json` or the plugin manifests outside a release PR.
 
-## Changelog entries
+## Change notes (what becomes the changelog)
 
-- Under `## Unreleased`, one bullet per user-visible change (command, flag, output, behavior, fix, removal), written
-  for the user: what changed and how to use it, not how it's built. Lead with the command or surface.
+- Don't edit `CHANGELOG.md` in a PR. Add one file per change, `changes/<slug>.md`, with a `# CHANGELOG` list (and a
+  `# Spec` section when the plugin spec changes): [changes/README.md](../../../changes/README.md). Parallel PRs then
+  never conflict over the changelog. `bun scripts/changes.ts --check` validates them (CI runs it).
+- One bullet per user-visible change (command, flag, output, behavior, fix, removal), written for the user: what
+  changed and how to use it, not how it's built. Lead with the command or surface.
 - Breaking changes start with **Breaking:** and say what to do instead.
-- Internal refactors, tests and CI-only changes get no entry.
+- Internal refactors, tests and CI-only changes get no note.
+- At a release, `bun scripts/changes.ts fold` moves every note into `CHANGELOG.md` under `## Unreleased` (and the
+  spec's §18) and deletes the files; `scripts/release-notes.ts` refuses a release while `changes/` still has notes.
 
 ## Release standard (CLI and apps)
 
@@ -115,13 +120,16 @@ Only when a maintainer asks. Open the release PR with
 move/delete a published tag by hand. Fix forward with a patch.
 
 1. **Pick the version.** Start from up-to-date `main` with green CI (`gh run list --branch main -L 3`). Read
-   `## Unreleased`. While 0.x: breaking change or notable feature → minor bump; fixes only → patch. Release
+   `## Unreleased` and the pending notes (`bun scripts/changes.ts`). While 0.x: breaking change or notable feature → minor bump; fixes only → patch. Release
    candidate: `X.Y.Z-rc.N` (publishes as a prerelease, npm `next`). Confirm the number with the maintainer.
-2. **Release PR** titled `release: vX.Y.Z`, changing only:
+2. **Release PR** titled `release: vX.Y.Z`. First `bun scripts/changes.ts fold` (the notes into `CHANGELOG.md`), then
+   change only:
    - `version` in `package.json`, `plugins/capcomd/.claude-plugin/plugin.json`,
      `plugins/capcomd/.codex-plugin/plugin.json`;
-   - `CHANGELOG.md`: `## Unreleased` → `## X.Y.Z (YYYY-MM-DD)` (today), a one-line summary under it, and a new empty
-     `## Unreleased` above;
+   - `CHANGELOG.md`: `## Unreleased` → `## X.Y.Z (YYYY-MM-DD)` (today), a one-line summary under it (it starts with
+     the stage for a prerelease: `Release candidate: …`), and a new empty `## Unreleased` above. Edit the folded
+     bullets into release notes a user reads top to bottom: lead with what changes in their day, group related
+     notes, and list behavior changes to watch for;
    - docs that pin a version.
 3. **Check locally:** `bun scripts/release-notes.ts --check` and `bun scripts/release-notes.ts vX.Y.Z` (must print
    the notes). Optional: `bun pm pack && scripts/release-smoke.sh capcomd-X.Y.Z.tgz X.Y.Z`.
@@ -141,6 +149,14 @@ move/delete a published tag by hand. Fix forward with a patch.
    run `capcomd --version`; for a stable release, check `latest` on GitHub and npm point at it.
 9. **After a stable release on npm** the maintainer's standing preference: update the local install
    (`bun add -g capcomd@X.Y.Z`, check the Rivet pins, kickstart launchd, probe).
+
+## Promoting an rc to stable
+
+When the last rc found nothing blocking (its live e2e passed, no blocker reported): a release PR `release: vX.Y.Z`
+from `main` with **no code change since that rc**, only the version (`X.Y.Z-rc.N` → `X.Y.Z`) and a `CHANGELOG.md`
+section `## X.Y.Z (date)` whose summary says "Stable release of X.Y.Z-rc.N, no code changes since" (keep the rc's
+bullets under it, or point to them). Any code change at all means another rc (`-rc.N+1`) first. Then tag and verify as
+above; stable is the one that updates `latest` on npm and the Homebrew formula.
 
 ## Never
 

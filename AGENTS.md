@@ -28,6 +28,11 @@ rules an agent must follow in this repository; `CLAUDE.md` imports it.
 
 ## Releases
 
+The full cycle (which stage to flag: alpha, beta, rc or stable; the release PR; tagging; watching the workflow;
+verifying what shipped; promoting an rc to stable) is the checklist in
+[.claude/skills/commits-and-releases/SKILL.md](.claude/skills/commits-and-releases/SKILL.md): every agent follows it,
+not only Claude. This section holds the rules; where the two disagree, this file wins.
+
 Releases follow [Semantic Versioning](https://semver.org) and a [Keep a Changelog](https://keepachangelog.com)
 style changelog, and are built only by CI from a tag (`.github/workflows/release.yml`). Cut one only when a
 maintainer asks for it.
