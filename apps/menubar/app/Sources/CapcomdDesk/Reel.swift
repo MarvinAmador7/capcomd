@@ -1227,7 +1227,11 @@ struct EventEntry: View {
   let item: ThreadItem
   let proseWidth: CGFloat?
   var body: some View {
-    ThreadItemView(runId: runId, agentId: agentId, item: item).padding(.bottom, Theme.Content.proseBottom).modifier(ProseColumn(proseWidth))
+    if case .question(let line) = item.kind {
+      QuestionLineRow(runId: runId, agentId: agentId, line: line, proseWidth: proseWidth)
+    } else {
+      ThreadItemView(runId: runId, agentId: agentId, item: item).padding(.bottom, Theme.Content.proseBottom).modifier(ProseColumn(proseWidth))
+    }
   }
 }
 

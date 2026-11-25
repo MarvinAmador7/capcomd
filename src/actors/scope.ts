@@ -85,18 +85,42 @@ async function putItemTx(tx: RawAccess, agentId: string, it: ItemDraft): Promise
 
 /**
  * ADR-026 §4 and §1 (the thread is the record): a question's item in its asker's thread, at the question's current
- * state (open, passed up, answered, withdrawn; each change a new rev of the same item), and, once an agent answered it,
- * that agent's own copy in its thread. In the caller's transaction. `replaces`: whose answer a person's answer replaced.
+ * state (open, passed up, answered, withdrawn; each change a new rev of the same item), and one in the thread of every
+ * other agent it concerns, at the same state: each agent it was asked of (its parent, then each one it was passed up
+ * to), an agent that answered it (or whose answer a person's replaced), and, once it is the user's, the asker's root
+ * agent (the thread the user reads). One item per (thread, question); another agent's is placed when the question
+ * reached it. In the caller's transaction. `replaces`: whose answer a person's answer replaced.
  */
 async function putQuestionItemTx(tx: RawAccess, questionId: string | null, o: { replaces?: string | null } = {}): Promise<void> {
   if (!questionId) return;
   const r = (await tx.execute("SELECT * FROM questions WHERE question_id = ?", questionId)) as any[];
   if (!r.length) return;
   const q = questionRow(r[0]);
-  const prev = ((await tx.execute("SELECT rev FROM agent_items WHERE id = ?", `itm-${q.agentId}-question-${q.questionId}`)) as any[])[0];
-  await putItemTx(tx, q.agentId, questionItem(q, { rev: prev ? Number(prev.rev) + 1 : 1, replaces: o.replaces ?? null }));
-  const by = q.answeredBy;
-  if (q.state === "answered" && by && by !== q.agentId && by.startsWith("agt-")) await putItemTx(tx, by, questionItem(q, { rev: 1, answerer: by }));
+  const prevOf = async (id: string) => ((await tx.execute("SELECT rev, at FROM agent_items WHERE id = ?", id)) as any[])[0] as { rev: number; at: number } | undefined;
+  const mine = await prevOf(`itm-${q.agentId}-question-${q.questionId}`);
+  await putItemTx(tx, q.agentId, questionItem(q, { rev: mine ? Number(mine.rev) + 1 : 1, replaces: o.replaces ?? null }));
+  const holders = new Set<string>([...q.passed, ...(q.to ? [q.to] : [])]);
+  for (const a of [q.state === "answered" ? q.answeredBy : null, o.replaces ?? null]) if (a && a.startsWith("agt-")) holders.add(a);
+  if (!q.to) { const root = await rootOf(tx, q.agentId); if (root) holders.add(root); }
+  holders.delete(q.agentId);
+  const first = q.passed[0] ?? q.to;
+  for (const h of holders) {
+    const prev = await prevOf(`itm-${h}-asked-${q.questionId}`);
+    const at = prev ? Number(prev.at) : h === first ? q.askedAt : Date.now();
+    await putItemTx(tx, h, questionItem(q, { rev: prev ? Number(prev.rev) + 1 : 1, replaces: o.replaces ?? null, holder: h, at }));
+  }
+}
+
+/** The top of an agent's tree (the run's root agent it descends from; itself when it has no parent). */
+async function rootOf(tx: RawAccess, agentId: string): Promise<string | null> {
+  let cur = agentId;
+  for (let i = 0; i < 64; i++) {
+    const r = (await tx.execute("SELECT parent FROM agents_v2 WHERE agent_id = ?", cur)) as any[];
+    if (!r.length) return null;
+    if (!r[0].parent) return cur;
+    cur = r[0].parent;
+  }
+  return cur;
 }
 
 /** A stored thread item as the routes serve it. */

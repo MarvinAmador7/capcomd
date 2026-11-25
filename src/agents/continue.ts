@@ -25,7 +25,10 @@ export type ContinueMessage = { seq: number; from: string; body: string; skills?
 export type ContinueItem = {
   kind: string; text: string; at?: string; tool?: { name?: string; summary?: string } | null; child?: { agentId?: string; status?: string } | null;
   /** Kind question (ADR-026 §4): the question and what became of it. */
-  question?: { asker?: string; state?: string; question?: string; options?: Array<{ label?: string; recommended?: boolean }>; answer?: string | null; recommended?: boolean | null; by?: string | null; note?: string | null } | null;
+  question?: {
+    asker?: string; state?: string; question?: string; options?: Array<{ label?: string; recommended?: boolean }>; answer?: string | null; recommended?: boolean | null;
+    by?: string | null; note?: string | null; to?: string | null; passedBy?: string[]; replaces?: string | null;
+  } | null;
 };
 /** What the scope gives a continued attempt (scope action `continuation`). */
 export interface Continuation {
@@ -99,10 +102,24 @@ export function wakePrompt(messages: ContinueMessage[]): string {
 /** Who answered, as the asker reads it in its rebuilt thread. */
 const answerer = (by: string) => (/^(agt-|wake-|job-|capcomd)/.test(by) ? by : "the user");
 
-/** A question (kind question) as the prompt says it: the asker's own, or one this agent answered for a child. */
+/**
+ * A question (kind question) as the prompt says it: the agent's own, or another agent's that reached it (asked of it,
+ * passed up by it, answered by it, or the user's while it is the root).
+ */
 function questionLine(q: NonNullable<ContinueItem["question"]>, self: string): string {
   const rec = q.options?.find((o) => o.recommended)?.label;
-  if (q.asker && q.asker !== self) return `you answered ${q.asker}'s question "${one(q.question ?? "")}": ${one(q.answer ?? "")}${q.note ? ` (your note: ${one(q.note)})` : ""}`;
+  if (q.asker && q.asker !== self) {
+    const passed = q.passedBy ?? [];
+    const ofSelf = passed.includes(self) || q.to === self;
+    const head = `${q.asker} asked ${ofSelf ? "you" : q.to ? q.to : "the user"}: ${one(q.question ?? "")}${rec ? ` (they recommended: ${one(rec)})` : ""}`;
+    if (q.state === "answered") {
+      const who = q.by === self ? "you" : answerer(q.by ?? "");
+      return `${head}; ${who} answered: ${one(q.answer ?? "")}${q.note ? ` (${q.by === self ? "your" : "their"} note: ${one(q.note)})` : ""}${q.replaces === self ? " (it replaced your answer)" : ""}`;
+    }
+    if (q.state === "withdrawn") return `${head}; the question was withdrawn (${q.asker} was cancelled)`;
+    if (q.to === self) return `${head}; not answered yet`;
+    return `${head}; ${passed.includes(self) ? "you passed it up" : "it was passed up"} to ${q.to ?? "the user"}, not answered yet`;
+  }
   const asked = `you asked: ${one(q.question ?? "")}${rec ? ` (you recommended: ${one(rec)})` : ""}`;
   if (q.state === "answered") return `${asked}; ${answerer(q.by ?? "")} answered: ${one(q.answer ?? "")}${q.recommended === false ? " (not your recommendation)" : ""}${q.note ? `; their note: ${one(q.note)}` : ""}`;
   if (q.state === "withdrawn") return `${asked}; the question was withdrawn`;

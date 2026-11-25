@@ -130,14 +130,16 @@ export async function openQuestion(tx: RawAccess, agentId: string): Promise<Ques
 
 /**
  * ADR-026 §1 (the thread is the record): the question as a thread item (kind `question`). In the asker's thread its id
- * is the same from the ask to the answer (each change a new rev); `answerer` writes the copy in the thread of an agent
- * that answered it, as it answered. `replaces`: the agent whose answer a person's answer replaced.
+ * is the same from the ask to the answer (each change a new rev). `holder`: another agent's thread that keeps it (one it
+ * was asked of, one that answered it, or the asker's root when it is the user's): `itm-<holder>-asked-<qst>`, the same
+ * question at the same state, placed at `at` (when it reached that agent). `replaces`: the agent whose answer a person's
+ * answer replaced.
  */
-export function questionItem(q: QuestionRow, o: { rev: number; replaces?: string | null; answerer?: string }): ItemDraft {
+export function questionItem(q: QuestionRow, o: { rev: number; replaces?: string | null; holder?: string; at?: number }): ItemDraft {
   const iso = (ms: number | null) => (ms == null ? null : new Date(ms).toISOString());
   const answered = q.state === "answered";
   return questionDraft({
-    id: o.answerer ? `itm-${o.answerer}-answered-${q.questionId}` : `itm-${q.agentId}-question-${q.questionId}`, rev: o.rev, at: o.answerer ? q.answeredAt ?? Date.now() : q.askedAt,
+    id: o.holder ? `itm-${o.holder}-asked-${q.questionId}` : `itm-${q.agentId}-question-${q.questionId}`, rev: o.rev, at: o.holder ? o.at ?? Date.now() : q.askedAt,
     question: {
       questionId: q.questionId, asker: q.agentId, state: q.state, question: q.question, options: q.options.map((label, i) => ({ label, recommended: i === 0 })),
       why: q.why, holds: q.holds, to: q.to, passedBy: q.passed,
@@ -145,6 +147,7 @@ export function questionItem(q: QuestionRow, o: { rev: number; replaces?: string
       by: answered ? q.answeredBy : null, note: answered ? q.note : null, replaces: answered ? o.replaces ?? null : null,
       reason: q.state === "withdrawn" ? "cancelled" : null, askedAt: iso(q.askedAt)!, decidedAt: q.state === "open" ? null : iso(q.answeredAt),
     },
+    holder: !!o.holder,
   });
 }
 

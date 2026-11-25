@@ -144,11 +144,13 @@ const saidText = (what: string) => z.string().meta({ "x-untrusted": true, descri
 /**
  * Capability agents.ask (ADR-026 §4, §1 "the thread is the record"): a question an agent asked and stopped on, and what
  * became of it, as a `question` item keeps it. One item per question in the asker's thread (written when it asks, a new
- * rev when it is passed up, answered or withdrawn), and one in the thread of an agent that answered it.
+ * rev when it is passed up, answered or withdrawn), and one, at the same state, in the thread of every other agent it
+ * concerns: each agent it was asked of (`itm-<agent>-asked-<qst>`, placed when it reached that agent), one that
+ * answered it, and the asker's root agent once it is the user's. One item per (thread, question).
  */
 export const ThreadQuestion = z.object({
 	questionId: z.string().describe("qst-…: the question's id, as agent.asked and its approval's subject.questionId carry it"),
-	asker: z.string().describe("The agent that asked (agt-…): this thread's agent, or the asker when this is the answering agent's item"),
+	asker: z.string().describe("The agent that asked (agt-…). Not this thread's agent: the question reached this one (it was asked of it or passed up by it, it answered it, or it is the asker's root and the question is the user's)"),
 	state: z.enum(QUESTION_STATES).describe("open: waiting for its answer (the approval of kind question is pending); answered; withdrawn: its agent was cancelled before it was answered"),
 	question: agentText("the question"),
 	options: z.array(z.object({ label: agentText("an option"), recommended: z.boolean() })).describe("The recommended answer first, then the asker's other options"),
@@ -195,7 +197,7 @@ export const ThreadItem = z.object({
 			.describe("A reviewer's verdict, when the child was one. The blocks then start with a paragraph that says it (\"Passed review\" / \"Didn't pass review\"), then the reasons as a list, for clients that don't read this field"),
 		handback: Handback.optional().describe("Capability agents.handback_typed: the child's typed hand-back (handback@1), when it gave one. The blocks still say it in Markdown (the outcome line, then a bullet per changed file, check, risk and decision), for clients that don't read this field"),
 	}).nullable().describe("handoff: the child agent that handed back (its summary is the blocks; artifacts are links and media)"),
-	question: ThreadQuestion.optional().describe("Capability agents.ask, kind question: the question and what became of it (open, answered, withdrawn), so the thread alone rebuilds its card or its one-line record after any reconnect or restart. `text` says the same in words for clients that don't read this field. Absent on other kinds"),
+	question: ThreadQuestion.optional().describe("Capability agents.ask, kind question: the question and what became of it (open, answered, withdrawn), so the thread alone rebuilds its card, its one-line record, or (in another agent's thread: `asker` isn't this agent) its line there, after any reconnect or restart. `text` says the same in words for clients that don't read this field. Absent on other kinds"),
 	internal: z.boolean().optional().describe("Capability agents.thread_internal: the item is bookkeeping (a wake armed, a check-in booked, a wait on other agents, a poll of the agent's own state, a CLI system event such as a retried model request): recorded, and left out of GET …/thread, …/thread/tail and live frames unless asked for with `internal=true`. Absent: not bookkeeping"),
 });
 export type ThreadItemT = z.infer<typeof ThreadItem>;

@@ -11,13 +11,24 @@ import CapcomdBot
 /// answers, only while its column has focus and no text field takes the keys (`DeskModel.returnApproves`), as the
 /// decision bar's Return. Asked of an agent, the card is neutral and says the agent may answer; asked of you, the
 /// column's amber ring says so. Once answered it goes, and the thread keeps its one line (AnsweredLine).
+///
+/// The same card, not a copy, is what another agent's thread shows for the question (QuestionLine): in a popover from
+/// its line's Answer, or in place of the line in the run's root thread when the question is the user's.
 struct QuestionCard: View {
+  /// Where the card is: docked at the asker's column foot, in a thread in place of a line (the root's, for you), or in
+  /// the popover from a line's Answer (`done` closes it once answered, or when Something else… hands over to the box).
+  enum Placement {
+    case docked, inline
+    case popover(done: () -> Void)
+    var isPopover: Bool { if case .popover = self { return true }; return false }
+  }
   @Environment(DeskModel.self) private var model
   @Environment(\.deskPane) private var inPane
   @Environment(\.needsReel) private var inNeeds
   @Environment(\.paneState) private var pane
   let card: QuestionCardModel
   let focused: Bool
+  var placement: Placement = .docked
   /// The option picked (0: the recommended one, first); `options.count`: Something else….
   @State private var picked = 0
   @State private var whyOpen = false
@@ -25,7 +36,8 @@ struct QuestionCard: View {
   var body: some View {
     DeskProbe.body("QuestionCard", id: card.askerId)
     let expanded = inPane && pane?.expanded == true
-    let keys = focused && model.returnApproves && (model.needs.isOpen ? inNeeds : !inNeeds && model.nav.sidebarOpen == inPane) && !card.sending
+    // In a popover the card has the keys to itself while it is up.
+    let keys = !card.sending && (placement.isPopover || focused && model.returnApproves && (model.needs.isOpen ? inNeeds : !inNeeds && model.nav.sidebarOpen == inPane))
     return VStack(alignment: .leading, spacing: 6) {
       who
       Text(verbatim: card.question.plain).font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.AskCard.t1)
@@ -67,11 +79,10 @@ struct QuestionCard: View {
       }
     }
     .padding(.horizontal, 16).padding(.vertical, 14)
-    .frame(maxWidth: inPane ? (expanded ? PaneMetrics.reading : Theme.Desk.paneReading) : .infinity, alignment: .leading)
+    .frame(maxWidth: inPane && !placement.isPopover ? (expanded ? PaneMetrics.reading : Theme.Desk.paneReading) : .infinity, alignment: .leading)
     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.AskCard.card))
     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.AskCard.line, lineWidth: 0.5))
-    .padding(.horizontal, expanded ? 20 : 12).padding(.top, 4).padding(.bottom, inPane ? 8 : 0)
-    .frame(maxWidth: .infinity)
+    .modifier(CardPlacement(placement: placement, expanded: expanded, inPane: inPane))
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Question from \(card.askerName)")
   }
@@ -129,7 +140,66 @@ struct QuestionCard: View {
   private func answer() {
     guard picked < card.options.count else { somethingElse(); return }
     model.answer(card, with: card.options[picked].label.plain)
+    if case .popover(let done) = placement { done() }
   }
-  private func somethingElse() { model.focusBox(card.askerId) }
+  private func somethingElse() {
+    if case .popover(let done) = placement { done() }
+    model.focusBox(card.askerId)
+  }
+}
+
+/// The card's margins where it is: docked, its column's inset above the box; in a thread, the thread's own; in a
+/// popover, the popover's.
+private struct CardPlacement: ViewModifier {
+  let placement: QuestionCard.Placement
+  let expanded: Bool
+  let inPane: Bool
+  func body(content: Content) -> some View {
+    switch placement {
+    case .docked: content.padding(.horizontal, expanded ? 20 : 12).padding(.top, 4).padding(.bottom, inPane ? 8 : 0).frame(maxWidth: .infinity)
+    case .inline: content.frame(maxWidth: .infinity, alignment: .leading)
+    case .popover: content.padding(10)
+    }
+  }
+}
+
+/// Another agent's question in this thread (QuestionLine, capability agents.ask): its compact line, whose Answer opens
+/// the asker's card in a popover anchored to the line (the same card, answering the same way: the user's answer wins);
+/// in the run's root thread, when the question is the user's, the card itself in the line's place.
+struct QuestionLineRow: View {
+  @Environment(DeskModel.self) private var model
+  let runId: String
+  let agentId: String
+  let line: QuestionLine
+  let proseWidth: CGFloat?
+  @State private var open = false
+
+  var body: some View {
+    DeskProbe.body("QuestionLineRow", id: agentId)
+    return Group {
+      if line.forYou, let card = line.card {
+        QuestionCard(card: card, focused: model.agent(agentId)?.focused ?? false, placement: .inline)
+          .padding(.bottom, Theme.Content.proseBottom)
+      } else {
+        QuestionLineView(runId: runId, line: line) {
+          if let card = line.card {
+            Button("Answer") { open = true }
+              .buttonStyle(DeskButton(kind: .outline)).disabled(card.sending).opacity(card.sending ? 0.5 : 1)
+              .help("Answer \(card.askerName)'s question: your answer wins")
+          }
+        }
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+          if let card = line.card {
+            QuestionCard(card: card, focused: true, placement: .popover(done: { open = false }))
+              .environment(model).environment(\.deskPane, false).environment(\.needsReel, false)
+              .frame(width: 432)
+          }
+        }
+        // Answered anywhere else, the popover goes with the open line.
+        .onChange(of: line.isOpen) { _, o in if !o { open = false } }
+      }
+    }
+    .modifier(ProseColumn(proseWidth))
+  }
 }
 #endif

@@ -40,27 +40,49 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
   public struct Question: Sendable, Hashable, Decodable {
     public enum State: String, Sendable, Hashable { case open, answered, withdrawn }
     public var questionId: String
-    /// The agent that asked: this thread's agent, or (an answering agent's copy) the asker.
+    /// The agent that asked: this thread's agent, or (another agent's item: one it was asked of, one that answered it,
+    /// or the asker's root once it is the user's) the asker.
     public var asker: String
     public var state: State
     public var question: String
+    /// The recommended answer first, then the asker's other options.
+    public var options: [Option]
+    /// The asker's reason for its recommendation; what waits on the answer.
+    public var why: String?
+    public var holds: String?
     /// Who it is asked of now (an agent), nil: the user.
     public var to: String?
+    /// The agents that passed it up, in order.
+    public var passedBy: [String]
     public var answer: String?
     /// Answered: whether it was the recommended answer.
     public var recommended: Bool?
     /// Who answered: an agent (agt-…) or a person (operator, driver, client:<id>).
     public var by: String?
     public var note: String?
+    /// Answered: the agent whose earlier answer a person's answer replaced.
+    public var replaces: String?
     public var askedAt: String
     /// When it was answered or withdrawn.
     public var decidedAt: String?
-    public init(questionId: String, asker: String, state: State, question: String, to: String? = nil, answer: String? = nil, recommended: Bool? = nil,
-                by: String? = nil, note: String? = nil, askedAt: String, decidedAt: String? = nil) {
-      self.questionId = questionId; self.asker = asker; self.state = state; self.question = question; self.to = to; self.answer = answer
-      self.recommended = recommended; self.by = by; self.note = note; self.askedAt = askedAt; self.decidedAt = decidedAt
+    public struct Option: Sendable, Hashable, Decodable {
+      public var label: String
+      public var recommended: Bool
+      public init(label: String, recommended: Bool) { self.label = label; self.recommended = recommended }
+      enum CodingKeys: String, CodingKey { case label, recommended }
+      public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        label = clean(try c.decode(String.self, forKey: .label)); recommended = (try? c.decodeIfPresent(Bool.self, forKey: .recommended)) ?? false
+      }
     }
-    enum CodingKeys: String, CodingKey { case questionId, asker, state, question, to, answer, recommended, by, note, askedAt, decidedAt }
+    public init(questionId: String, asker: String, state: State, question: String, options: [Option] = [], why: String? = nil, holds: String? = nil,
+                to: String? = nil, passedBy: [String] = [], answer: String? = nil, recommended: Bool? = nil,
+                by: String? = nil, note: String? = nil, replaces: String? = nil, askedAt: String, decidedAt: String? = nil) {
+      self.questionId = questionId; self.asker = asker; self.state = state; self.question = question; self.options = options; self.why = why
+      self.holds = holds; self.to = to; self.passedBy = passedBy; self.answer = answer
+      self.recommended = recommended; self.by = by; self.note = note; self.replaces = replaces; self.askedAt = askedAt; self.decidedAt = decidedAt
+    }
+    enum CodingKeys: String, CodingKey { case questionId, asker, state, question, options, why, holds, to, passedBy, answer, recommended, by, note, replaces, askedAt, decidedAt }
     public init(from d: Decoder) throws {
       let c = try d.container(keyedBy: CodingKeys.self)
       questionId = try c.decode(String.self, forKey: .questionId); asker = try c.decode(String.self, forKey: .asker)
@@ -69,8 +91,12 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
       }
       state = st
       question = clean(try c.decode(String.self, forKey: .question)); to = try c.decodeIfPresent(String.self, forKey: .to)
+      options = (try? c.decodeIfPresent([Option].self, forKey: .options)) ?? []
+      why = try c.decodeIfPresent(String.self, forKey: .why).map(clean); holds = try c.decodeIfPresent(String.self, forKey: .holds).map(clean)
+      passedBy = (try? c.decodeIfPresent([String].self, forKey: .passedBy)) ?? []
       answer = try c.decodeIfPresent(String.self, forKey: .answer).map(clean); recommended = try c.decodeIfPresent(Bool.self, forKey: .recommended)
       by = try c.decodeIfPresent(String.self, forKey: .by); note = try c.decodeIfPresent(String.self, forKey: .note).map(clean)
+      replaces = try c.decodeIfPresent(String.self, forKey: .replaces)
       askedAt = try c.decode(String.self, forKey: .askedAt); decidedAt = try c.decodeIfPresent(String.self, forKey: .decidedAt)
     }
     /// `decidedAt` as epoch milliseconds.

@@ -69,6 +69,85 @@ package struct WithdrawnLine: View {
   }
 }
 
+/// Another agent's question in this thread (capability agents.ask; QuestionLine): one compact row in thread v2's row
+/// language, where the question reached this agent. The asker's bot and name (a click opens the asker, as a hand-back's
+/// who line does) and "asked: <question>" at 62 % on one line; under the words, what became of it: "waiting on planner"
+/// with `accessory` on the right (the desktop's Answer), "passed up to you", "withdrawn", or "You answered 500 req/min
+/// — not the recommendation" with the blue tick and the note under it. Every string but the words around them is
+/// someone's: plain text only.
+package struct QuestionLineView<Accessory: View>: View {
+  @Environment(\.threadHost) private var host
+  package let runId: String
+  package let line: QuestionLine
+  package let accessory: Accessory
+  package init(runId: String, line: QuestionLine, @ViewBuilder accessory: () -> Accessory) { self.runId = runId; self.line = line; self.accessory = accessory() }
+
+  /// Under the asker's name: the bot and the gap.
+  private var indent: CGFloat { Theme.Rows.whoBot + Theme.Rows.gap }
+
+  package var body: some View {
+    let h = host?.host
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: Theme.Rows.gap) {
+        Button { h?.openAgent(runId: runId, agentId: line.askerId) } label: {
+          HStack(spacing: Theme.Rows.gap) {
+            ProvidedBot(traits: h?.bot(runId: runId, agentId: line.askerId), size: .xs, provider: h?.agentProvider(runId: runId, agentId: line.askerId))
+              .frame(width: Theme.Rows.whoBot, height: Theme.Rows.whoBot)
+            Text(verbatim: line.askerName).font(Theme.Rows.whoName).foregroundStyle(Theme.Rows.whoNameText).lineLimit(1).fixedSize()
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open its thread")
+        .accessibilityLabel("Open \(line.askerName)")
+        Text(verbatim: line.asked).font(Theme.Rows.detail).foregroundStyle(Theme.Rows.detailText).lineLimit(1).truncationMode(.tail)
+        Spacer(minLength: 0)
+      }
+      .frame(minHeight: Theme.Rows.height)
+      HStack(alignment: .center, spacing: Theme.Rows.gap) {
+        outcome
+        Spacer(minLength: Theme.Rows.statusLead)
+        trailing
+      }
+      .padding(.leading, indent)
+      if let n = line.noteLine {
+        Text(verbatim: n).font(Theme.Rows.statusWord).foregroundStyle(Theme.Rows.statusText).lineSpacing(3)
+          .fixedSize(horizontal: false, vertical: true).padding(.leading, indent).padding(.top, 2)
+      }
+    }
+    .padding(.bottom, Theme.Rows.bottom)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(line.summary)
+  }
+
+  /// What became of it, in words: the status, or (answered) who answered what.
+  @ViewBuilder private var outcome: some View {
+    if let o = line.outcome {
+      (Text(verbatim: "\(o.lead) ").foregroundStyle(Theme.Rows.statusText)
+        + Text(verbatim: o.answer).font(Theme.Rows.verdictFont).foregroundStyle(Theme.Rows.cardText)
+        + Text(verbatim: " \(o.tail)").foregroundStyle(Theme.Rows.statusText))
+        .font(Theme.Rows.detail).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+    } else {
+      HStack(spacing: Theme.Rows.statusWordGap) {
+        if case .passed = line.state {
+          Image(systemName: "arrow.up").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.Rows.statusText)
+        }
+        Text(verbatim: line.status ?? "").font(Theme.Rows.detail).foregroundStyle(Theme.Rows.statusText).lineLimit(1).truncationMode(.tail)
+      }
+    }
+  }
+
+  /// On the right: Answer while it is open, the blue tick once answered.
+  @ViewBuilder private var trailing: some View {
+    switch line.state {
+    case .open: accessory
+    case .answered: ToolStatusView(status: .done, duration: nil)
+    case .passed, .withdrawn: EmptyView()
+    }
+  }
+}
+
 extension Theme {
   /// The question card's tokens (DurableAsked-v3): the board's --t1/--t2/--t3, its hairline and its strong line.
   package enum AskCard {

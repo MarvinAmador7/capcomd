@@ -189,10 +189,11 @@ final class AskedTests: XCTestCase {
     let t = FakeThread()
     let s = CapcomdStore(thread: t)
     feed(s)
-    // The planner answered (the recommendation): its own thread keeps its copy, named as the live line was.
-    t.tails[nil] = tail([questionItem("itm-agt-p-answered-qst-1", agent: "agt-p", seq: 9, order: 4, state: "answered", answer: "100 req/min", recommended: true, by: "agt-p")])
+    // The planner answered (the recommendation): its own thread keeps the question's line (QuestionLine), named.
+    t.tails[nil] = tail([questionItem("itm-agt-p-asked-qst-1", agent: "agt-p", seq: 9, order: 4, state: "answered", answer: "100 req/min", recommended: true, by: "agt-p")])
     await s.refreshThread(runId: "run-q", agentId: "agt-p")
-    XCTAssertEqual(lines(s, "agt-p"), ["planner answered · 100 req/min · 11:44"])
+    let held = s.threadEntries(agentId: "agt-p").compactMap { if case .event(let it) = $0, case .question(let l) = it.kind { return l.summary }; return nil }
+    XCTAssertEqual(held, ["request limiter asked: Ship the limiter at 100 or 500 req/min? · planner answered 100 req/min (recommended)"])
     // A withdrawn one reads as withdrawn.
     t.tails[nil] = tail([questionItem("itm-agt-w-question-qst-1", seq: 9, order: 2, state: "withdrawn")])
     await s.refreshThread(runId: "run-q", agentId: "agt-w")

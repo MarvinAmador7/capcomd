@@ -22,6 +22,9 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
     case answered(AnsweredQuestion, byName: String?)
     /// `agent.question_withdrawn` (capability agents.ask): its agent was cancelled before the question was answered.
     case withdrawn(WithdrawnQuestion)
+    /// A question item in the thread of an agent that didn't ask it (capability agents.ask): its compact line, or (the
+    /// root's thread, the user's to answer) its full card.
+    case question(QuestionLine)
     /// Child handed back: `agent.done.result` (ChildResult {summary, artifacts[{name,ref}]}).
     case handoff(childId: String, childName: String, summary: UntrustedText?, artifacts: [UntrustedText])
   }
@@ -29,9 +32,9 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
   public var seq: Int
   public var epochMs: Int
   public var kind: Kind
-  /// The question an answered or withdrawn line is about (agents.ask); nil for other kinds.
+  /// The question an answered, withdrawn or question line is about (agents.ask); nil for other kinds.
   public var questionId: String? {
-    switch kind { case .answered(let r, _): r.questionId; case .withdrawn(let w): w.questionId; default: nil }
+    switch kind { case .answered(let r, _): r.questionId; case .withdrawn(let w): w.questionId; case .question(let l): l.questionId; default: nil }
   }
 }
 

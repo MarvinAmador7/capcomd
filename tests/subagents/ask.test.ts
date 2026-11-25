@@ -285,7 +285,8 @@ test("the thread is the record: a fresh client reads each question and what beca
     expect(res.status).toBe(200);
     return ((await res.json()) as any).items.filter((i: any) => i.kind === "question");
   };
-  // W asks L: one open question item in W's thread, its card's parts on it.
+  // W asks L: one open question item in W's thread, its card's parts on it; L's thread has the same question, placed
+  // when it was asked, saying who asked.
   const qid = (await rpc(run, W, "ask", ASK)).result.asked;
   let [it] = await read(W);
   expect(it).toMatchObject({ id: `itm-${W}-question-${qid}`, rev: 1, agentId: W, kind: "question", status: "done", format: "blocks/1",
@@ -293,38 +294,65 @@ test("the thread is the record: a fresh client reads each question and what beca
     question: { questionId: qid, asker: W, state: "open", question: "Which limit?", to: L, passedBy: [], why: "the docs", holds: "tests",
       options: [{ label: "100 req/min", recommended: true }, { label: "500 req/min", recommended: false }], answer: null, recommended: null, by: null, decidedAt: null } });
   expect(it.internal).toBe(false);
-  // Passed up by L: the same item, a new rev, asked of P now.
+  let [atL] = await read(L);
+  expect(atL).toMatchObject({ id: `itm-${L}-asked-${qid}`, rev: 1, agentId: L, kind: "question", text: `${W} asked: Which limit? · recommended: 100 req/min`,
+    question: { questionId: qid, asker: W, state: "open", to: L, passedBy: [], why: "the docs", holds: "tests" } });
+  expect(atL.at).toBe(it.question.askedAt);
+  expect(await read(P)).toEqual([]);
+  // Passed up by L: the same items, a new rev, asked of P now; P's thread has it from now on.
   expect(await rpc(run, L, "answer", { question: qid, up: true })).toMatchObject({ ok: true });
   [it] = await read(W);
   expect(it).toMatchObject({ rev: 2, question: { state: "open", to: P, passedBy: [L] } });
-  // P answers, not the recommendation, with a note: the answered record, in W's thread and P's own.
+  [atL] = await read(L);
+  expect(atL).toMatchObject({ rev: 2, question: { state: "open", to: P, passedBy: [L] } });
+  expect(atL.at).toBe(it.question.askedAt);   // still where it was asked
+  let [atP] = await read(P);
+  expect(atP).toMatchObject({ id: `itm-${P}-asked-${qid}`, rev: 1, agentId: P, question: { asker: W, state: "open", to: P, passedBy: [L] } });
+  expect(Date.parse(atP.at)).toBeGreaterThanOrEqual(Date.parse(it.question.askedAt));
+  // P answers, not the recommendation, with a note: one state in every thread that has it, one item per thread.
   expect(await rpc(run, P, "answer", { question: qid, answer: "500 req/min", note: "our biggest client does 300" })).toMatchObject({ ok: true, result: { recommended: false } });
   [it] = await read(W);
   expect(it).toMatchObject({ rev: 3, text: "Asked: Which limit? · answered: 500 req/min (not the recommendation) · note: our biggest client does 300",
     question: { state: "answered", answer: "500 req/min", recommended: false, by: P, note: "our biggest client does 300", replaces: null, reason: null } });
   expect(Date.parse(it.question.decidedAt)).toBeGreaterThanOrEqual(Date.parse(it.question.askedAt));
-  const [copy] = await read(P);
-  expect(copy).toMatchObject({ id: `itm-${P}-answered-${qid}`, agentId: P, question: { asker: W, state: "answered", answer: "500 req/min", by: P } });
-  expect(await read(L)).toEqual([]);
-  // The user's answer replaces P's: W's record says so; P's copy keeps what P answered. The tail serves the same.
+  for (const [agent, rev] of [[L, 3], [P, 2]] as const) {
+    const items = await read(agent);
+    expect(items.length).toBe(1);
+    expect(items[0]).toMatchObject({ id: `itm-${agent}-asked-${qid}`, rev, question: { asker: W, state: "answered", answer: "500 req/min", by: P, recommended: false } });
+  }
+  // The user's answer replaces P's: every thread says so at once. The tail serves the same.
   await s.answerQuestion({ questionId: qid, by: "client:desk", answer: "100 req/min" });
   [it] = await read(W, true);
   expect(it).toMatchObject({ rev: 4, question: { state: "answered", answer: "100 req/min", recommended: true, by: "client:desk", note: null, replaces: P } });
-  expect((await read(P))[0]).toMatchObject({ rev: 1, question: { answer: "500 req/min", by: P } });
-  // L asks P, then L is cancelled: its question reads as withdrawn, not gone.
+  [atP] = await read(P, true);
+  expect(atP).toMatchObject({ rev: 3, question: { state: "answered", answer: "100 req/min", by: "client:desk", replaces: P } });
+  expect((await read(L))[0]).toMatchObject({ rev: 4, question: { state: "answered", by: "client:desk" } });
+  // Passed all the way up to the user: the root's thread (P's, the one the user reads) has it, asked of nobody now.
+  const q2 = (await rpc(run, W, "ask", { question: "Second?", recommend: "a" })).result.asked;
+  expect(await rpc(run, L, "answer", { question: q2, up: true })).toMatchObject({ ok: true });
+  expect(await rpc(run, P, "answer", { question: q2, up: true })).toMatchObject({ ok: true });
+  const of = async (agent: string, q: string) => (await read(agent)).filter((i: any) => i.question.questionId === q);
+  for (const agent of [L, P]) expect(await of(agent, q2)).toMatchObject([{ id: `itm-${agent}-asked-${q2}`, question: { state: "open", to: null, passedBy: [L, P] } }]);
+  expect(await of(W, q2)).toMatchObject([{ question: { to: null } }]);
+  await s.answerQuestion({ questionId: q2, by: "client:desk", recommended: true });
+  expect(await of(P, q2)).toMatchObject([{ question: { state: "answered", by: "client:desk", answer: "a" } }]);
+  // L asks P, then L is cancelled: its question reads as withdrawn, not gone, in its thread and in P's.
   const lq = (await rpc(run, L, "ask", { question: "Merge now?", recommend: "yes" })).result.asked;
   await (await O()).cancelAgents(run, L, "test");
-  const [w] = await read(L);
+  const [w] = await of(L, lq);
   expect(w).toMatchObject({ id: `itm-${L}-question-${lq}`, rev: 2, text: "Asked: Merge now? · withdrawn: its agent was cancelled",
     question: { questionId: lq, state: "withdrawn", reason: "cancelled", answer: null, by: null } });
   expect(w.question.decidedAt).not.toBeNull();
+  expect(await of(P, lq)).toMatchObject([{ id: `itm-${P}-asked-${lq}`, rev: 2, text: `${L} asked: Merge now? · withdrawn: its agent was cancelled`, question: { state: "withdrawn" } }]);
   // A conversation rebuilt from the thread keeps the decision (it isn't bookkeeping).
   const { threadPrompt } = await import("../../src/agents/continue");
   const c = (await s.continuation({ agentId: W }))!;
   const prompt = threadPrompt({ agentId: W, branch: "b", target: "main" }, { ...c, messages: [] } as any);
   expect(prompt).toContain("you asked: Which limit? (you recommended: 100 req/min); the user answered: 100 req/min");
   expect(threadPrompt({ agentId: P, branch: "b", target: "main" }, { ...(await s.continuation({ agentId: P }))!, messages: [] } as any))
-    .toContain(`you answered ${W}'s question "Which limit?": 500 req/min (your note: our biggest client does 300)`);
+    .toContain(`${W} asked you: Which limit? (they recommended: 100 req/min); the user answered: 100 req/min (it replaced your answer)`);
+  expect(threadPrompt({ agentId: L, branch: "b", target: "main" }, { ...(await s.continuation({ agentId: L }))!, messages: [] } as any))
+    .toContain(`${W} asked you: Which limit? (they recommended: 100 req/min); the user answered: 100 req/min`);
   expect(threadPrompt({ agentId: L, branch: "b", target: "main" }, { ...(await s.continuation({ agentId: L }))!, messages: [] } as any))
     .toContain("you asked: Merge now? (you recommended: yes); the question was withdrawn");
 }, 60_000);

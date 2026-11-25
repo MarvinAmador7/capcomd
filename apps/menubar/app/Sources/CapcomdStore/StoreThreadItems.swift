@@ -150,16 +150,25 @@ extension CapcomdStore {
     // Its questions (agents.ask) as the thread records them: an answered or withdrawn one is one line, placed when it was
     // decided, and it wins over the line built from a live event (after a reconnect that line is gone; the record isn't).
     // An open one is its docked card (from its approval), not a line.
-    let decided = book.shown.compactMap { it in it.question.flatMap { $0.state == .open ? nil : questionLine(it, $0, agentId: agentId) } }
-    let recorded = Set(decided.compactMap(\.questionId))
+    let decided = book.shown.compactMap { it in it.question.flatMap { $0.asker != agentId || $0.state == .open ? nil : questionLine(it, $0, agentId: agentId) } }
+    // Another agent's question that reached this one (asked of it, passed up by it, answered by it, or the user's at the
+    // root): one line where it reached it, at the question's one state, in place of the live answered line and of the
+    // message that delivered the question (from the asker, naming it).
+    let held = book.shown.compactMap { it in it.question.flatMap { $0.asker == agentId ? nil : heldQuestionLine(it, $0, agentId: agentId) } }
+    let heldIds = Set(held.compactMap(\.questionId))
+    let recorded = Set(decided.compactMap(\.questionId)).union(heldIds)
+    let delivered = { (from: String, text: UntrustedText?) -> Bool in
+      guard let t = text?.plain, !heldIds.isEmpty else { return false }
+      return held.contains { if case .question(let l) = $0.kind { return l.askerId == from && t.contains(l.questionId) }; return false }
+    }
     // The agent's own output is in the book; keep only messages from someone else (steers, other agents).
     let messages = events.filter {
-      if case .message(let from, _, _, _) = $0.kind { return from != agentId }
+      if case .message(let from, _, let text, _) = $0.kind { return from != agentId && !delivered(from, text) }
       if case .woke = $0.kind { return true }   // what woke it (agents.wake): a quiet line between its turns
       if case .answered(let r, _) = $0.kind { return !recorded.contains(r.questionId) }   // its question, answered (agents.ask): one line
       if case .withdrawn(let w) = $0.kind { return !recorded.contains(w.questionId) }
       return false
-    } + decided
+    } + decided + held
     // Read newest first, the thread shows from its top down; messages from before its first item wait with it. The
     // agent's bookkeeping (ADR-026 §7) only when asked for.
     let internals = bookkeepingShown.contains(agentId)

@@ -94,9 +94,10 @@ export function threadNote(o: { id: string; at: number; text: string; internal?:
  * A question and what became of it (kind `question`, capability agents.ask, ADR-026 §4): the thread's record of it, so
  * a client rebuilds its card (open) or its one-line record (answered, withdrawn) from the thread alone, and a
  * conversation rebuilt from the thread keeps the decision. `text` says it in one line for clients that don't read
- * `question` ("Asked: … · answered: … (not the recommendation) · note: …"). Its strings are someone's words, cleaned.
+ * `question` ("Asked: … · answered: … (not the recommendation) · note: …"; in another agent's thread, `holder`, it names
+ * the asker: "agt-… asked: …"). Its strings are someone's words, cleaned.
  */
-export function questionDraft(o: { id: string; rev: number; at: number; question: ThreadQuestionT }): ItemDraft {
+export function questionDraft(o: { id: string; rev: number; at: number; question: ThreadQuestionT; holder?: boolean }): ItemDraft {
 	const q = o.question, c = (x: string | null, max: number) => (x == null ? null : oneLine(x, max) || null);
 	const question: ThreadQuestionT = {
 		...q, question: oneLine(q.question, 500), options: q.options.map((x) => ({ label: oneLine(x.label, 200), recommended: x.recommended })),
@@ -106,7 +107,7 @@ export function questionDraft(o: { id: string; rev: number; at: number; question
 	const outcome = question.state === "answered"
 		? `answered: ${question.answer ?? ""}${question.recommended === false ? " (not the recommendation)" : ""}${question.note ? ` · note: ${question.note}` : ""}`
 		: question.state === "withdrawn" ? "withdrawn: its agent was cancelled" : rec ? `recommended: ${rec}` : "";
-	const text = oneLine([`Asked: ${question.question}`, outcome].filter(Boolean).join(" · "), 4000);
+	const text = oneLine([`${o.holder ? `${question.asker} asked` : "Asked"}: ${question.question}`, outcome].filter(Boolean).join(" · "), 4000);
 	return { id: o.id, rev: o.rev, kind: "question", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text, blocks: plainBlocks(text), format: THREAD_FORMAT,
 		redacted: false, tool: null, error: null, truncated: null, child: null, question };
 }
