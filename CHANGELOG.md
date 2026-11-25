@@ -5,6 +5,58 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.13.0-rc.2 (2026-11-25)
+
+Release candidate: questions show where they were asked and survive a reconnect, the event wait answers at once, and
+a message to an idle agent no longer claims a fresh machine. Changes since 0.13.0-rc.1 are below; everything in rc.1
+still applies.
+
+### Questions
+
+- A question now shows where it was asked, with one full card per question, where the decision is owed. Asked of an
+  agent, the asker's thread has the card, and the thread of the agent it was asked of (and, once passed up, of the agent
+  it went to) has one line: "request limiter asked: Ship the limiter at 100 or 500 req/min? · waiting on api lead",
+  with **Answer**, which opens the question's card right there (your answer wins over the agent's). The line is one row
+  where there's room (an opened pane) and two in a narrow column; a cut question shows whole on hover. Once decided it
+  says so: "api lead answered 500 req/min — not the recommendation" with the note, or "passed up to you". Click the
+  asker's name to open its thread.
+- A question passed up to you is its full card in the run's planner thread, in Needs you and in the menu bar; the
+  asker's own thread shows the line "asked you" with Answer instead of a second card. Answering it anywhere turns every
+  place into the answered line at once.
+- An answered question keeps its line after the desktop app reconnects or restarts, and after capcomd restarts:
+  "Answered · 100 req/min · 11:42", saying when it wasn't the recommendation and keeping the note.
+- A withdrawn question (its agent was cancelled) is one quiet line, "Withdrawn · Which limit? · 11:42", instead of
+  vanishing; hover it for why.
+- The message capcomd sends to deliver a question (or to word an answer) no longer shows in the thread: the question's
+  line says it. Show Bookkeeping shows it.
+- An agent whose conversation is rebuilt from its thread (when its saved session can't be resumed) remembers the
+  questions it asked or was asked and what became of them.
+
+### Fixes
+
+- `capcomd send` to an idle planner or lead no longer says it continues "on a fresh machine" when it wakes the agent's
+  parked machine: the note says it continues on its parked machine if it has one, else a fresh one.
+- `GET /v1/events/wait` answers as soon as a matching event happens: the daemon is told of each new event instead of
+  checking for them twice a second.
+
+### For harness.v1 clients
+
+- Thread items of the new kind `question` (capability `agents.ask`; additive: clients render an unknown kind as its
+  `text`). The asker's thread has one per question (`itm-<asker>-question-<qst>`), and every other agent a question
+  reached has one (`itm-<agent>-asked-<qst>`): each agent it was asked of, an agent that answered it, and the asker's
+  root agent once it is the user's. Each gets a new rev when the question is passed up, answered or withdrawn. Its
+  `question` field carries the question, its options, who it is asked of, its state (`open`, `answered`, `withdrawn`),
+  the answer, `recommended`, who answered, their note and when; its `text` names the asker.
+- The messages capcomd writes to deliver a question or word an answer carry `internal: true` (`message.sent`, `Message`
+  in GET …/messages and `snapshot.threads`).
+- The `agents.idle` capability's description says a message continues an idle agent on its parked machine when it has
+  one, else a fresh one.
+
+### Known issues
+
+- Waking a Codex agent with a message is still unproven against a real backend (the maintainer's Codex login is stale;
+  the live e2e ran its Codex worker on Claude).
+
 ## 0.13.0-rc.1 (2026-11-25)
 
 Release candidate: agents you can keep talking to. A finished agent is idle, not done: message it and it continues the
