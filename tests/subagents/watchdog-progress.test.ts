@@ -4,7 +4,7 @@
 // the CLI's Bash calls, and the worker hands both to the scope as `worked` (src/actors/worker.ts), which the watchdog
 // hears as agent.changed. One worker edits a file for 16 s, one waits on a 10 s command, one sits silent for 16 s: only
 // the silent one gets `stalled`, and its notice says what was seen. (tests/scenarios/watchdog-progress.test.ts has the
-// same with the reports faked and a 90 s limit.)
+// same with the reports faked and a 90 s limit, and a job and its polls holding the clock.)
 //
 // What the clock counts that the agents can't help: it starts when an agent is claimed, before its machine is made and
 // its checkout cloned, and a foreground command takes at most the stall limit off it. So the command is exactly the

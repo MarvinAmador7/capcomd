@@ -153,7 +153,7 @@ export async function projectBranches(q: ProjectBranchesQuery, deps: ProjectDeps
 	return {
 		// The forge's name when its service answered (github, or a forge plugin's own), else git or local.
 		path: q.path, root, github, source: listing.source, note: listing.note, defaultBranch: listing.defaultBranch, branches: listing.branches, projectTarget, suggestedBase,
-		suggestedGoalBranch: q.goal !== undefined && q.goal.trim() ? G.suggestGoalBranch(q.goal, listing.branches) : null, goalBranchProblem, baseProblem,
+		suggestedGoalBranch: q.goal !== undefined && q.goal.trim() ? G.suggestGoalBranch(q.goal, listing.branches, { defaultBranch: listing.defaultBranch, base: suggestedBase }) : null, goalBranchProblem, baseProblem,
 	};
 }
 

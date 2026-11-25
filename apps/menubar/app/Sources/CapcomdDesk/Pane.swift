@@ -365,8 +365,9 @@ struct PaneHeadHost: View {
   }
 }
 
-/// RexMain `.ph`: the head, its title (a double-click renames it), profile, short ID, status; on the right the project ·
-/// place · elapsed, then the pane's controls. In a split (RexSplit) the right side is the elapsed time alone. Expanded
+/// RexMain `.ph`: the head, its title (a double-click renames it; its tooltip, the run's goal in full), profile, short ID,
+/// status; on the right the place · elapsed (not the run's title: the sidebar shows it right above, and a planner's own
+/// title is mostly the same words), then the pane's controls. In a split (RexSplit) the right side is the elapsed time alone. Expanded
 /// (RexExpanded `.xh`): 52 pt, in the title bar's band clear of the traffic lights, with the Needs you hand and
 /// arrows-in.
 struct PaneHead: View {
@@ -379,33 +380,40 @@ struct PaneHead: View {
     let expanded = pane?.expanded == true, split = pane?.split == true && !expanded
     let deck = model.decks.first { $0.runId == h.runId }
     let place = Place(sandbox: deck?.sandbox).map { $0 == .local ? "This Mac" : "boxd" }
+    let state = ColumnHead.state(h, asks: asks)
+    // Working on a turn (not waiting on you, not between turns on a wake): the bot twinkles, "working" shimmers.
+    let working = state == "working"
     return HStack(spacing: 8) {
-      BotAvatar(traits: slice.bot, size: .small, cell: 1).frame(width: 24, height: 24)
+      BotAvatar(traits: slice.bot, size: .small, cell: 1).frame(width: 24, height: 24).modifier(Twinkle(working))
       if slice.renaming == .header {
-        InlineTitleField(agentId: slice.id, font: .system(size: 13, weight: .semibold), width: Theme.Desk.headerField)
+        InlineTitleField(agentId: slice.id, font: Theme.PaneHead.title, width: Theme.Desk.headerField)
       } else {
-        Text(verbatim: h.tabLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.Desk.text)
+        Text(verbatim: h.tabLabel).font(Theme.PaneHead.title).foregroundStyle(Theme.PaneHead.titleText)
           .lineLimit(1).truncationMode(.tail).layoutPriority(1)
           .contentShape(Rectangle())
           .onTapGesture(count: 2) { if model.store.titlesSupported { model.beginRename(slice.id, at: .header) } }
-          .help(slice.renameFailure.map { "Couldn't rename it: \($0)" } ?? "Double-click to rename")
+          .help(slice.renameFailure.map { "Couldn't rename it: \($0)" } ?? Self.titleHelp(deck?.fullTitle ?? deck?.title))
       }
-      Text(verbatim: h.name).font(.system(size: 13)).foregroundStyle(Theme.Desk.secondary).fixedSize()
-      Text(verbatim: String(h.agentId.suffix(4))).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.Desk.tertiary).fixedSize()
-      Text(verbatim: "· " + ColumnHead.state(h, asks: asks)).font(.system(size: 13))
-        .foregroundStyle(asks ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.tertiary).fixedSize()
+      Text(verbatim: h.name).font(Theme.PaneHead.role).foregroundStyle(Theme.PaneHead.roleText).fixedSize()
+      Text(verbatim: String(h.agentId.suffix(4))).font(Theme.PaneHead.id).foregroundStyle(Theme.PaneHead.idText).fixedSize()
+      HStack(spacing: 0) {
+        Text(verbatim: "· ")
+        Text(verbatim: state).modifier(Shimmer(working))
+      }
+      .font(Theme.PaneHead.state)
+      .foregroundStyle(asks ? Theme.amber : h.status == .failed ? Theme.red : Theme.PaneHead.stateText).fixedSize()
       Spacer(minLength: 8)
       HStack(spacing: 0) {
         if !split {
-          Text(verbatim: [deck?.title, place].compactMap { $0 }.joined(separator: " · "))
-            .lineLimit(1).truncationMode(.tail)
+          if let place { Text(verbatim: place).lineLimit(1).truncationMode(.tail) }
         }
-        if h.status == .running, let start = h.startedAtMs {
-          if !split { Text(verbatim: " · ") }
+        // Waiting between turns (agents.wake): how long it has waited ("waiting for verify vfy-… · 4:12"); else how long it has worked.
+        if h.status == .running, let start = h.waitSinceMs ?? h.startedAtMs {
+          if !split, place != nil { Text(verbatim: " · ") }
           Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer).monospacedDigit()
         }
       }
-      .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.Desk.tertiary)
+      .font(Theme.PaneHead.clock).foregroundStyle(Theme.PaneHead.clockText)
       .fixedSize(horizontal: split, vertical: false)   // a split's clock never truncates: the title gives way
       .padding(.trailing, expanded ? 8 : 6)
       PaneControls(slice: slice)
@@ -415,6 +423,12 @@ struct PaneHead: View {
     .frame(height: expanded ? PaneMetrics.expandedHeader : Theme.Desk.paneHeader)
     .contentShape(Rectangle())
     .accessibilityElement(children: .contain)
+  }
+
+  /// The title's tooltip: the run's goal in full, then how to rename the agent.
+  static func titleHelp(_ goal: String?) -> String {
+    guard let g = goal?.trimmingCharacters(in: .whitespacesAndNewlines), !g.isEmpty else { return "Double-click to rename" }
+    return "\(g)\n\nDouble-click to rename"
   }
 }
 

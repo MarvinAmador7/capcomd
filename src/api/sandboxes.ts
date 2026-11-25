@@ -23,12 +23,12 @@ import { descriptorOf, isListedProvider, LISTED_PROVIDERS, POSTED_ACTIONS, PROVI
 import { SandboxNotFoundError } from "../providers/boxd-errors";
 import { beginMachineAction } from "../providers/machine-audit";
 import { MACHINE_PREFIX, type VmInfo } from "../providers/sandbox";
-import { AGENT_MEMORY_ENV, ConfigFileError, currentIdleLifetime, fileSettingsStore, IDLE_LIFETIME_ENV, IDLE_LIFETIME_MIN, settingsPath, type IdleLifetime, type SettingsStore, type StoredSettingId } from "../providers/settings";
+import { AGENT_MEMORY_ENV, ConfigFileError, currentIdleLifetime, fileSettingsStore, IDLE_LIFETIME_ENV, IDLE_LIFETIME_MIN, PARKED_RETENTION_ENV, settingsPath, type IdleLifetime, type SettingsStore, type StoredSettingId } from "../providers/settings";
 import type { UiDescriptor, UiRowValue } from "../../packages/plugin/src/context";
 import { sandboxUi } from "../plugins/sandboxes";
 import { durationLabel, fieldOf, loginsRow, type Field, type LoginLike, type RowFacts, type SlotsLike } from "../plugins/builtin/sandbox-rows";
 // The rows' fields, as the sandbox plugins contribute them (src/plugins/builtin/sandbox-rows.ts, plugin API §4.7.5).
-export { agentMemoryField, agentSlotsField, AGENT_MEMORY_CHOICES, checkpointsField, durationLabel, IDLE_LIFETIME_CHOICES, idleLifetimeField, memoryLabel, type Field, type FieldType, type LoginLike, type SlotsLike } from "../plugins/builtin/sandbox-rows";
+export { agentMemoryField, agentSlotsField, AGENT_MEMORY_CHOICES, checkpointsField, durationLabel, IDLE_LIFETIME_CHOICES, idleLifetimeField, memoryLabel, PARKED_RETENTION_CHOICES, parkedRetentionField, type Field, type FieldType, type LoginLike, type SlotsLike } from "../plugins/builtin/sandbox-rows";
 
 type Env = Record<string, string | undefined>;
 
@@ -49,7 +49,7 @@ export function servedDescriptor(d: ProviderDescriptor): Descriptor {
 }
 
 /** The environment variable that sets each setting (and makes it read-only). */
-const SETTING_ENV: Record<string, string> = { idleLifetime: IDLE_LIFETIME_ENV, agentMemory: AGENT_MEMORY_ENV };
+const SETTING_ENV: Record<string, string> = { idleLifetime: IDLE_LIFETIME_ENV, agentMemory: AGENT_MEMORY_ENV, parkedRetention: PARKED_RETENTION_ENV };
 
 /** The Logins row: a summary of GET /v1/logins?sandbox=name. "Bound" only when every logged-in login is bound to its
  *  AI's API host; otherwise it names the ones that aren't. */
@@ -138,7 +138,7 @@ export function checkSettingsPatch(detail: SandboxDetail, patch: SettingsPatch):
 }
 
 // ---- Resources (ADR-021 §3) ----
-export type ResourceState = "starting" | "running" | "asleep" | "orphaned" | "stopping" | "unknown";
+export type ResourceState = "starting" | "running" | "asleep" | "parked" | "orphaned" | "stopping" | "unknown";
 /** Who uses a machine (capcomd's own records): an agent, or capcomd itself for a short job (ADR-021 §3). */
 export const OWNER_KINDS = ["agent", "check", "login", "env_build", "doctor", "job"] as const;
 export type OwnerKind = (typeof OWNER_KINDS)[number];
@@ -175,9 +175,12 @@ export interface MachineOwner {
 	kind?: OwnerKind;
 	runId: string | null; agentId: string | null; role: string | null; task: string | null;
 	label?: string | null;
-	/** The worker's lifecycle state: provisioning, idle, busy, draining (capcomd's own jobs: busy). */
+	/** The worker's lifecycle state: provisioning, idle, busy, draining, parked (ADR-026 §6: its agent is idle and the
+	 *  machine hibernated; capcomd's own jobs: busy). */
 	workerState: string;
 	createdAt: number | null;
+	/** A parked machine's delete deadline (its retention), ms epoch. */
+	deleteAt?: number | null;
 	/** An agent's live descendants (pending, running, paused): cancelling the agent stops them too. */
 	descendants?: number;
 }
@@ -230,8 +233,14 @@ function shortTask(t: string): string {
  * Work since its last checkpoint is lost."); for one left behind, that no agent uses it. Fixed templates around
  * trusted ids and the agent's task line (already redacted and cut).
  */
-export function deleteConfirm(o: Pick<MachineOwner, "role" | "agentId" | "task" | "descendants"> | null): string {
+export function deleteConfirm(o: (Pick<MachineOwner, "role" | "agentId" | "task" | "descendants"> & { workerState?: string }) | null): string {
 	if (!o) return "Delete this machine? No agent is using it.";
+	if (o.workerState === "parked") {
+		// ADR-026 §6: only the machine goes; the agent and its conversation stay (a message gives it a fresh machine).
+		const role = o.role && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(o.role) ? o.role : null;
+		const who = role ?? (o.agentId && SAFE_ID.test(o.agentId) ? o.agentId : "this agent");
+		return `Delete ${who}'s parked machine? Its conversation is kept: a message to it starts on a fresh machine, a little slower.`;
+	}
 	const role = o.role && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(o.role) ? o.role : null;
 	const who = role ?? (o.agentId && SAFE_ID.test(o.agentId) ? o.agentId : "this agent");
 	const the = role ? `the ${role}` : who;
@@ -265,6 +274,8 @@ export function joinResources(name: string, rows: VmInfo[] | null, owners: Machi
 	const actions = (state: ResourceState, o?: MachineOwner) => {
 		const out: string[] = [];
 		const agent = !!o && (o.kind ?? "agent") === "agent";
+		// A parked machine runs nothing (no shell into it); Delete deletes only the machine.
+		if (state === "parked") return serves("delete") ? ["delete"] : out;
 		const settled = state !== "starting" && state !== "stopping";
 		if ((agent || !o) && settled && d?.caps.shell && serves("open_terminal")) out.push("open_terminal");
 		// Delete: an agent's machine (cancels the agent; needs its run and id), or one left behind (orphaned: capcomd's
@@ -290,14 +301,15 @@ export function joinResources(name: string, rows: VmInfo[] | null, owners: Machi
 		let state: ResourceState;
 		if (o) {
 			used.add(o);
-			state = o.workerState === "draining" ? "stopping" : o.workerState === "provisioning" ? "starting" : providerState(r.state);
+			state = o.workerState === "draining" ? "stopping" : o.workerState === "provisioning" ? "starting" : o.workerState === "parked" ? "parked" : providerState(r.state);
 		} else if (owners === null || ours === null) state = "unknown";
 		else {
 			const m = ours.get(r.name);
 			if (!m) continue; // not in this capcomd's ledger: another capcomd's machine (or one from before the ledger)
 			state = providerState(r.state) === "stopping" ? "stopping" : m.unsure ? "unknown" : "orphaned";
 		}
-		out.set(r.name, shaped({ id: r.name, kind: "machine", state, owner: o ? ownerOf(o) : null, createdAt: ts(r.createdAt ?? o?.createdAt), deleteAfter: ts(r.deleteAt), actions: actions(state, o) }, o));
+		// A parked machine is deleted when its retention runs out (capcomd's record; the provider's deadline is the same).
+		out.set(r.name, shaped({ id: r.name, kind: "machine", state, owner: o ? ownerOf(o) : null, createdAt: ts(r.createdAt ?? o?.createdAt), deleteAfter: ts(state === "parked" ? o?.deleteAt ?? r.deleteAt : r.deleteAt), actions: actions(state, o) }, o));
 	}
 	for (const o of mine) {
 		if (used.has(o) || !o.name || !isMachineId(o.name) || out.has(o.name)) continue;
@@ -357,13 +369,15 @@ export interface ResourceDeps {
 	/** Cancels one agent through the normal cancel path (as POST …/cancel and `capcomd cancel <run> <agt>`: agent.cancelled,
 	 *  and its lifecycle destroys its machine): an owned machine's Delete. `changed`: this call cancelled it. */
 	cancelAgent?(runId: string, agentId: string, by: string): Promise<{ changed: boolean }>;
+	/** ADR-026 §6: deletes a parked machine (its worker destroys it); its idle agent stays as it is. `true`: this call did. */
+	deleteParked?(name: ListedProvider, machine: string): Promise<boolean>;
 	lookupTimeoutMs?: number;
 	actionTimeoutMs?: number;
 }
 
 // ---- Actions (ADR-021 §3, §5; capability sandboxes.actions) ----
 export type ActionOutcome =
-	| { ok: true; resource: Resource | null; changed: boolean; owner: ResourceOwner | null }
+	| { ok: true; resource: Resource | null; changed: boolean; owner: ResourceOwner | null; parked?: boolean }
 	| { ok: false; status: 404 | 409 | 503; code: "not_found" | "conflict" | "unavailable"; message: string };
 
 const ownerKey = (r: Resource) => (r.owner ? `${r.owner.kind}|${r.owner.runId ?? ""}|${r.owner.agentId ?? ""}` : "none");
@@ -476,7 +490,12 @@ export function resourceCatalog(deps: ResourceDeps) {
 				const secs = actionTimeout / 1000;
 				const o = now_.owner;
 				try {
-					if (o) {
+					if (now_.state === "parked") {
+						// ADR-026 §6: only the machine goes; its agent stays idle (a message gives it a fresh machine).
+						if (!deps.deleteParked) { claim.cancel(); return fail(503, "This daemon can't delete parked machines from here, so nothing was deleted."); }
+						const done = await within(Promise.resolve().then(() => deps.deleteParked!(name, id)), actionTimeout);
+						if (!done) { claim.cancel(); entryOf(name).triedAt = 0; return fail(409, "This machine isn't parked any more: its agent woke it, or it was deleted. Look again in a moment."); }
+					} else if (o) {
 						if (!deps.cancelAgent) { claim.cancel(); return fail(503, "This daemon can't stop agents from here, so nothing was deleted."); }
 						const r = await within(Promise.resolve().then(() => deps.cancelAgent!(o.runId!, o.agentId!, by)), actionTimeout);
 						if (!r.changed) { claim.cancel(); return fail(409, `${o.agentId} has already ended, so this machine is no longer its own. Look again in a moment.`); }
@@ -500,7 +519,7 @@ export function resourceCatalog(deps: ResourceDeps) {
 				}
 				claim.done();
 				entryOf(name).triedAt = 0;
-				return { ok: true, resource: { ...now_, state: "stopping", actions: [], destructive: false, confirm: null }, changed: true, owner: o };
+				return { ok: true, resource: { ...now_, state: "stopping", actions: [], destructive: false, confirm: null }, changed: true, owner: o, ...(now_.state === "parked" ? { parked: true } : {}) };
 			} finally { acting.delete(k); }
 		},
 		/** One page: `limit` (≤ 200, default 100) resources after `cursor` (the last id of the previous page). */

@@ -361,6 +361,7 @@ package enum Theme {
     package static let toolHeight: CGFloat = 26, toolGap: CGFloat = 8, toolIcon: CGFloat = 16, toolChevron: CGFloat = 10, toolRadius: CGFloat = 6, toolInset: CGFloat = 6
     package static let toolFont = Font.system(size: 12.5), toolText = label.opacity(0.7), toolHover = Color.white.opacity(0.05)
     package static let toolDuration = Font.system(size: 10.5, design: .monospaced), toolDurationText = label.opacity(0.4)
+    package static let toolNote = Font.system(size: 11), toolRefusedText = errorText.opacity(0.7)
     package static let detailFill = Color.black.opacity(0.22), detailRadius: CGFloat = 7, detailPadding = EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9)
     package static let detailMargin = EdgeInsets(top: 0, leading: 24, bottom: 8, trailing: 0)
     package static let detailFont = Font.system(size: 10.5, design: .monospaced), detailText = label.opacity(0.7), detailSpacing: CGFloat = 2.5
@@ -377,6 +378,9 @@ package enum Theme {
     package static let handoffNote = Font.system(size: 11), handoffNoteText = label.opacity(0.45)
     package static let handoffSummary = Font.system(size: 12.5), handoffSummaryText = Color.white.opacity(0.8), handoffSummarySpacing: CGFloat = 3
     package static let handoffSummaryMargin = EdgeInsets(top: 5, leading: 0, bottom: 7, trailing: 0)
+    /// A long hand-back shows about six lines, fading out, then Show more (slack: a line or so over isn't clamped).
+    package static let handoffClamp: CGFloat = 120, handoffClampSlack: CGFloat = 16, handoffFade: CGFloat = 28
+    package static let handoffMoreText = label.opacity(0.55), handoffMoreBottom: CGFloat = 4
     package static let artFont = Font.system(size: 10.5, design: .monospaced), artText = label.opacity(0.6), artFill = Color.white.opacity(0.07)
     package static let artRadius: CGFloat = 5, artPadding = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6), artGap: CGFloat = 4
     // The agent's task above its thread, folded like a thought; its first line trails the label, quieter.
@@ -400,6 +404,127 @@ package enum Theme {
     package static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
     package static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
   }
+  /// Thread v2 (canvas ThreadPolish-v2, its affect.css tokens): neutrals at four strengths, 0.5 pt hairlines, colour only
+  /// on status words and glyphs, a ~14 % tint behind a word or glyph of the same hue; weights 400 and 500 only.
+  package enum Affect {
+    package static let t1 = Color.white.opacity(0.9), t2 = Color.white.opacity(0.62), t3 = Color.white.opacity(0.46), t4 = Color.white.opacity(0.3)
+    package static let info = Color(red: 0x4F / 255, green: 0xB0 / 255, blue: 0xFE / 255), infoTint = info.opacity(0.14)
+    package static let ok = Color(red: 0x7D / 255, green: 0xCF / 255, blue: 0x9F / 255)
+    package static let okTint = ok.opacity(0.14)
+    package static let bad = Color(red: 1, green: 0x8A / 255, blue: 0x7A / 255)                        // danger words and glyphs
+    package static let red = Color(red: 1, green: 0x6B / 255, blue: 0x5F / 255), badTint = red.opacity(0.14)
+    package static let hairline: CGFloat = 0.5
+    /// The pane behind the thread (Theme.Desk.column): the ring that parts stacked icons draws in it.
+    package static let ground = Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x18 / 255)
+    // Cards (.card): a step above the pane, a 0.5 pt inset hairline and a 1 pt shadow.
+    package static let card = Color.white.opacity(0.035), cardStroke = Color.white.opacity(0.1), cardShadow = Color.black.opacity(0.4)
+    package static let cardRadius: CGFloat = 10, cardPadding = EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16), cardGap: CGFloat = 6
+    // Type: body 13/20, secondary 12/16, mono 12/500 tool names (line spacing is the line height less the font's own).
+    package static let body = Font.system(size: 13), bodySpacing: CGFloat = 4.5
+    package static let bodyMedium = Font.system(size: 13, weight: .medium)
+    package static let small = Font.system(size: 12), smallSpacing: CGFloat = 1.7
+    package static let mono = Font.system(size: 12, weight: .medium, design: .monospaced)
+    package static let monoFigures = Font.system(size: 12, design: .monospaced)
+    /// Motion: one ease (cubic-bezier(.22, 1, .36, 1)) at five lengths; the done tick pops and draws itself.
+    package static func ease(_ seconds: Double) -> Animation { .timingCurve(0.22, 1, 0.36, 1, duration: seconds) }
+    package static let quick = 0.12, short = 0.16, medium = 0.22, long = 0.32, longest = 0.42
+    package static let checkPop = 0.46, tickDraw = 0.36, riseIn: CGFloat = 4
+    package static let shimmer = 1.6, twinkle = 0.6
+    /// The shimmer's base and its sweeping highlight (.shim: .46 → .92 → .46).
+    package static let shimmerBase = t3, shimmerHighlight = Color.white.opacity(0.92)
+    /// The twinkle hides alternate 2 pt cells of a working bot at up to 70 %.
+    package static let twinkleCell: CGFloat = 2, twinkleMax = 0.7
+  }
+
+  /// Thread v2 rows: tool calls, call groups, thinking, the waiting line (ThreadPolish-v2, DurableWaiting-v2).
+  package enum Rows {
+    // A tool call (.tr): 16 pt muted icon, mono name, summary at 62 %, status on the right.
+    package static let height: CGFloat = 28, gap: CGFloat = 8, bottom: CGFloat = 8
+    package static let icon: CGFloat = 16, iconFont = Font.system(size: 12.5), iconText = Affect.t3
+    package static let name = Affect.mono, nameText = Affect.t1, nameRefusedText = Affect.t2
+    package static let detail = Affect.body, detailText = Affect.t2
+    package static let status = Font.system(size: 12).monospacedDigit(), statusText = Affect.t3, statusGap: CGFloat = 6, statusLead: CGFloat = 12
+    package static let statusWord = Font.system(size: 12), statusWordGap: CGFloat = 5
+    package static let hover = Color.white.opacity(0.04), hoverRadius: CGFloat = 7, hoverInset: CGFloat = 6
+    // Status glyphs: a 14 pt blue disc with a white tick (done), a 14 pt arc (running), 12 pt × (failed), 13 pt ⊘.
+    package static let done: CGFloat = 14, running: CGFloat = 14, failed: CGFloat = 12, refused: CGFloat = 13
+    package static let tick = Color.white, tickWidth: CGFloat = 1.6, arcTrack = Color.white.opacity(0.14), arcWidth: CGFloat = 1.6
+    package static let crossWidth: CGFloat = 1.8, refusedWidth: CGFloat = 1.5, spin = 0.9
+    // A call group (.tg): stacked 20 pt tiles (6 pt corners, 4 pt overlap, 1.5 pt ring), "Used 3 tools", notes, time.
+    package static let tile: CGFloat = 20, tileRadius: CGFloat = 6, tileOverlap: CGFloat = 4, tileRing: CGFloat = 1.5
+    package static let tileFill = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1F / 255), tileStroke = Color.white.opacity(0.14)
+    package static let tileIcon = Font.system(size: 9.5), tileText = Affect.t3
+    package static let groupText = Affect.t2, groupNote = Affect.t3, groupChevron = Affect.t4, chevron = Font.system(size: 9, weight: .semibold)
+    /// The calls inside an open group sit under the line's words.
+    package static let groupIndent: CGFloat = 28
+    // Thinking (.think): 24 pt, 12/16 at 46 %; open, the thoughts under a hairline.
+    package static let thinkHeight: CGFloat = 24, thinkGap: CGFloat = 6, thinkFont = Affect.small, thinkText = Affect.t3
+    package static let thinkBot: CGFloat = 16
+    package static let hiddenNote = "Hidden by the CLI: it doesn't share this reasoning."
+    // Hand-back and verdict cards (.card .who, .clamp, .more, .verdict, .seal).
+    package static let whoFont = Affect.small, whoText = Affect.t3, whoName = Affect.bodyMedium, whoNameText = Affect.t1
+    package static let whoGap: CGFloat = 8, whoBot: CGFloat = 16, whoChevron = Affect.t4
+    package static let cardText = Affect.t1, cardFont = Affect.body
+    /// A long hand-back shows about three lines and fades out over the last (mask: opaque to 62 %, then clear).
+    package static let clamp: CGFloat = 64, clampSlack: CGFloat = 16, clampFadeFrom = 0.62
+    package static let more = Affect.small, moreText = Affect.t2
+    package static let seal: CGFloat = 16, sealGlyph: CGFloat = 10, sealTickWidth: CGFloat = 2.2, sealCrossWidth: CGFloat = 2
+    package static let verdictFont = Affect.bodyMedium, verdictText = Affect.t1, verdictGap: CGFloat = 8
+    package static let bulletIndent: CGFloat = 18, bulletGap: CGFloat = 2
+  }
+
+  /// A typed hand-back's card body (.hb, ADR-026 §7): the outcome line, then labelled sections 8 pt apart (Changed,
+  /// Checked, Risks, Decide), their rows 2 pt apart; paths in mono, notes and severities at 46 %.
+  package enum Handback {
+    package static let sectionGap: CGFloat = 8, rowGap: CGFloat = 2, pathGap: CGFloat = 8
+    package static let label = Font.system(size: 10, weight: .semibold), labelText = Affect.t3
+    package static let path = Affect.monoFigures, pathText = Affect.t1
+    package static let note = Affect.small, noteText = Affect.t3, markText = Affect.t3
+    package static let severity = Font.system(size: 12, weight: .medium)
+  }
+
+  /// The pane's header (.ph): title 13/500, role at 62 %, short id and clock at 46 % in tabular mono figures; while the
+  /// agent works its bot twinkles and "working" shimmers, nothing else moves.
+  package enum PaneHead {
+    package static let title = Affect.bodyMedium, titleText = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
+    package static let role = Affect.body, roleText = Affect.t2
+    package static let id = Font.system(size: 12, design: .monospaced).monospacedDigit(), idText = Affect.t3
+    package static let state = Affect.body, stateText = Affect.t3
+    package static let clock = Font.system(size: 12, design: .monospaced).monospacedDigit(), clockText = Affect.t3
+  }
+
+  /// Getting ready and waking, compact (DurableWaking-v3): one quiet 28 pt line where the turn begins, a 3 pt strip of
+  /// the setup's phases under it, the steps in a light card on a click, and "Set up in 1:15 · 4 steps" once it's done.
+  /// Waiting between turns (DurableWaiting-v2): one 44 pt card with a static clock.
+  package enum Ready {
+    package static let line: CGFloat = 28, gap: CGFloat = 8, lineGap: CGFloat = 5, bot: CGFloat = 16
+    package static let font = Affect.body, text = Affect.t2, dim = Affect.t3
+    package static let clock = Font.system(size: 12).monospacedDigit(), clockText = Affect.t3, clockLead: CGFloat = 12
+    package static let chevron = Font.system(size: 9, weight: .semibold), chevronText = Affect.t3
+    package static let hover = Rows.hover, hoverRadius: CGFloat = 7, hoverInset: CGFloat = 6
+    // The strip (.strip): one 3 pt segment per phase, 2 pt apart; done filled, the current one to its share.
+    package static let strip: CGFloat = 3, stripGap: CGFloat = 2, stripTrack = Color.white.opacity(0.08), stripFill = Affect.info
+    // A reel column's segmented ring (16 pt, r 6, 2 pt stroke, a 0.06 turn between segments).
+    package static let ring: CGFloat = 16, ringWidth: CGFloat = 2, ringGap = 0.06
+    // The open card (.wkc): the pane's card, 4/10/8 inside.
+    package static let card = Affect.card, cardStroke = Affect.cardStroke, cardRadius: CGFloat = 10
+    package static let cardPadding = EdgeInsets(top: 4, leading: 10, bottom: 8, trailing: 10)
+    // The steps (.trail .step): 28 pt (24 pt in a column or a record), a 16 pt mark, its time on the right.
+    package static let step: CGFloat = 28, stepSmall: CGFloat = 24, stepGap: CGFloat = 10, mark: CGFloat = 16, markGlyph: CGFloat = 10
+    package static let stepText = Affect.t3, stepDone = Affect.t2, stepNow = Affect.t1, stepSmallFont = Affect.small
+    package static let markDone = Affect.infoTint, markDoneGlyph = Affect.info, markNow = Affect.info, markNext = Color.white.opacity(0.2)
+    package static let markNowWidth: CGFloat = 1.5, markNextWidth: CGFloat = 1, stepTime = Font.system(size: 12).monospacedDigit()
+    /// The bytes under the current step, under its words.
+    package static let detailIndent: CGFloat = 26
+    // The record (.rec): 24 pt, 12/16 at 46 % (62 % hovered).
+    package static let record: CGFloat = 24, recordFont = Affect.small, recordText = Affect.t3, recordHover = Affect.t2
+    /// Waking shows only after its first second (a parked machine is back in about 0.2 s): then it fades in.
+    package static let fadeIn = 0.22
+    // Waiting (.wait): a 44 pt card, a 16 pt clock icon, the line at 62 % (names at 90 %), the clock on the right.
+    package static let wait: CGFloat = 44, waitPadding: CGFloat = 14, waitGap: CGFloat = 10, waitIcon: CGFloat = 16
+    package static let waitSub = Affect.small, waitSubText = Affect.t3, waitSubIndent: CGFloat = 14
+  }
+
   /// Composer v2 (canvas "Composer and container v2", after the owner's reference).
   package enum Composer2 {
     package static let radius: CGFloat = 20, padding = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12), gap: CGFloat = 12
@@ -417,6 +542,10 @@ package enum Theme {
     package static let round: CGFloat = 30, roundFill = Color.white.opacity(0.08), roundStroke = Color.white.opacity(0.16), plusFont = Font.system(size: 14, weight: .regular)
     package static let pillHeight: CGFloat = 26, pillGroupFill = Color.black.opacity(0.22), pillText = Color.white.opacity(0.7), pillFont = Font.system(size: 12.5)
     package static let send: CGFloat = 32, sendIcon = Font.system(size: 13, weight: .bold), sendArrowIdle: CGFloat = 0.3
+    // The tool row (+, the place switch, the driver chip, the mic, send), shared by the menu bar's and the window's composers.
+    package static let segmentGap: CGFloat = 2, pillGroupPadding: CGFloat = 3, segmentShadow = Color.black.opacity(0.25)
+    package static let segmentOffOpacity: CGFloat = 0.4, chevronFont = Font.system(size: 8, weight: .bold)
+    package static let micFont = Font.system(size: 13.5, weight: .regular), micText = Color.white.opacity(0.7)
     package static let effortFont = Font.system(size: 11, weight: .semibold), effortText = Color.white.opacity(0.75)
     package static let keyFont = Font.system(size: 11.5, weight: .medium), keyText = Color.white.opacity(0.7), keyStroke = Color.white.opacity(0.25)
     package static let hintFont = Font.system(size: 11), hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
@@ -436,6 +565,12 @@ package enum Theme {
     /// The flag on an older Recent row.
     package static let flagFont = Font.system(size: 10.5, weight: .semibold), flagIcon = Font.system(size: 8.5, weight: .bold)
     package static let flagPadding: CGFloat = 6, flagHeight: CGFloat = 16
+    /// The composer's goal branch name (GoalBranchChip): a quiet line with the name the run will use, a field once
+    /// clicked. Mono like every branch name; dimmed like the setup's labels; a faint fill on hover and while editing.
+    package static let nameFont = Font.system(size: 11.5, design: .monospaced), nameIcon = Font.system(size: 10, weight: .medium)
+    package static let nameText = Setup.labelText, nameHover = Color.white.opacity(0.07)
+    package static let nameHeight: CGFloat = 22, namePadding: CGFloat = 6, nameGap: CGFloat = 5, nameRadius: CGFloat = 6
+    package static let fieldMinWidth: CGFloat = 170, fieldMaxWidth: CGFloat = 300
   }
   /// The composer's inline project setup (design/setup/Inline*.dc.html): a picked folder's next steps in the card.
   package enum Setup {

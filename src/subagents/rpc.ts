@@ -16,10 +16,15 @@ import * as S from "../primitives/state";
 import { TERMINAL_AGENT, parseBudget } from "../primitives/policy";
 import type { ScopeAgent } from "../actors/scope";
 import { verifyToken, type Claims, type Op } from "./token";
-import { capText, fence, MESSAGE_MAX_BYTES, normalizeResult, subtree, type Truncation } from "./results";
+import { capText, fence, fenceTyped, MESSAGE_MAX_BYTES, normalizeResult, subtree, type Truncation } from "./results";
+import { checkPayload, HANDBACK, handbackMarkdown, type Typed } from "../schemas";
 import type { JobMachine } from "../jobs/machine";
+import { WAKE_MAX_MS } from "../actors/wakes";
+import { noteOpWake } from "../primitives/wake-sweep";
 
-export interface RpcRequest { id: string; token: string; op: string; args?: Record<string, any> }
+/** `holdMs`: how long the caller still waits for this answer, less a margin for the spool's round trip (the CLI sends it;
+ *  a verify or check is held no longer than that, so a retry with little time left isn't answered after it gave up). */
+export interface RpcRequest { id: string; token: string; op: string; args?: Record<string, any>; holdMs?: number }
 export type RpcResponse = { id: string; ok: true; result: unknown } | { id: string; ok: false; error: { code: string; reason?: string; message: string; hint?: string; retryable?: boolean } };
 
 const RESERVED_KV = ["_", "approval/", "recipe/", "handoff/"];
@@ -39,14 +44,25 @@ export interface RpcContext {
   upload?: (path: string, data: Uint8Array) => Promise<void>;
   /** The caller's machine as its background jobs run in it (plugin API §16.2; src/jobs/service.ts). */
   jobs?: JobMachine;
+  /** How long a verify or check is held before it answers "running": VERIFY_HOLD_MS, or less when the caller says so. */
+  holdMs?: number;
 }
+
+/** The engine call under a long verify gave up waiting (the HTTP request timed out) while the verification goes on in
+ *  the verifier: not an error of the verification, so the poll answers "running" and the next one attaches again. */
+const transportTimeout = (e: unknown): boolean => {
+  const x = e as { name?: string; message?: string } | null;
+  return /HTTP request error/.test(String(x?.message ?? "")) && /TimeoutError|timed out/i.test(String(x?.message ?? ""));
+};
 
 export async function handleRpc(req: RpcRequest, ctx: RpcContext): Promise<RpcResponse> {
   const id = String(req?.id ?? "?");
   try {
     const claims = await authorize(req, ctx);
     // Never store a capability token (or other known secret shapes) an agent pasted into its args.
-    let result = await dispatch(claims, req.op as Op, redactShapes(req.args ?? {}), id, ctx);
+    const asked = typeof req?.holdMs === "number" ? req.holdMs : NaN;
+    const holdMs = Number.isFinite(asked) && asked >= 0 ? Math.min(VERIFY_HOLD_MS, asked) : VERIFY_HOLD_MS;
+    let result = await dispatch(claims, req.op as Op, redactShapes(req.args ?? {}), id, { ...ctx, holdMs });
     const js = JSON.stringify(result ?? null);
     if (Buffer.byteLength(js) > RESPONSE_MAX_BYTES) result = { truncated: [{ field: "response", bytes: Buffer.byteLength(js), kept: 0 }], hint: "Response too large; narrow the query (e.g. --tail, --limit, a subtree root)." };
     ctx.onCall?.(req.op, true);
@@ -98,6 +114,7 @@ function agentFor(c: Claims, a: ScopeAgent) {
   if (a.agentId !== c.sub && v.result) {
     const r = { ...v.result };
     for (const k of ["summary", "error", "claim"]) if (typeof r[k] === "string") r[k] = fence(a.agentId, r[k]);
+    if (r.typed) r.typed = fenceTyped(a.agentId, r.typed);
     v.result = r;
   }
   // A failing notice quotes the agent's own error output.
@@ -116,7 +133,7 @@ function ids(args: Record<string, any>, key = "agents"): string[] {
 async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string, ctx: RpcContext): Promise<unknown> {
   const run = c.run;
   // Writes are idempotent per request: the CLI retries a transient failure with the same id.
-  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title", "job.start"].includes(op)) args = { ...args, key: `r:${reqId}` };
+  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title", "job.start", "wake", "ask", "answer"].includes(op)) args = { ...args, key: `r:${reqId}` };
   const s = client().scope.getOrCreate([run]);
   switch (op) {
     case "spawn": {
@@ -153,6 +170,8 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       // where a cycle (or awaiting an ancestor) is refused as a deadlock.
       const targets = ids(args);
       await assertReadable(c, targets);
+      // ADR-026 §3: `await … --wake` doesn't wait: the agent ends its turn and is woken when they end.
+      if (isWake(args)) return armWake(c, reqId, { kind: "agents", agents: targets, mode: op === "wait-any" ? "any" : "all" }, args, { agents: targets });
       if (args.end) { await s.awaitEnd({ waiter: c.sub }); return { ended: true }; }
       const agents = await O.peekAgents(run, targets);
       const live = agents.filter((a) => !TERMINAL_AGENT.has(a.status)).map((a) => a.agentId);
@@ -161,7 +180,9 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       else await s.awaitBegin({ waiter: c.sub, targets: live }).catch(O.asRelay);
       // ADR-019 §2: stuck notices on what's still running; the in-VM client returns on one raised while it waits.
       const notices = agents.filter((a) => a.status === "running" && a.notice).map((a) => ({ agentId: a.agentId, ...a.notice!, detail: fence(a.agentId, a.notice!.detail) }));
-      return { done: doneNow, agents: agents.map((a) => agentFor(c, a)), ...(notices.length ? { notices } : {}) };
+      // ADR-026 §4: and the questions they asked: the in-VM client returns on one asked while it waits.
+      const asked = agents.filter((a) => a.asked).map((a) => askedView(a));
+      return { done: doneNow, agents: agents.map((a) => agentFor(c, a)), ...(notices.length ? { notices } : {}), ...(asked.length ? { asked } : {}) };
     }
     case "tree": {
       const root = args.root ? String(args.root) : c.sub;
@@ -180,11 +201,17 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       if (to !== me.parent) await assertWritable(c, to, true);
       const tr: Truncation[] = [];
       const body = capText(String(args.body ?? ""), MESSAGE_MAX_BYTES, "body", tr);
-      const note = await O.messageNote(run, to);
-      return { ...(await s.sendMessage({ to, from: c.sub, body, ...(args.key ? { key: `${c.sub}:${args.key}` } : {}) })), ...(tr.length ? { truncated: tr } : {}), ...(note ? { note } : {}) };
+      const sent = await s.sendMessage({ to, from: c.sub, body, ...(args.key ? { key: `${c.sub}:${args.key}` } : {}) });
+      // ADR-026 §1: an idle child continues with the message as its next turn.
+      const note = (sent as { continued?: boolean }).continued ? O.continuedNote(to) : await O.messageNote(run, to);
+      return { ...sent, ...(tr.length ? { truncated: tr } : {}), ...(note ? { note } : {}) };
     }
     case "inbox": {
       const msgs = await s.inbox({ agentId: c.sub, after: Number(args.after ?? 0) });
+      // ADR-026 §1: what it read itself is read: the durable cursor moves past it, so its end doesn't continue it with
+      // the same messages again (a CLI that only reads its inbox, Codex, would otherwise be continued without end).
+      const last = Math.max(0, ...msgs.map((m: any) => Number(m.seq)));
+      if (last) await s.messagesDelivered({ agentId: c.sub, seq: last });
       // Skills the sender attached come with the body, as a running agent gets them (runner messageText).
       return { messages: msgs.map((m: any) => ({ seq: m.seq, from: m.from, at: m.at, body: fence(m.from, withSkills(m.body, m.skills)), ...(m.skills?.length ? { skills: m.skills.map((x: AttachedSkill) => x.name) } : {}) })) };
     }
@@ -240,9 +267,13 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       return O.setAgentTitle(run, t, title, { by: t === c.sub ? "self" : "parent", setBy: c.sub, key });
     }
     case "result": {
-      const r = normalizeResult(args);
+      // ADR-026 §7: a typed hand-back is checked against its schema before anything is recorded; without a summary of
+      // its own, its prose form is the summary (what older readers, and the commit subject, read).
+      const typed = typedOf(args);
+      const said = typeof args.summary === "string" && args.summary.trim() ? args.summary : typed?.schema === HANDBACK ? handbackMarkdown(typed.value) : args.summary;
+      const r = normalizeResult({ ...args, summary: said, ...(typed ? { typed } : {}) });
       // An empty call (a tool called before its schema was read gives `{}`) would record nothing, or erase a result.
-      if (!r.summary.trim() && !r.artifacts.length && r.data === undefined) throw new RelayError("usage", "result needs a summary (or artifacts or data): nothing was recorded", "capcomd result --summary \"<what you did, what you checked, what is left>\" [--data JSON]");
+      if (!r.summary.trim() && !r.artifacts.length && r.data === undefined && !r.typed) throw new RelayError("usage", "result needs a summary (or a hand-back, artifacts or data): nothing was recorded", "capcomd result --handback '{\"status\": \"done\", \"outcome\": \"…\"}' or capcomd result --summary \"<what you did, what you checked, what is left>\"");
       await S.kvWrite(run, { k: `_result/${c.sub}`, value: r, writer: c.sub });
       return { recorded: true, ...(r.truncated ? { truncated: r.truncated } : {}) };
     }
@@ -288,11 +319,25 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       // whole verify path, which can outlast a short hold and would answer "running" forever).
       const done = await O.finishedVerify(run, O.verifyIdFor(run, ref, key));
       if (done) return done;
+      // ADR-026 §3: `verify --wake` holds nothing: it starts the verification and arms a wake on its end.
+      const wake = isWake(args);
+      if (wake) await assertWakeable(c);
       // A review takes minutes, longer than one RPC: answer "running" after VERIFY_HOLD_MS; the CLI polls
       // with the same key, and the in-flight verify is shared (never re-run) until it finishes.
       const p = O.verifyRef({ runId: run, ref, ...(pinned ? { check: pinned } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key, reviewParent: c.sub });
       p.catch(() => {}); // a later poll gets the error
-      const held = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), VERIFY_HOLD_MS))]);
+      if (wake) {
+        const id = O.verifyIdFor(run, ref, key);
+        // Its op record is written as it starts: wait for that (a moment), so the wake's arming sees it. A verify that
+        // fails before it has one (its child has no branch) answers with that failure.
+        for (let i = 0; i < 100 && !(await s.getOp({ opId: id })); i++) {
+          const early = await Promise.race([p.then((v) => ({ v }), (e) => ({ e })), new Promise<null>((r) => setTimeout(() => r(null), 100))]);
+          if (early && "e" in early) throw early.e;
+          if (early && "v" in early) return early.v;
+        }
+        return armWake(c, reqId, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "verify", state: "running", ref });
+      }
+      const held = await Promise.race([p.catch((e) => { if (transportTimeout(e)) return null; throw e; }), new Promise((r) => setTimeout(() => r(null), ctx.holdMs ?? VERIFY_HOLD_MS))]);
       return held ?? { id: O.verifyIdFor(run, ref, key), kind: "verify", state: "running", ref };
     }
     case "fetch": return fetchInto(ctx, args);
@@ -304,17 +349,83 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       if (args.checks !== undefined) deny("in-VM check cannot set --checks: check commands come only from the operator", "Name one of the run's operator-named checks with --check NAME (`capcomd kv get _checks` lists them), or none for the run's own checks.");
       if (args.id !== undefined && args.ref === undefined) {
         const { id, done } = await O.startCheck({ runId: run, id: String(args.id) });
-        return holdCheck(id, done);
+        return holdCheck(id, done, ctx.holdMs);
       }
       const ref = args.ref !== undefined && String(args.ref).trim() ? String(args.ref).trim() : undefined;
       let pinned = false;
       if (ref?.startsWith("agt-")) { await assertReadable(c, [ref]); pinned = typeof (await O.getAgentOrThrow(run, ref)).contract?.check === "string"; }
       const oc = args.check === undefined && !pinned ? await operatorChecks(c) : undefined;
+      if (isWake(args)) await assertWakeable(c);
       const { id, done } = await O.startCheck({
         runId: run, ...(ref ? { ref } : {}), ...(args.check !== undefined ? { check: String(args.check) } : oc ? { checks: oc } : {}),
         ...(args.key !== undefined ? { key: String(args.key) } : {}), askedBy: c.sub,
       });
-      return holdCheck(id, done);
+      // ADR-026 §3: `check --wake` holds nothing: the check runs on, and its end wakes the agent.
+      if (isWake(args)) { done.catch(() => {}); return armWake(c, reqId, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "check", state: "running" }); }
+      return holdCheck(id, done, ctx.holdMs);
+    }
+    case "wake": {
+      // ADR-026 §3: `capcomd wake --op ID | --agents a,b [--all] | --events T,… [--agent agt] [--after SEQ] | --in 5m | --at ISO [--note …]`.
+      if (args.cancel) {
+        const w = await s.wakeCancel({ agentId: c.sub, wakeId: String(args.cancel) });
+        if (!w) throw new RelayError("not_found", `${String(args.cancel).slice(0, 80)} isn't one of your wakes`, "capcomd wake --list shows yours.");
+        return { wake: wakeView(w) };
+      }
+      if (args.list === true || args.list === "true") return { wakes: (await s.wakeList({ agentId: c.sub })).map(wakeView) };
+      const list = (v: unknown) => [].concat(v as any).flatMap((x: unknown) => String(x).split(",")).map((x) => x.trim()).filter(Boolean);
+      // Only what the agent may see (its subtree and its siblings', as status, events and inspect): an op of one of them
+      // (or one it asked for itself), those agents, events about them.
+      if (args.op !== undefined) {
+        const id = String(args.op);
+        const o = await s.getOp({ opId: id });
+        if (!o) throw new RelayError("not_found", `${id.slice(0, 80)} not found in this run`, "Pass a vfy-/chk-/mrg- id that verify, check or merge returned.");
+        await assertOpVisible(c, o);
+        return armWake(c, reqId, { kind: "op", op: id }, args, {});
+      }
+      if (args.agents !== undefined) {
+        const agents = list(args.agents);
+        await assertReadable(c, agents);
+        return armWake(c, reqId, { kind: "agents", agents, mode: args.all === true || args.all === "true" ? "all" : "any" }, args, {});
+      }
+      if (args.events !== undefined) {
+        const { me } = await readable(c);
+        if (args.agent !== undefined) await assertReadable(c, [String(args.agent)]);
+        return armWake(c, reqId, { kind: "events", types: list(args.events), ...(args.agent !== undefined ? { agent: String(args.agent) } : {}), after: Number(args.after ?? 0) || 0, within: me.parent ?? c.sub }, args, {});
+      }
+      // ADR-026 §3 schedules: `--every 30m [--times N]`: a recurring check-in (its first at --in/--at, else one interval out).
+      if (args.every !== undefined) {
+        const every = parseDuration(args.every);
+        if (every === null) throw new RelayError("usage", `--every ${String(args.every).slice(0, 40)}: not a duration`, "e.g. --every 30m, --every 2h.");
+        const first = args.in === undefined && args.inMs === undefined && args.at === undefined ? { inMs: every } : {};
+        return armWake(c, reqId, { kind: "timer", every, times: args.times !== undefined ? Number(args.times) : null }, { ...args, ...first }, {});
+      }
+      return armWake(c, reqId, { kind: "timer" }, args, {});
+    }
+    case "ask": {
+      // ADR-026 §4: `capcomd ask "<question>" --recommend "<answer>" [--option …] [--why …] [--holds …]`: recorded and sent
+      // to the parent (the user at the root); the agent ends its turn and its answer continues it.
+      const r: any = await s.ask({ agentId: c.sub, question: String(args.question ?? ""), recommend: String(args.recommend ?? ""),
+        options: [].concat(args.options ?? args.option ?? []).map(String), why: args.why !== undefined ? String(args.why) : null, holds: args.holds !== undefined ? String(args.holds) : null,
+        key: `ask:${args.key}` }).catch(O.asRelay);
+      const q = r.question;
+      return {
+        asked: q.questionId, to: q.to ?? "user", state: q.state,
+        hint: q.state === "open"
+          ? `Asked ${q.to ? `your parent ${q.to}` : "the user"}. End your turn now (don't wait, poll or sleep): your work is saved as your turn ends, and the answer comes to you as a message that starts your next turn.`
+          : `Already answered: ${q.answer}`,
+      };
+    }
+    case "answer": {
+      // ADR-026 §4, §9.1: answer a question one of your descendants asked (`capcomd answer <qst|agt> "<answer>" [--note …]`,
+      // `--recommended`), or pass it up when you can't decide (`--up`): to your parent, or the user at the root.
+      const q = await questionFor(c, args);
+      if (args.up === true || args.up === "true") return { ...(await s.passQuestion({ questionId: q.questionId, by: c.sub }).catch(O.asRelay)), hint: "Passed up. End your turn unless you have other work: the asker continues once it's answered." };
+      const recommended = args.recommended === true || args.recommended === "true";
+      const tr: Truncation[] = [];
+      const answer = recommended ? null : capText(String(args.answer ?? ""), 2000, "answer", tr);
+      if (!recommended && !answer?.trim()) throw new RelayError("usage", "answer needs the answer (or --recommended)", `capcomd answer ${q.questionId} "<your answer>" [--note "why"], --recommended, or --up to pass it up.`);
+      const r: any = await s.answerQuestion({ questionId: q.questionId, by: c.sub, answer, recommended, note: args.note !== undefined ? String(args.note).slice(0, 2000) : null, key: `${c.sub}:answer:${args.key}` }).catch(O.asRelay);
+      return { answered: q.questionId, agentId: q.agentId, answer: r.question?.answer, recommended: r.question ? r.question.answer === q.recommend : recommended, ...(r.continued ? { continued: true } : {}), ...(tr.length ? { truncated: tr } : {}) };
     }
     case "merge": {
       const ref = String(args.ref ?? "");
@@ -388,10 +499,90 @@ function jobView(j: import("../../packages/plugin/src/shapes").Job) {
   };
 }
 
+const isWake = (args: Record<string, any>) => args.wake === true || args.wake === "true";
+
+/** A duration: "90s", "5m", "2h", "1500ms", or a bare number of seconds. */
+export function parseDuration(v: unknown): number | null {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|sec|m|min|h|hr)?\s*$/i.exec(String(v ?? ""));
+  if (!m) return null;
+  const n = Number(m[1]), u = (m[2] ?? "s").toLowerCase();
+  return Math.round(n * (u === "ms" ? 1 : u === "s" || u === "sec" ? 1000 : u === "m" || u === "min" ? 60_000 : 3600_000));
+}
+
+/** An agent can be woken only when it reads messages while it runs: a Codex agent reads none after its prompt. */
+async function assertWakeable(c: Claims) {
+  const me = await O.getAgentOrThrow(c.run, c.sub);
+  if ((me.spec as { provider?: string } | null)?.provider === "codex")
+    throw new RelayError("usage", "a Codex agent can't be woken: it reads no message after its prompt, so its turn ending ends it", "Wait without --wake (capcomd await, verify, check), or poll capcomd inbox.");
+}
+
+/** An op the agent may wait on: one it asked for, or one about an agent it may see. */
+async function assertOpVisible(c: Claims, op: { id: string; data: Record<string, unknown> }) {
+  if (op.data.askedBy === c.sub) return;
+  const about = typeof op.data.agentId === "string" ? op.data.agentId : typeof op.data.ref === "string" && op.data.ref.startsWith("agt-") ? op.data.ref : null;
+  const { ids } = await readable(c);
+  if (!about || !ids.has(about)) deny(`${op.id} is not visible to ${c.sub}: it is about an agent outside your subtree and your siblings'`, "Wait on the verify, check or merge ids your own calls returned.");
+}
+
+/** A question an agent asked, as its waiter reads it: the asker's words fenced (they are another agent's). */
+function askedView(a: ScopeAgent) {
+  return { agentId: a.agentId, questionId: a.asked!.questionId, question: fence(a.agentId, a.asked!.question), at: a.asked!.at,
+    hint: `capcomd answer ${a.asked!.questionId} "<answer>" (or --recommended, or --up to pass it up); \`capcomd status ${a.agentId}\` shows it.` };
+}
+
+/** The question `capcomd answer` names (a qst- id, or the agent that asked it), which must be one a descendant asked. */
+async function questionFor(c: Claims, args: Record<string, any>) {
+  const s = client().scope.getOrCreate([c.run]);
+  const ref = String(args.question ?? args.agent ?? "").trim();
+  if (!ref) throw new RelayError("usage", "answer needs the question (qst-…) or the agent that asked it", "capcomd answer <qst|agt> \"<your answer>\"");
+  const q: any = ref.startsWith("qst-") ? await s.getQuestion({ questionId: ref })
+    : ((await s.listQuestions({ agentId: ref })) as any[]).find((x) => x.state === "open") ?? ((await s.listQuestions({ agentId: ref })) as any[])[0] ?? null;
+  if (!q) throw new RelayError("not_found", `no question ${ref.slice(0, 80)} in this run`, "capcomd status <agt> shows what an agent asked (its asked field).");
+  await assertWritable(c, q.agentId, true);
+  return q as import("../actors/questions").QuestionRow;
+}
+
+/** A wake as the agent that armed it reads it (its note is its own). */
+function wakeView(w: import("../actors/wakes").WakeRow) {
+  return { wake: w.wakeId, state: w.state, kind: w.filter.kind, filter: w.filter.kind === "events" ? { ...w.filter, within: undefined } : w.filter, at: w.at, note: w.note, createdAt: w.createdAt, firedAt: w.firedAt, reason: w.reason };
+}
+
+/**
+ * ADR-026 §3: arm a wake for the caller (src/actors/wakes.ts) and answer at once. The agent's turn can end: the wake's
+ * message reaches it as its next turn. `in` (a duration) or `at` (an ISO time or epoch ms) is the time (a check-in),
+ * or an event wake's deadline (default and most WAKE_MAX_MS).
+ */
+async function armWake(c: Claims, reqId: string, filter: Record<string, any>, args: Record<string, any>, extra: Record<string, unknown>) {
+  await assertWakeable(c);
+  const inMs = args.inMs !== undefined ? Number(args.inMs) : args.in !== undefined ? parseDuration(args.in) : undefined;
+  if (inMs === null || (inMs !== undefined && !(Number.isFinite(inMs) && inMs >= 0))) throw new RelayError("usage", `--in ${String(args.in).slice(0, 40)}: not a duration`, "e.g. --in 10m, --in 90s, --in 2h.");
+  const atArg = args.at !== undefined ? (/^\d+$/.test(String(args.at)) ? Number(args.at) : Date.parse(String(args.at))) : undefined;
+  const asked = atArg !== undefined ? atArg : inMs !== undefined ? Date.now() + inMs : undefined;
+  if (asked !== undefined && !(Number.isFinite(asked) && asked > Date.now() - 1000)) throw new RelayError("usage", "a wake's time must be in the future", "--in 10m (from now) or --at <ISO time>.");
+  if (filter.kind === "timer" && asked === undefined) throw new RelayError("usage", "wake needs what to wait for (--op, --agents, --events) or a time (--in, --at)", "e.g. capcomd wake --in 10m --note \"look at the deploy\".");
+  const max = WAKE_MAX_MS();
+  if (asked !== undefined && asked > Date.now() + max + 1000) throw new RelayError("usage", `a wake can be set at most ${Math.round(max / 3600_000)} hours ahead`, "Wake sooner and arm another one then if you still need to wait.");
+  const at = Math.min(asked ?? Date.now() + max, Date.now() + max);
+  // A schedule's slot 0 is its first time.
+  if (filter.kind === "timer" && filter.every !== undefined) filter = { ...filter, from: at };
+  // Idempotent: a retried call (the CLI retries a transient failure with the same request id) arms one wake; the same
+  // wait armed again while it still waits is that wake (scope wakeArm).
+  const key = args.key !== undefined ? `wake:${String(args.key)}` : `req:${reqId}`;
+  const r: any = await client().scope.getOrCreate([c.run]).wakeArm({ agentId: c.sub, filter, at, note: args.note !== undefined ? String(args.note).slice(0, 2000) : null, ...(key ? { key } : {}) }).catch(O.asRelay);
+  const w = r.wake;
+  // An op it waits on is restarted when the daemon starts again (src/primitives/wake-sweep.ts): nobody polls it.
+  if (filter.kind === "op" && w.state === "armed") noteOpWake(c.run);
+  return {
+    ...extra, wake: w.wakeId, wakeState: w.state, wakeKind: w.filter.kind, wakeAt: w.at,
+    hint: w.state === "fired" ? "It already happened: the wake-up message is in your inbox (capcomd inbox), and reaches you as your next message."
+      : "End your turn now (don't poll, sleep or wait in a tool call): the wake-up comes to you as a message when it happens, or at its time.",
+  };
+}
+
 /** A check takes as long as the checks: answer "running" (with its id, which the CLI polls) after VERIFY_HOLD_MS. */
-async function holdCheck(id: string, done: Promise<any>) {
+async function holdCheck(id: string, done: Promise<any>, holdMs = VERIFY_HOLD_MS) {
   done.catch(() => {}); // a later poll gets the error
-  const held = await Promise.race([done, new Promise((r) => setTimeout(() => r(null), VERIFY_HOLD_MS))]);
+  const held = await Promise.race([done.catch((e) => { if (transportTimeout(e)) return null; throw e; }), new Promise((r) => setTimeout(() => r(null), holdMs))]);
   return held ?? { id, kind: "check", state: "running" };
 }
 
@@ -429,6 +620,29 @@ async function fetchInto(ctx: RpcContext, args: Record<string, any>) {
   return { fetched: true, branches, hint: "Read a branch without changing anything: git log origin/<branch>, git show origin/<branch>:<path>, git diff <a> <b>; or git switch --detach origin/<branch> to read it with the file tools." };
 }
 
+/** handback@1 as an agent can copy it, for a refused payload's hint. */
+const HANDBACK_EXAMPLE = `{"status": "done", "outcome": "added the Home section to the desktop page", "changed": [{"path": "site/app/page.tsx", "what": "new section"}], "checked": [{"check": "bun run typecheck", "result": "passed"}], "risks": [], "decide": []}`;
+
+/**
+ * A result's typed hand-back (ADR-026 §7): \`handback\` (JSON text or an object) under \`schema\` (default handback@1),
+ * checked against the registry. A payload that doesn't fit is refused, nothing recorded, with each field to fix.
+ */
+function typedOf(args: Record<string, any>): Typed | undefined {
+  if (args.handback === undefined && args.schema === undefined) return undefined;
+  const schema = String(args.schema ?? HANDBACK);
+  let value = args.handback;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { throw new RelayError("usage", "the hand-back isn't JSON: nothing was recorded", `capcomd result --handback '${HANDBACK_EXAMPLE}'`, { code: "invalid_payload" }); }
+  }
+  if (value === undefined) throw new RelayError("usage", `--schema ${schema} needs the payload in --handback: nothing was recorded`, `capcomd result --handback '<JSON>' --schema ${schema}`, { code: "invalid_payload" });
+  const c = checkPayload(schema, value);
+  if (!c.ok) {
+    throw new RelayError("usage", `the hand-back doesn't fit ${schema}, so nothing was recorded: ${c.errors.join("; ")}`,
+      `Fix those fields and run \`capcomd result\` again${schema === HANDBACK ? `, e.g. --handback '${HANDBACK_EXAMPLE}'` : ""}. Or hand back in prose: --summary "<your hand-back>".`, { code: "invalid_payload" });
+  }
+  return { schema, value: c.value };
+}
+
 /** The checks command an operator set on the caller's top-level ancestor (RPC spawns strip it). */
 async function operatorChecks(c: Claims): Promise<string | undefined> {
   const all = await scopeAgents(c.run);
@@ -444,6 +658,7 @@ function redactEvent(e: any) {
   if (d.result && typeof d.result === "object") {
     const r = { ...d.result };
     for (const k of ["summary", "error", "claim"]) if (typeof r[k] === "string") r[k] = fence(e.agentId, r[k]);
+    if (r.typed) r.typed = fenceTyped(e.agentId, r.typed);
     d.result = r;
   }
   if (typeof d.task === "string") d.task = fence("operator-or-parent", d.task).text;

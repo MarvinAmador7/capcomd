@@ -1,6 +1,6 @@
 import type { AgentConfig, ClaudeUsage, RealAgent } from "./config";
 import type { Redactor } from "./redact";
-import type { AgentArchive } from "../../packages/plugin/src/seams";
+import type { AgentArchive, AgentSession } from "../../packages/plugin/src/seams";
 
 export interface AgentEvent {
   type: string;
@@ -43,6 +43,8 @@ export interface AgentRunState {
   quotaResetHint?: number;
   /** claude: each tool_use id's call ("name input"), so its tool_result can be matched to it. */
   toolCalls?: Record<string, string>;
+  /** ADR-026 §2: the CLI's session id, when it reports one (codex's thread id). */
+  sessionId?: string;
 }
 
 export interface AgentCommandCtx {
@@ -65,6 +67,8 @@ export interface AgentCommandCtx {
   mcp?: { config: string; servers: Array<{ name: string; command: string[]; trust: "trusted" | "untrusted" }> };
   /** The supervisor feeds the prompt, and messages sent while it runs, on stdin (adapters with streamInput). */
   stdinPrompt?: boolean;
+  /** ADR-026 §2: a new session under `id`, or the saved session `id` continued (`resume`). Absent: the CLI's default. */
+  session?: { id: string; resume: boolean };
 }
 
 /**
@@ -114,4 +118,7 @@ export interface AgentAdapter {
   outcome(state: AgentRunState, exitCode: number): { ok: boolean; stopReason: string };
   /** A tool call the CLI refused, from one stderr line (a CLI that reports refusals only there: codex). */
   refusal?(line: string, r: Redactor): { call: string; reason: string } | null;
+  /** ADR-026 §2: the provider's `session` (its CLI's sessions can be kept and continued on another machine), and the
+   *  provider's name (`SessionRef.cli`: `claude`, `codex`). */
+  session?: AgentSession & { cli: string };
 }

@@ -110,7 +110,7 @@ function branches(url: URL) {
     path, root: path.replace(/\/src$/, ""), github: REPO, source: git ? "git" : "github",
     note: git ? "GitHub: no login (GITHUB_TOKEN, GH_TOKEN or `gh auth login`); read with git ls-remote" : null,
     defaultBranch, branches: BRANCHES, projectTarget, suggestedBase,
-    suggestedGoalBranch: goal ? suggestGoalBranch(goal, BRANCHES) : null,
+    suggestedGoalBranch: goal ? suggestGoalBranch(goal, BRANCHES, { defaultBranch, base: suggestedBase }) : null,
     goalBranchProblem: name ? goalBranchProblemOf(name) : null,
     baseProblem: base ? (baseProblem(base) ?? (BRANCHES.includes(base) ? null : `base ${base} isn't a branch of ${REPO}`)) : null,
   });

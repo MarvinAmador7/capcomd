@@ -44,7 +44,8 @@ function mockSdk() {
       async setDeleteAfter(id, seconds) { calls.push(["setDeleteAfter", id, seconds]); if (!find(id)) throw new NotFoundError(`no ${id}`); return new Date(Date.now() + seconds * 1000); },
       async pause(id) { calls.push(["pause", id]); return {}; },
       async resume(id) { calls.push(["resume", id]); find(id)!.status = "running"; return {}; },
-      async wake(id) { calls.push(["wake", id]); find(id)!.status = "running"; },
+      async hibernate(id) { calls.push(["hibernate", id]); if (sdk.fail.hibernate) throw sdk.fail.hibernate; const m = find(id); if (!m) throw new NotFoundError(`no ${id}`); m.status = "hibernated"; },
+      async wake(id) { calls.push(["wake", id]); if (sdk.fail.wake) throw sdk.fail.wake; find(id)!.status = "running"; },
       files: { async upload() { return 0; }, async download() { return new Uint8Array(); } },
       checkpoints: { async create() { return {}; }, async restore() {} },
     },
@@ -197,6 +198,37 @@ describe("BoxdProvider (mocked SDK)", () => {
     const { id } = await p.ensure(spec());
     await p.extendTtl(id, 3600);
     expect(sdk.calls.find((c) => c[0] === "setDeleteAfter")).toEqual(["setDeleteAfter", id, 3600]);
+  });
+
+  test("ADR-026 §6: hibernate parks with boxd's hibernate (never pause) and stops the keepalive; wake wakes and keeps it awake again", async () => {
+    const k = new BoxdProvider({ client: sdk, dbPath: ":memory:", keepaliveMs: 20 });
+    const { id } = await k.ensure(spec({ idemKey: "park" }));
+    await k.extendTtl(id, 86_400);
+    await k.hibernate(id);
+    expect(sdk.vms.get(id)!.status).toBe("hibernated");
+    expect(sdk.calls.some((c) => c[0] === "pause")).toBe(false);
+    expect(sdk.calls.filter((c) => c[0] === "setDeleteAfter").at(-1)).toEqual(["setDeleteAfter", id, 86_400]);
+    // Nothing keeps it awake while it is parked.
+    const parked = sdk.calls.length; await Bun.sleep(70);
+    expect(sdk.calls.slice(parked).some((c) => c[0] === "exec")).toBe(false);
+    // Hibernating a hibernated machine is a no-op.
+    await k.hibernate(id);
+    expect(sdk.calls.filter((c) => c[0] === "hibernate")).toHaveLength(1);
+    await k.wake(id);
+    expect(sdk.vms.get(id)!.status).toBe("running");
+    expect(sdk.calls.filter((c) => c[0] === "wake")).toEqual([["wake", id]]);
+    await Bun.sleep(70);
+    expect(sdk.calls.filter((c) => c[0] === "exec" && c[1] === id).length).toBeGreaterThanOrEqual(2);
+    // A machine that is gone (deleted after its retention) can't be woken: not_found, so the caller takes a fresh one.
+    await k.destroy(id);
+    await expect(k.wake(id)).rejects.toBeInstanceOf(SandboxNotFoundError);
+    await expect(k.hibernate("m_nope")).rejects.toBeInstanceOf(SandboxNotFoundError);
+    // boxd's own failure to wake is the provider's typed error.
+    const { id: other } = await p.ensure(spec({ idemKey: "park2" }));
+    await p.hibernate(other);
+    sdk.fail.wake = new APIStatusError("deadline exceeded", 4);
+    await expect(p.wake(other)).rejects.toBeInstanceOf(SandboxTimeoutError);
+    await k.close();
   });
 
   test("destroy is idempotent, marks the ledger, and list filters by prefix", async () => {

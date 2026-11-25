@@ -205,17 +205,17 @@ describe("a remote that never answers", () => {
 		const dir = join(root, "timeout-repo");
 		git(root, "init", "-q", "--bare", dir);
 		const t0 = Date.now();
-		const p = new Git(dir, hang).run(["fetch", "-q", slow.remote, "main"], { timeoutMs: 1000 });
-		await Bun.sleep(400);
+		const p = new Git(dir, hang).run(["fetch", "-q", slow.remote, "main"], { timeoutMs: 600 });
+		await Bun.sleep(250);
 		expect(stuck(`sleep ${sleep}`)).not.toBe(""); // the stub "ssh" is hanging
 		const r = await p;
-		expect(Date.now() - t0).toBeLessThan(3000);
+		expect(Date.now() - t0).toBeLessThan(2600);
 		expect(r).toMatchObject({ code: 124, timedOut: true });
 		await Bun.sleep(200);
 		expect(stuck(`sleep ${sleep}`)).toBe("");
 	});
 	test("the route answers within the timeout, a concurrent request isn't held up, and the next comes from memory", async () => {
-		useMirror(slow, new FilesMirror(slow.remote, slow.workdir, { fetchTimeoutMs: 1000, env: hang }));
+		useMirror(slow, new FilesMirror(slow.remote, slow.workdir, { fetchTimeoutMs: 400, env: hang }));
 		const path = join(root, "clients-slow.json");
 		const token = addClient("reader", ["read"], path).token;
 		const run = { id: "run-2", projectId: null, label: null, state: "running", goal: null, repo: slow.remote, createdAt: "2026-10-25T07:00:00.000Z" };
@@ -226,11 +226,11 @@ describe("a remote that never answers", () => {
 		];
 		const app = harnessApp({ source: memorySource({ runs: [run], agents: { "run-2": agents }, events: { "run-2": evs }, repos: { "run-2": slow } }), clients: () => loadClients(path), state: harnessState(null) });
 		const get = async () => { const t0 = Date.now(); const res = await app.request("/v1/runs/run-2/files", { headers: { authorization: `Bearer ${token}` } }); return { ms: Date.now() - t0, status: res.status, body: RunFiles.parse(await res.json()) }; };
-		// Four bounded fetches would be ~4 s; one timeout ends the request's use of the remote.
+		// Four bounded fetches would be ~1.6 s; one timeout ends the request's use of the remote.
 		const [a, b] = await Promise.all([get(), get()]);
 		for (const r of [a, b]) {
 			expect(r.status).toBe(200);
-			expect(r.ms).toBeLessThan(2500);
+			expect(r.ms).toBeLessThan(1400);
 			expect(r.body.files).toEqual([]);
 			expect(r.body.sources.map((s) => s.error)).toEqual(["fetching from the remote timed out", "fetching from the remote timed out"]);
 		}

@@ -259,7 +259,8 @@
       "tool": null,
       "error": null,
       "truncated": null,
-      "child": null
+      "child": null,
+      "internal": true
     },
     {
       "id": "itm-agt-golden-6",

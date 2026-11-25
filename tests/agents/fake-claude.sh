@@ -19,6 +19,7 @@
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
+#   [listen-once:N] the same, but done listening once it has heard one message (at most ~N s)
 #   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
 #   [chat] its final message reads like chat, not like a commit subject
 #   [review-check] (a reviewer) run sh check.sh in the checkout; the final message is a verdict saying whether it passed
@@ -30,23 +31,56 @@
 #   [linger] after its result (its turn ended), keep running ~6s before it exits, as a CLI still open for a next turn
 #   [commit] commit its edit locally (git commit), as an agent that commits its own work does
 #   [peek:REF] fetch REF (a ref outside refs/heads, e.g. a helper's checkpoint) and check it out detached, to read it
+#   [session-folder] (with --session-id) also write a subagent's file in the session's <id>/ folder, as long sessions have
+#   [session-secret] (with --session-id) its session file holds its API key in a tool result, and a "token" field
+#   [ask] (ADR-026 §4) a Bash call `capcomd ask "…" --recommend "100 req/min" --option "500 req/min" --why … --holds …`
+#           (its answer in ../ask-out.txt), then its turn ends at once, changing nothing; a resumed or continued run (the
+#           answer is its prompt) works normally
+#   [ask-parent] (a lead) spawn a child "[ask] …" and `capcomd await <child> --wake`; then each message on stdin that
+#           names a question (qst-…) is answered: `capcomd answer <qst> --recommended` (../answer-out.txt), or with
+#           [pass-up] `capcomd answer <qst> --up`; after an answer it waits on the child again (`await --wake`)
+#   [wake-every:N] a Bash call `capcomd wake --every Ns --times 2` (a recurring check-in), then its turn ends
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
 # result it answers further messages until stdin closes, as claude does.
-prompt=""; stream=0; args=("$@")
+# Sessions (ADR-026 §2), as claude 2.1.303 keeps them: --session-id ID writes $HOME/.claude/projects/<slug of $PWD>/ID.jsonl
+# (a line per message); --resume ID appends to that file in this directory's project folder, after writing how many
+# lines it found and its first user message to ../resumed.txt, or fails (exit 1, "No conversation found …") without it.
+# A ../lose-session file (once) makes a --resume lose its session first, as a CLI too far apart from the saved one would.
+prompt=""; stream=0; args=("$@"); sid=""; resume=""
 while [ $# -gt 0 ]; do case "$1" in
   -p) case "${2:-}" in -*|"") shift;; *) prompt="$2"; shift 2;; esac;;
   --input-format) [ "${2:-}" = stream-json ] && stream=1; shift 2;;
+  --session-id) sid="$2"; shift 2;;
+  --resume) resume="$2"; sid="$2"; shift 2;;
   *) shift;; esac; done
 text_of() { node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).message.content))}catch{}})'; }
+sfile=""
+if [ -n "$sid" ]; then
+  sdir="$HOME/.claude/projects/$(printf '%s' "$PWD" | sed 's/[^a-zA-Z0-9]/-/g')"; sfile="$sdir/$sid.jsonl"
+  if [ -n "$resume" ]; then
+    [ -f ../lose-session ] && rm -f ../lose-session "$sfile"
+    if [ ! -f "$sfile" ]; then echo "No conversation found with session ID: $resume" >&2; exit 1; fi
+    { echo "lines=$(wc -l < "$sfile" | tr -d ' ')"; head -1 "$sfile"; } > ../resumed.txt
+  else mkdir -p "$sdir"; : > "$sfile"; fi
+fi
 if [ "$stream" = 1 ]; then IFS= read -r first; prompt=$(printf '%s' "$first" | text_of); fi
+if [ -n "$sfile" ]; then
+  printf '{"type":"user","sessionId":"%s","cwd":"%s","message":{"role":"user","content":%s}}\n' "$sid" "$PWD" "$(printf '%s' "$prompt" | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>process.stdout.write(JSON.stringify(s)))')" >> "$sfile"
+  case "$prompt" in *"[session-secret]"*)
+    printf '{"type":"user","sessionId":"%s","toolUseResult":{"stdout":"the key is %s"},"auth":{"token":"plain-token-value"}}\n' "$sid" "$ANTHROPIC_API_KEY" >> "$sfile";;
+  esac
+  case "$prompt" in *"[session-folder]"*)
+    mkdir -p "$sdir/$sid/subagents" && printf '{"type":"assistant","message":{"content":"a subagent"}}\n' > "$sdir/$sid/subagents/agent-a1.jsonl";;
+  esac
+fi
 printf '%s' "$prompt" > ../prompt-seen.txt
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
 printf '%s' "$ANTHROPIC_API_KEY" > ../keyseen.txt
-# The variables agent.preparing's plugins set (tests/subagents/prepare-skills.test.ts): PLUGIN_*.
+# The variables agent.preparing's plugins set (tests/subagents/profile-skills.test.ts): PLUGIN_*.
 env | grep '^PLUGIN_' | sort > ../plugin-env.txt
 echo "oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} apikey=${ANTHROPIC_API_KEY:+set}" > ../authseen.txt
 emit() { printf '%s\n' "$1"; }
-emit '{"type":"system","subtype":"init","session_id":"s1","tools":["Read","Edit"],"model":"fake"}'
+emit "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"${sid:-s1}\",\"tools\":[\"Read\",\"Edit\"],\"model\":\"fake\"}"
 case "$prompt" in *"[leak]"*)
   emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"my key is $ANTHROPIC_API_KEY\"}]}}"
   echo "stderr leak $ANTHROPIC_API_KEY" >&2;;
@@ -66,6 +100,48 @@ case "$prompt" in *"[job:"*)
   if [ "${n:-0}" = 0 ]; then capcomd job start --label quick -- 'echo quick-ok' > job-start.txt 2>&1
   else capcomd job start --label build --foreground-ms 500 -- "sleep $n; echo built-ok" > job-start.txt 2>&1; fi
   emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"j1","content":"started"}]}}';;
+esac
+# [wake-in:N] / [wake-check] / [wake-await] (ADR-026 §3, waits between turns): a Bash call that arms a wake and returns at once (its
+# answer and the time it took in wake-start.txt): a check-in N seconds from now, the end of a `capcomd check` of the
+# run's target, or the end of a child it spawns (`capcomd await <child> --wake`).
+# Then the turn ends; the wake-up message (on stdin) is written to messages.txt, as any message is
+case "$prompt" in *"[wake-in:"*|*"[wake-check]"*|*"[wake-await]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Bash","input":{"command":"capcomd wake"}}]}}'
+  t0=$(node -e 'process.stdout.write(String(Date.now()))')
+  case "$prompt" in *"[wake-in:"*)
+    n=$(printf '%s' "$prompt" | sed -n 's/.*\[wake-in:\([0-9]*\)\].*/\1/p')
+    capcomd wake --in-ms "$((n * 1000))" --note "look at the build again" > wake-start.txt 2>&1;;
+  *"[wake-await]"*)
+    kid=$(capcomd spawn --profile lead --task "[steady] child work" --key kid | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>process.stdout.write(JSON.parse(s).agentId||""))')
+    capcomd await "$kid" --wake --note "verify and merge it" > wake-start.txt 2>&1;;
+  *) capcomd check --wake --note "merge it if green" > wake-start.txt 2>&1;; esac
+  t1=$(node -e 'process.stdout.write(String(Date.now()))')
+  echo "took-ms $((t1 - t0))" >> wake-start.txt
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"armed"}]}}';;
+esac
+# [ask]: ask and stop (ADR-026 §4): its turn ends right after the ask, with nothing changed
+case "$prompt" in *"[ask]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"capcomd ask"}}]}}'
+  capcomd ask "Ship the limiter at 100 or 500 req/min?" --recommend "100 req/min" --option "500 req/min" --why "The docs set the free tier at 100." --holds "write tests" > ../ask-out.txt 2>&1
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"asked"}]}}'
+  emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0.01,"result":"Asked the planner which limit to ship."}'
+  # The answer reached it while its CLI was still open (warm): it does the work in this same turn.
+  if [ "$stream" = 1 ]; then while IFS= read -r line; do printf '%s\n' "$line" | text_of >> ../messages.txt; printf '\n' >> ../messages.txt
+    mkdir -p src && printf 'export const sum = (a: number, b: number) => a + b;\n' > src/sum.ts
+    emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0,"result":"fixed sum"}'; done; fi
+  exit 0;;
+esac
+case "$prompt" in *"[ask-parent]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q2","name":"Bash","input":{"command":"capcomd spawn"}}]}}'
+  kid=$(capcomd spawn --profile lead --task "[ask] the request limiter" --key kid | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>process.stdout.write(JSON.parse(s).agentId||""))')
+  capcomd await "$kid" --wake --note "answer its question" > wake-start.txt 2>&1
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q2","content":"armed"}]}}';;
+esac
+case "$prompt" in *"[wake-every:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[wake-every:\([0-9]*\)\].*/\1/p')
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w2","name":"Bash","input":{"command":"capcomd wake --every"}}]}}'
+  capcomd wake --every "${n}s" --times 2 --note "look at CI" > ../every-start.txt 2>&1
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w2","content":"booked"}]}}';;
 esac
 # [title-chained:WORDS]: a Bash call that names the tab and does something else too (never run): not a rename
 case "$prompt" in *"[title-chained:"*)
@@ -159,8 +235,9 @@ esac
 case "$prompt" in *"[command-lost]"*)
   emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"npm test"}}]}}';;
 esac
-case "$prompt" in *"[listen]"*|*"[listen:"*)
-  n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen:\([0-9]*\)\].*/\1/p')
+case "$prompt" in *"[listen]"*|*"[listen:"*|*"[listen-once:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen\(-once\)\{0,1\}:\([0-9]*\)\].*/\2/p')
+  once=0; case "$prompt" in *"[listen-once:"*) once=1;; esac
   for i in $(seq 1 "${n:-8}"); do
     # Wait up to 1 s for a message's first byte, then read the rest of its line without a timeout: a timeout in the
     # middle of a line throws away what it read, and a long line can arrive in pieces (or just take a while to read).
@@ -169,6 +246,7 @@ case "$prompt" in *"[listen]"*|*"[listen:"*)
       IFS= read -r line; line="$c$line"
       printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
       emit '{"type":"assistant","message":{"content":[{"type":"text","text":"heard a message"}]}}'
+      [ "$once" = 1 ] && break
     else [ "$stream" = 1 ] || sleep 1; emit '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'; fi
   done;;
 esac
@@ -200,6 +278,7 @@ case "$prompt" in *"[peek:"*)
   git fetch -q origin "$ref" >/dev/null 2>&1 && git checkout -q --detach FETCH_HEAD >/dev/null 2>&1;;
 esac
 case "$prompt" in *"[commit]"*) git add -A >/dev/null 2>&1 && git -c user.name=fake -c user.email=fake@x commit -qm "fake commit" >/dev/null 2>&1;; esac
+[ -n "$sfile" ] && printf '{"type":"assistant","sessionId":"%s","message":{"role":"assistant","content":"%s"}}\n' "$sid" "$result" >> "$sfile"
 emit "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":3,\"total_cost_usd\":0.123,\"result\":\"$result\"}"
 case "$prompt" in *"[hold:"*) echo finished >> ../hold.log;; esac
 case "$prompt" in *"[linger]"*) sleep 6;; esac
@@ -207,6 +286,13 @@ case "$prompt" in *"[linger]"*) sleep 6;; esac
 if [ "$stream" = 1 ]; then
   while IFS= read -r line; do
     printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
+    # [ask-parent]: a message naming a child's question is answered (or passed up)
+    case "$prompt" in *"[ask-parent]"*)
+      qid=$(printf '%s' "$line" | grep -o 'qst-[A-Za-z0-9_-]*' | head -1)
+      if [ -n "$qid" ]; then case "$prompt" in *"[pass-up]"*) capcomd answer "$qid" --up >> ../answer-out.txt 2>&1;;
+        *) capcomd answer "$qid" --recommended --note "the docs win" >> ../answer-out.txt 2>&1; capcomd await "$kid" --wake --note "verify it" > ../rewait.txt 2>&1;; esac; fi;;
+    esac
+    [ -n "$sfile" ] && printf '%s\n' "$line" >> "$sfile"
     emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0,"result":"answered"}'
   done
 fi

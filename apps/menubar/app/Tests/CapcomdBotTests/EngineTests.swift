@@ -2,7 +2,9 @@ import XCTest
 @testable import CapcomdBot
 
 // The rules packages/bot-avatar/test checks, on the port: determinism, valid picks, clean composition, floating hands,
-// moments, teams, append-only stability; plus the template mask and the menu bar faces.
+// moments, teams, append-only stability; plus the template mask and the menu bar faces The seed sweeps are smaller than
+// the TypeScript tests' (the same properties over more of the same seeds, in test:fast): GoldenTests pins the port to the
+// engine bit for bit, so these need only enough seeds to reach every rule.
 
 let base = BotTraits(seed: "t", role: .worker, name: "Pixel", parts: [
   .palette: "orange-purple", .antenna: "ball", .accessory: "none", .head: "dome", .ears: "disc", .screen: "night", .eyes: "ovals",
@@ -48,7 +50,7 @@ final class HashTests: XCTestCase {
 
 final class TraitsTests: XCTestCase {
   func testDeterministic() throws {
-    for s in seeds(50) {
+    for s in seeds(10) {
       for r in BotRole.allCases {
         let t = botTraits(seed: s, role: r)
         XCTAssertEqual(t, botTraits(seed: s, role: r))
@@ -67,7 +69,7 @@ final class TraitsTests: XCTestCase {
 
   func testPickedCombinationsAreValid() throws {
     let c = BotCatalog.standard
-    for s in seeds(300) {
+    for s in seeds(60) {
       for r in BotRole.allCases {
         let chosen = try chosenOf(botTraits(seed: s, role: r), c)
         for (slot, p) in chosen { XCTAssertTrue(compatible(p, slot, chosen.filter { $0.slot != slot }), "\(s) \(r) \(slot)") }
@@ -158,7 +160,7 @@ final class CompositionTests: XCTestCase {
   }
 
   func testRandomBotsAreClean() throws {
-    for s in seeds(200) {
+    for s in seeds(40) {
       for r in BotRole.allCases {
         let t = botTraits(seed: s, role: r)
         for z in BotSize.allCases {
@@ -270,7 +272,7 @@ final class MomentTests: XCTestCase {
 final class TeamTests: XCTestCase {
   func testSiblingsArePairwiseDistinctAndAddingOneNeverRepaintsTheOthers() {
     let roles = ["planner", "lead", "worker", "worker", "worker", "critic", "worker", "worker"]
-    for g in 0..<100 {
+    for g in 0..<25 {
       let members: [(seed: String, role: String?)] = zip(seeds(roles.count, "agt-g\(g)-"), roles).map { ($0, $1) }
       let team = botTeam(members)
       for i in 0..<team.count { for j in 0..<i { XCTAssertTrue(distinct(team[i], team[j]), "\(g) \(i) \(j)") } }
@@ -290,7 +292,7 @@ final class StabilityTests: XCTestCase {
     var ovals2 = grown.parts(.eyes)[0]
     ovals2.id = "ovals2"; ovals2.weight = 4
     grown.slots[.eyes]!.append(ovals2)
-    let ss = seeds(1000)
+    let ss = seeds(400)
     var sameHead = 0, sameEyes = 0
     for s in ss {
       let a = botTraits(seed: s, role: .worker), b = botTraits(seed: s, role: .worker, catalog: grown)

@@ -53,24 +53,61 @@ jobs:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
       - run: echo "BUN_BIN=$(which bun)" >> "$GITHUB_ENV"
+      # The client's tests and the mock's contract check run on main, on a manual run, and on a PR that changes the
+      # client (its mock included), the contract or this workflow. Otherwise the app's build compiles the client anyway
+      # and the app's tests drive it against the mock.
+      - name: Did the client or the contract change?
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || git diff --name-only "$BASE" HEAD -- apps/menubar/client openapi .github/workflows/menubar.yml | grep -q .; then
+            echo "client=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "client=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The toolchain, for the build cache's key
+        id: toolchain
+        run: echo "xcode=$(xcodebuild -version | tr -s ' \n' '-' | sed 's/-$//')" >> "$GITHUB_OUTPUT"
       # Most of this job was compiling the Swift dependencies (NIO, the OpenAPI generator, …) from scratch. The build
-      # folders are cached per runner image and resolved dependencies; SwiftPM rebuilds what changed since. A PR reads
-      # main's cache; a change to Package.resolved or the image starts a new one (seeded from the closest match).
-      - name: Swift build cache
-        uses: actions/cache@v4
+      # folders are cached per toolchain and resolved dependencies; SwiftPM rebuilds what changed since. Only main (a
+      # push or Run workflow) saves the cache; a PR restores main's and saves nothing, so PRs don't each fill the
+      # repository's cache quota with a copy. A change to Package.resolved or Xcode starts a new one (seeded from the
+      # closest match).
+      - name: Restore the Swift build cache
+        id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             apps/menubar/client/.build
             apps/menubar/app/.build
-          key: menubar-swift-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-${{ hashFiles('apps/menubar/app/Package.resolved', 'apps/menubar/client/Package.resolved') }}
+          key: menubar-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.xcode }}-${{ hashFiles('apps/menubar/app/Package.resolved', 'apps/menubar/client/Package.resolved') }}
           restore-keys: |
-            menubar-swift-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-
+            menubar-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.xcode }}-
       - name: Client tests
+        if: steps.changes.outputs.client == 'true'
         timeout-minutes: 10
         working-directory: apps/menubar/client
         run: swift test
+      - name: The mock daemon's answers match openapi/capcomd.json (client/mock/validate.ts)
+        if: steps.changes.outputs.client == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/ajv"
+          (cd "$RUNNER_TEMP/ajv" && echo '{}' > package.json && bun add ajv@8.20.0 ajv-formats@3.0.1)
+          AJV_DIR="$RUNNER_TEMP/ajv" bun apps/menubar/client/mock/validate.ts
       - name: App build and tests (includes SwiftUI views)
         # A cold build (no cache, or a new runner image) of the app and its tests takes ~16 min since the window joined the app.
+        # --parallel: every test in its own process, across the runner's cores.
         timeout-minutes: 25
         working-directory: apps/menubar/app
-        run: swift build --build-tests && swift test --skip-build
+        run: swift build --build-tests && swift test --skip-build --parallel
+      - name: Save the Swift build cache (main only)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            apps/menubar/client/.build
+            apps/menubar/app/.build
+          key: ${{ steps.cache.outputs.cache-primary-key }}

@@ -22,26 +22,9 @@ public enum MediaKey: Sendable, Hashable {
 extension CapcomdStore {
   public static let threadPage = 100
 
-  /// The thread view opened: follow its run's thread items live (`thread=1` on that run's lifecycle feed, resumed from
-  /// its cursor) and read the thread from where we are. Contract order: stream first, then the route; the highest rev
-  /// of an id wins, so an item that arrives both ways is shown once.
-  public func openThread(runId: String, agentId: String) {
-    openThreadAgent = agentId
-    followThreads(runId: runId, holder: Self.panelHolder)
-    changed()
-  }
-
-  /// The thread view closed: the run's lifecycle feed goes back to lifecycle frames only (unless the reel still
-  /// follows it). Items already read stay.
-  public func closeThread() {
-    openThreadAgent = nil
-    followThreads(runId: nil, holder: Self.panelHolder)
-  }
-
-  public static let panelHolder = "panel"
   public static let reelHolder = "reel"
 
-  /// `holder` (the panel's thread view, the desktop reel) now follows `runId`'s live thread items for all its agents,
+  /// `holder` (the desktop reel, a bench fixture) now follows `runId`'s live thread items for all its agents,
   /// or nothing. A run's feed is reopened only when whether anyone follows it changes.
   public func followThreads(runId: String?, holder: String) {
     let before = threadStreamRuns
@@ -130,8 +113,6 @@ extension CapcomdStore {
     }
   }
 
-  /// Whether the thread has items above what it shows (read newest first, `agents.thread_tail`).
-  public func threadHasEarlier(agentId: String) -> Bool { books[agentId]?.hasEarlier ?? false }
   /// Where the shown thread starts (the `before` of the page above it); nil when it shows everything.
   public func threadTop(agentId: String) -> Int? { books[agentId]?.top }
 
@@ -167,9 +148,16 @@ extension CapcomdStore {
     let events = thread(agentId: agentId)
     guard let book = books[agentId], threadSupported(agentId: agentId) == true else { return events.map(ThreadEntry.event) }
     // The agent's own output is in the book; keep only messages from someone else (steers, other agents).
-    let messages = events.filter { if case .message(let from, _, _, _) = $0.kind { return from != agentId }; return false }
-    // Read newest first, the thread shows from its top down; messages from before its first item wait with it.
-    let items = Array(book.shown)
+    let messages = events.filter {
+      if case .message(let from, _, _, _) = $0.kind { return from != agentId }
+      if case .woke = $0.kind { return true }   // what woke it (agents.wake): a quiet line between its turns
+      if case .answered = $0.kind { return true }   // its question, answered (agents.ask): one line
+      return false
+    }
+    // Read newest first, the thread shows from its top down; messages from before its first item wait with it. The
+    // agent's bookkeeping (ADR-026 §7) only when asked for.
+    let internals = bookkeepingShown.contains(agentId)
+    let items = book.shown.filter { !$0.isSystemBookkeeping && (internals || !$0.internal) }
     let from = book.hasEarlier ? items.first?.atMs ?? Int.max : Int.min
     var out: [ThreadEntry] = []; out.reserveCapacity(items.count + messages.count)
     var m = messages.filter { $0.epochMs >= from }.sorted { ($0.epochMs, $0.seq) < ($1.epochMs, $1.seq) }[...]
@@ -179,6 +167,13 @@ extension CapcomdStore {
     }
     out += m.map(ThreadEntry.event)
     return out
+  }
+
+  /// Shows or hides the agent's bookkeeping in its thread (its menu's Show Bookkeeping).
+  public func setBookkeepingShown(_ shown: Bool, agentId: String) {
+    guard bookkeepingShown.contains(agentId) != shown else { return }
+    if shown { bookkeepingShown.insert(agentId) } else { bookkeepingShown.remove(agentId) }
+    mark(.thread(agentId)); changed()
   }
 
   /// Loads a media block's bytes once (a failed load can be retried). Only png, jpeg, gif and webp are kept: what the

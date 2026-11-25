@@ -436,8 +436,8 @@ extension EnvironmentValues {
     moved?(id)
   }
   func drop(_ id: String) { live.remove(id) }
-  /// The thread's entries in order (set by the thread as it renders).
-  var entries: [ThreadEntry] = []
+  /// The thread's rows in order, as drawn (set by the thread as it renders).
+  var entries: [ThreadRow] = []
   /// The rows SwiftUI's scroll view says are in view (macOS 15 and later; nil before).
   var visible: Set<String>?
 
@@ -562,9 +562,11 @@ struct ColumnBody: View {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
         } else {
-          Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+          ColdTail(agentId: agentId)
         }
-        if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) }
+        // A question (agents.ask): its card, then the box, whose message is its answer.
+        if let q = a.question { QuestionCard(card: q, focused: a.focused); ColumnComposer(agentId: agentId, name: a.header.name) }
+        else if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) }
         else if let l = a.limit { LimitBar(limit: l, focused: a.focused) }
         else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }

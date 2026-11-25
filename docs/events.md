@@ -584,6 +584,26 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         },
         "data": {},
         "verdict": {},
+        "typed": {
+          "description": "Capability agents.handback_typed: its typed hand-back, checked against its schema (GET /v1/schemas) when it was recorded: handback@1 {status, outcome, changed, checked, risks, decide}, or a reviewer's review-verdict@1 {passed, findings}. Every string in value is agent-written",
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "schema",
+            "value"
+          ]
+        },
         "branch": {
           "type": [
             "string",
@@ -684,6 +704,26 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         },
         "data": {},
         "verdict": {},
+        "typed": {
+          "description": "Capability agents.handback_typed: its typed hand-back, checked against its schema (GET /v1/schemas) when it was recorded: handback@1 {status, outcome, changed, checked, risks, decide}, or a reviewer's review-verdict@1 {passed, findings}. Every string in value is agent-written",
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "schema",
+            "value"
+          ]
+        },
         "branch": {
           "type": [
             "string",
@@ -842,7 +882,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   "properties": {
     "kind": {
       "type": "string",
-      "description": "What the agent did (icon hint): read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, tool. More may be added: treat an unknown kind as tool. Never think"
+      "description": "What the agent did (icon hint): read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, tool, setup. More may be added: treat an unknown kind as tool. Never think"
     },
     "n": {
       "type": "integer",
@@ -1632,6 +1672,544 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `agent.wake_armed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "wakeId": {
+      "type": "string",
+      "description": "The wake (wk-…)"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "op",
+        "agents",
+        "events",
+        "timer"
+      ],
+      "description": "What it waits for: op (a verify, check or merge to settle), agents (agents to end), events (event types after a point), timer (only its time: a check-in). More may be added: show an unknown kind as waiting"
+    },
+    "op": {
+      "description": "kind op: the verify, check or merge (vfy-…, chk-…, mrg-…)",
+      "type": "string"
+    },
+    "opKind": {
+      "description": "kind op: which kind of op it is",
+      "type": "string",
+      "enum": [
+        "verify",
+        "check",
+        "merge"
+      ]
+    },
+    "agents": {
+      "description": "kind agents: the agents it waits on",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "mode": {
+      "description": "kind agents: woken when any of them ends, or when all have",
+      "type": "string",
+      "enum": [
+        "any",
+        "all"
+      ]
+    },
+    "types": {
+      "description": "kind events: the event types (dotted names) it waits for",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "agent": {
+      "description": "kind events: only events about this agent",
+      "type": "string"
+    },
+    "every": {
+      "description": "kind timer, a recurring schedule (`capcomd wake --every`): its interval in ms; at is its first check-in",
+      "type": "number"
+    },
+    "times": {
+      "description": "kind timer with every: how many check-ins it books; null until it is cancelled (its agent cancelled, its run archived)",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "at": {
+      "description": "When it fires at the latest (epoch ms): a timer's time, else its deadline (by default 6 hours ahead, at most that); null when it has none",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "note": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "x-untrusted": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "wakeId",
+    "kind",
+    "at",
+    "note"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.woken`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "wakeId": {
+      "type": "string",
+      "description": "The wake (wk-…) agent.wake_armed armed"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "op",
+        "agents",
+        "events",
+        "timer"
+      ],
+      "description": "As agent.wake_armed's"
+    },
+    "by": {
+      "type": "string",
+      "enum": [
+        "event",
+        "time",
+        "deadline"
+      ],
+      "description": "What fired it: event (what it waited for happened, or had already), time (a timer's time came), deadline (its deadline passed first)"
+    },
+    "text": {
+      "type": "string",
+      "description": "Daemon-written (trusted): what happened, in a few words (\"verify vfy-… passed\", \"agt-… ended: done\", \"its check-in time came\")"
+    },
+    "causeSeq": {
+      "description": "The seq of the event that fired it, on this run's stream; null when its time did, or it had happened before it was armed and the event isn't known",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message it put in the agent's mailbox (Message.seq): the agent reads it as its next turn"
+    },
+    "armedAt": {
+      "type": "number",
+      "description": "When it was armed (epoch ms)"
+    },
+    "slot": {
+      "description": "A recurring schedule's check-in that fired (0 first): its message's id is derived from (schedule, slot). Absent for a one-time wake",
+      "type": "number"
+    },
+    "skipped": {
+      "description": "A recurring schedule: earlier check-ins that came and went while nothing ran (the daemon was down), skipped rather than delivered late",
+      "type": "number"
+    }
+  },
+  "required": [
+    "wakeId",
+    "kind",
+    "by",
+    "text",
+    "causeSeq",
+    "messageSeq",
+    "armedAt"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.continued`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "epoch": {
+      "type": "number",
+      "description": "Its new attempt (Agent epoch): what runs now continues the same thread"
+    },
+    "from": {
+      "type": "string",
+      "enum": [
+        "done",
+        "failed",
+        "cancelled"
+      ],
+      "description": "How its last attempt had ended (it stays on that attempt's agent.done / agent.failed / agent.cancelled)"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who sent the message that woke it: operator, client:<id>, an agent id (its parent, an ancestor), or capcomd (a message that came while its last attempt was ending)"
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message (Message.seq) its new attempt starts with"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "epoch",
+    "from",
+    "by",
+    "messageSeq"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.model_changed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "model": {
+      "description": "The model its next turns run with; null: unchanged",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort": {
+      "description": "The reasoning effort its next turns run with; null: unchanged",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "previous": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model",
+        "effort"
+      ],
+      "description": "What it ran with before"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who asked for it (operator, client:<id>, an agent id)"
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message that carried the change"
+    },
+    "applied": {
+      "type": "boolean",
+      "description": "true: its next attempt starts with it now (the agent was idle); false: queued until its current turn ends (a running CLI can't switch model), then it continues as a new attempt with it"
+    }
+  },
+  "required": [
+    "model",
+    "effort",
+    "previous",
+    "by",
+    "messageSeq",
+    "applied"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.archived`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "by": {
+      "type": "string",
+      "description": "Who archived it: operator or client:<id>"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.restored`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "by": {
+      "type": "string",
+      "description": "Who restored it: operator or client:<id>"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.wake_cancelled`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "wakeId": {
+      "type": "string",
+      "description": "The wake (wk-…)"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "ended",
+        "archived"
+      ],
+      "description": "agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up; a check-in only when the agent was cancelled); archived: its run was archived (a schedule of an idle agent). More may be added"
+    }
+  },
+  "required": [
+    "wakeId",
+    "reason"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.asked`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…). Its approval (kind question) carries it as subject.questionId"
+    },
+    "to": {
+      "description": "Who it is asked of: its parent agent, or null for the user (a root agent's)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "question": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text. The question"
+    },
+    "recommend": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text. The answer it recommends (options[0])"
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "x-untrusted": true,
+        "description": "Agent-written text: render as plain text, never markdown, links or actions"
+      },
+      "description": "Agent-written text: render as plain text. The answers it offers, the recommended one first",
+      "x-untrusted": true
+    },
+    "why": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "x-untrusted": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "holds": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "x-untrusted": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "questionId",
+    "to",
+    "question",
+    "recommend",
+    "options",
+    "why",
+    "holds"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.answered`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…)"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who answered: an agent id (its parent or an ancestor), operator, client:<id> or driver (a person)"
+    },
+    "answer": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text (or a person's): render as plain text. The answer, as given"
+    },
+    "recommended": {
+      "type": "boolean",
+      "description": "Whether the answer was the one it recommended"
+    },
+    "note": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message (Message.seq) that carried the answer to the asker: it continues the same conversation"
+    },
+    "replaces": {
+      "description": "A person's answer replacing an agent's (the user's answer wins): who answered before; null otherwise",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "questionId",
+    "by",
+    "answer",
+    "recommended",
+    "note",
+    "messageSeq",
+    "replaces"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.question_passed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…)"
+    },
+    "from": {
+      "type": "string",
+      "description": "The agent it was asked of, which couldn't decide (`capcomd answer --up`)"
+    },
+    "to": {
+      "description": "Who it is asked of now: that agent's parent, or null for the user",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "questionId",
+    "from",
+    "to"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.question_withdrawn`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…)"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "cancelled"
+      ],
+      "description": "cancelled: the agent that asked was cancelled. More may be added"
+    }
+  },
+  "required": [
+    "questionId",
+    "reason"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `job.started`
 
 ```json
@@ -2110,7 +2688,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         },
         "kind": {
           "type": "string",
-          "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool. More may be added: treat an unknown kind as tool"
+          "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool, setup. More may be added: treat an unknown kind as tool"
         },
         "at": {
           "type": "string",
@@ -2123,6 +2701,112 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
             }
           ],
           "description": "When the activity last changed"
+        },
+        "setup": {
+          "description": "Capability agents.setup. Only with kind setup: the agent is being set up and its CLI hasn't reported a step yet (its thread is empty until it does). Replaced by the agent's own activity at its first step. Older daemons don't send it",
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, restore, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
+            },
+            "bytes": {
+              "description": "copy: bytes sent to the machine so far; null otherwise",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "totalBytes": {
+              "description": "copy: the bytes it sends in all, when known; null otherwise",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "phase",
+            "bytes",
+            "totalBytes"
+          ]
+        },
+        "wake": {
+          "description": "Capability agents.wake. Only with kind wait, while the agent waits between turns for what it armed a wake on (its turn ended; its status stays running): show it as waiting, not as a running tool call. Replaced by its own activity when it is woken. Older daemons don't send it",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The wake (wk-…): agent.wake_armed armed it, agent.woken or agent.wake_cancelled ends it"
+            },
+            "kind": {
+              "type": "string",
+              "description": "op, agents, events or timer, as agent.wake_armed's. More may be added: show `text` for one you don't know"
+            },
+            "op": {
+              "description": "kind op: the verify, check or merge it waits on (vfy-…, chk-…, mrg-…)",
+              "type": "string"
+            },
+            "opKind": {
+              "description": "kind op: verify, check or merge",
+              "type": "string"
+            },
+            "agents": {
+              "description": "kind agents: the agents it waits on",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "mode": {
+              "description": "kind agents: any or all",
+              "type": "string"
+            },
+            "types": {
+              "description": "kind events: the event types it waits for",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "armedAt": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                },
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ],
+              "description": "When it started waiting: a client's elapsed clock (\"waiting for verify vfy-… · 4:12\") counts from here"
+            },
+            "at": {
+              "description": "When it is woken at the latest: a timer's time, else its deadline",
+              "type": [
+                "string",
+                "null"
+              ],
+              "allOf": [
+                {
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                },
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "armedAt",
+            "at"
+          ]
         }
       },
       "required": [
@@ -2183,8 +2867,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "egress",
         "secret",
         "spawn_widen",
-        "custom"
-      ]
+        "custom",
+        "question"
+      ],
+      "description": "question: capability agents.ask, an agent asked and stopped until it is answered"
     },
     "question": {
       "type": "string",
@@ -2323,10 +3009,70 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
             "plugin",
             "reason"
           ]
+        },
+        "questionId": {
+          "description": "question: the question (qst-…), as agent.asked carries it",
+          "type": "string"
+        },
+        "options": {
+          "description": "question: the answers it offers, the recommended one first (a client numbers them 1…n with keys, tags the recommended one, and adds its own \"Something else…\" for a free answer)",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "recommended": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "label",
+              "recommended"
+            ]
+          }
+        },
+        "recommend": {
+          "description": "question: the answer it recommends (options[0])",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "why": {
+          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "holds": {
+          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "to": {
+          "description": "question: who it is asked of: an agent (its parent, or an ancestor it was passed up to) or null for the user. The user can answer it either way, and a person's answer wins",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "passedBy": {
+          "description": "question: the agents that passed it up because they couldn't decide, in order",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": {},
-      "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+      "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}, question {questionId, options, recommend, why, holds, to, passedBy}"
     },
     "expiresAt": {
       "type": [
@@ -2366,7 +3112,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2402,8 +3158,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approved",
         "denied",
         "expired",
-        "withdrawn"
-      ]
+        "withdrawn",
+        "answered"
+      ],
+      "description": "answered: capability agents.ask, a question's answer was given"
     },
     "decidedBy": {
       "type": [
@@ -2446,6 +3204,15 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "x-untrusted": true,
       "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
     },
+    "answer": {
+      "description": "Capability agents.ask, a question's: the answer given (`reason` is then the answerer's note)",
+      "type": "string",
+      "x-untrusted": true
+    },
+    "recommended": {
+      "description": "Capability agents.ask, a question's: whether the answer was the one the asker recommended",
+      "type": "boolean"
+    },
     "cause": {
       "type": "string",
       "enum": [
@@ -2470,7 +3237,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2517,7 +3294,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2576,7 +3363,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2635,7 +3432,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2694,7 +3501,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2753,7 +3570,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2812,7 +3639,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2871,7 +3708,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled",
+        "continued",
+        "archived",
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3002,6 +3849,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "clientId": {
       "type": "string",
       "description": "The API client that acted (cli-…)"
+    },
+    "parked": {
+      "description": "Capability agents.park: the machine was parked, so only the machine was deleted and its agent (owner) stays idle; absent otherwise",
+      "type": "boolean"
     }
   },
   "required": [
@@ -3274,7 +4125,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "cause": {
       "type": "string",
-      "description": "Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"
+      "description": "Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it; capability agents.park: a parked machine whose run was archived or whose agent was cancelled), retention (capability agents.park: a parked machine kept for its place's parkedRetention), parked_limit (capability agents.park: more than 10 parked at its place, the oldest deleted first). Treat an unknown cause as a deletion for a reason you don't know"
     }
   },
   "required": [
@@ -3884,7 +4735,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 # Lifecycle feed
 
-Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, run.archived, run.restored, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, agent.wake_armed, agent.woken, agent.wake_cancelled, agent.continued, agent.asked, agent.answered, agent.question_passed, agent.question_withdrawn, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 Activity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).
 
@@ -3894,6 +4745,8 @@ Agent activity: `?activity=1` on a run stream (with or without `feed=lifecycle`)
 They are ephemeral (`durability: "ephemeral"`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no `id:`, so they never move the Last-Event-ID cursor.
 Their envelope `seq` is the last durable seq at the time (not a cursor), `entitySeq` is 0 and `id` is unique per frame; the latest frame per agent wins.
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Capability agents.wake: while an agent waits between turns for what it armed a wake on (a verify, a check, a merge, its children, a time), its activity has kind `wait` and `wake` says what it waits for and since when (`armedAt`): a client shows "waiting for verify vfy-… · 4:12" rather than a running tool call. agent.woken (durable, on the lifecycle feed) says what woke it.
+Capability agents.setup: while an agent is being set up, before its CLI's first step (its thread is empty until then), its activity has kind `setup` and `setup.phase` says what the daemon is doing (starting its machine, preparing its workspace, copying the repository to it with `bytes` of `totalBytes`, installing and starting its CLI): a client shows that in the agent's empty thread. Its first step replaces it.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.
 
 # Stream frames
@@ -4024,7 +4877,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "properties": {
             "branch": {
               "type": "string",
-              "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+              "description": "The goal branch, e.g. feat/multiply (ref-safe: letters, digits, . _ - /)"
             },
             "base": {
               "type": "string",
@@ -4149,6 +5002,23 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "actor",
             "at"
           ]
+        },
+        "archived": {
+          "description": "Capability runs.archive. Set on an archived run only: read-only, its agents take no messages (409 `archived`) until it is restored (POST /v1/runs/{runId}/restore). Absent: not archived",
+          "type": "boolean",
+          "const": true
+        },
+        "archivedAt": {
+          "description": "Capability runs.archive. When it was archived; set with `archived` only",
+          "type": "string",
+          "allOf": [
+            {
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            },
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            }
+          ]
         }
       },
       "required": [
@@ -4259,7 +5129,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               },
               "kind": {
                 "type": "string",
-                "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool. More may be added: treat an unknown kind as tool"
+                "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool, setup. More may be added: treat an unknown kind as tool"
               },
               "at": {
                 "type": "string",
@@ -4272,6 +5142,112 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                   }
                 ],
                 "description": "When the activity last changed"
+              },
+              "setup": {
+                "description": "Capability agents.setup. Only with kind setup: the agent is being set up and its CLI hasn't reported a step yet (its thread is empty until it does). Replaced by the agent's own activity at its first step. Older daemons don't send it",
+                "type": "object",
+                "properties": {
+                  "phase": {
+                    "type": "string",
+                    "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, restore, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
+                  },
+                  "bytes": {
+                    "description": "copy: bytes sent to the machine so far; null otherwise",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "totalBytes": {
+                    "description": "copy: the bytes it sends in all, when known; null otherwise",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "phase",
+                  "bytes",
+                  "totalBytes"
+                ]
+              },
+              "wake": {
+                "description": "Capability agents.wake. Only with kind wait, while the agent waits between turns for what it armed a wake on (its turn ended; its status stays running): show it as waiting, not as a running tool call. Replaced by its own activity when it is woken. Older daemons don't send it",
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "The wake (wk-…): agent.wake_armed armed it, agent.woken or agent.wake_cancelled ends it"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "op, agents, events or timer, as agent.wake_armed's. More may be added: show `text` for one you don't know"
+                  },
+                  "op": {
+                    "description": "kind op: the verify, check or merge it waits on (vfy-…, chk-…, mrg-…)",
+                    "type": "string"
+                  },
+                  "opKind": {
+                    "description": "kind op: verify, check or merge",
+                    "type": "string"
+                  },
+                  "agents": {
+                    "description": "kind agents: the agents it waits on",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "mode": {
+                    "description": "kind agents: any or all",
+                    "type": "string"
+                  },
+                  "types": {
+                    "description": "kind events: the event types it waits for",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "armedAt": {
+                    "type": "string",
+                    "allOf": [
+                      {
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                      },
+                      {
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ],
+                    "description": "When it started waiting: a client's elapsed clock (\"waiting for verify vfy-… · 4:12\") counts from here"
+                  },
+                  "at": {
+                    "description": "When it is woken at the latest: a timer's time, else its deadline",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "allOf": [
+                      {
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                      },
+                      {
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "armedAt",
+                  "at"
+                ]
               }
             },
             "required": [
@@ -4352,6 +5328,26 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               },
               "data": {},
               "verdict": {},
+              "typed": {
+                "description": "Capability agents.handback_typed: its typed hand-back, checked against its schema (GET /v1/schemas) when it was recorded: handback@1 {status, outcome, changed, checked, risks, decide}, or a reviewer's review-verdict@1 {passed, findings}. Every string in value is agent-written",
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "schema",
+                  "value"
+                ]
+              },
               "branch": {
                 "type": [
                   "string",
@@ -4509,6 +5505,128 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               null
             ],
             "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
+          },
+          "continued": {
+            "description": "Capability agents.idle (ADR-026 §1). A message woke this idle agent into its current attempt (agent.continued); null when its current attempt is its first (or a resume). While its status is running and its activity is of kind setup, it is waking (a client shows \"Waking <name>…\" with the setup phase, including `restore`, after a second). Older daemons don't send it",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                  },
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                ],
+                "description": "When the message woke it"
+              },
+              "by": {
+                "type": "string",
+                "description": "Who sent it: operator, client:<id>, an agent id (its parent or an ancestor), or a wake (wake-wk-…)"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "failed",
+                  "cancelled"
+                ],
+                "description": "How its attempt before this one had ended"
+              }
+            },
+            "required": [
+              "at",
+              "by",
+              "from"
+            ]
+          },
+          "asked": {
+            "description": "Capability agents.ask (ADR-026 §4). The question it asked and stopped on, until it is answered: it is **asked** (show it so wherever its status shows, as a quiet state when it is asked of an agent, as needing you when asked of the user). Its turn ended (its status is done once its attempt ended, which a client shows as asked, not idle), so it holds no machine; a message to it is its answer and continues it. null when it has no open question. Older daemons don't send it",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "questionId": {
+                "type": "string",
+                "description": "The question (qst-…)"
+              },
+              "approvalId": {
+                "type": "string",
+                "pattern": "^apr-[A-Za-z0-9]+$",
+                "description": "Its approval (kind question): answer it there, or with a message to the agent"
+              },
+              "question": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "recommend": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "The answer it recommends (options[0])"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-untrusted": true,
+                  "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                },
+                "description": "The answers it offers, the recommended one first"
+              },
+              "why": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "holds": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "to": {
+                "description": "Who it is asked of: an agent (its parent, or an ancestor it was passed up to), or null for the user",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                  },
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                ],
+                "description": "When it asked"
+              }
+            },
+            "required": [
+              "questionId",
+              "approvalId",
+              "question",
+              "recommend",
+              "options",
+              "why",
+              "holds",
+              "to",
+              "at"
+            ]
           }
         },
         "required": [
@@ -4564,8 +5682,10 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "egress",
               "secret",
               "spawn_widen",
-              "custom"
-            ]
+              "custom",
+              "question"
+            ],
+            "description": "question: capability agents.ask, an agent asked and stopped until it is answered"
           },
           "status": {
             "type": "string",
@@ -4574,8 +5694,10 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "approved",
               "denied",
               "expired",
-              "withdrawn"
-            ]
+              "withdrawn",
+              "answered"
+            ],
+            "description": "answered: capability agents.ask, a question's answer was given"
           },
           "question": {
             "type": "string",
@@ -4714,10 +5836,70 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                   "plugin",
                   "reason"
                 ]
+              },
+              "questionId": {
+                "description": "question: the question (qst-…), as agent.asked carries it",
+                "type": "string"
+              },
+              "options": {
+                "description": "question: the answers it offers, the recommended one first (a client numbers them 1…n with keys, tags the recommended one, and adds its own \"Something else…\" for a free answer)",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "recommended": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "recommended"
+                  ]
+                }
+              },
+              "recommend": {
+                "description": "question: the answer it recommends (options[0])",
+                "type": "string",
+                "x-untrusted": true
+              },
+              "why": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "holds": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "to": {
+                "description": "question: who it is asked of: an agent (its parent, or an ancestor it was passed up to) or null for the user. The user can answer it either way, and a person's answer wins",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "passedBy": {
+                "description": "question: the agents that passed it up because they couldn't decide, in order",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "additionalProperties": {},
-            "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+            "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}, question {questionId, options, recommend, why, holds, to, passedBy}"
           },
           "requestedAt": {
             "description": "When it was asked (a merge: when it was parked); absent on daemons that predate it",

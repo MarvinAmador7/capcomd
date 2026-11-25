@@ -128,7 +128,7 @@ test("the supervisor's checkpoints reach the remote and the agent's record while
 
 test("capcomd send reaches a running claude worker: the supervisor hands it to the CLI on stdin", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen] wait for word", "--key", "listen"])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen-once:30] wait for word", "--key", "listen"])).j?.agentId;
   for (let i = 0; i < 100 && (await cj(["inspect", run, id])).j?.status !== "running"; i++) await Bun.sleep(100);
   expect((await cj(["send", run, id, "use", "tabs", "please"])).code).toBe(0);
   const agent = (await cj(["await", run, id, "--timeout-ms", "60000"])).j?.agents?.[0];
@@ -164,7 +164,7 @@ test("capcomd send --skill: the running worker reads the skill's SKILL.md with t
   const skills = (await cj(["skills"])).j?.skills ?? [];
   expect(skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: "capcomd-orchestration", source: "bundled" })]));
   const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen:30] wait for a skill", "--key", "listen-skill"])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen-once:30] wait for a skill", "--key", "listen-skill"])).j?.agentId;
   const bad = await cj(["send", run, id, "x", "--skill", "no-such-skill"]);
   expect(bad.code).not.toBe(0);
   expect(bad.j?.error?.message).toBe('There is no skill named "no-such-skill": `capcomd skills` lists the skills you can attach.');
@@ -207,5 +207,6 @@ test("send says when the agent can't read the message now: a Codex worker, a fin
   const claude = (await cj(["spawn", run, "--profile", "listener", "--task", "y", "--key", "cl", "--no-start"])).j?.agentId;
   expect((await cj(["send", run, claude, "hello"])).j?.note).toBeUndefined();
   await cj(["cancel", run, claude]);
-  expect((await cj(["send", run, claude, "late"])).j?.note).toBe(`${claude} is cancelled: nothing will read this message`);
+  // ADR-026 §1: a cancelled agent is idle: the message is its next turn.
+  expect((await cj(["send", run, claude, "late"])).j).toMatchObject({ continued: true, note: expect.stringContaining(`${claude} was idle`) });
 }, 60_000);

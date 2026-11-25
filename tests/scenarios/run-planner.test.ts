@@ -44,10 +44,10 @@ capcomd result --summary "merged $merged of 2"`);
   expect([...last.values()].filter((s) => s === "done").length).toBe(3);
   const t = (await w.cj(["tree", runId])).j;
   expect(t.tree[0]).toMatchObject({ agentId: root, profile: "planner", status: "done" });
-  // The run's work landed on its goal branch, cut from the project's target (trunk); trunk itself is untouched.
-  expect(lines.find((l) => l.type === "run.completed")).toMatchObject({ goalBranch: "capcomd/write-a-and-b", base: "trunk" });
+  // The run's work landed on its goal branch (named from the goal: feat/b), cut from the project's target (trunk); trunk itself is untouched.
+  expect(lines.find((l) => l.type === "run.completed")).toMatchObject({ goalBranch: "feat/b", base: "trunk" });
   const filesOn = async (b: string) => { await w.repo.seed.ok(["fetch", "-q", "origin"]); return (await w.repo.seed.ok(["ls-tree", "-r", "--name-only", `origin/${b}`])).split("\n"); };
-  expect(await filesOn("capcomd/write-a-and-b")).toEqual(expect.arrayContaining(["src/a.txt", "src/b.txt"]));
+  expect(await filesOn("feat/b")).toEqual(expect.arrayContaining(["src/a.txt", "src/b.txt"]));
   expect(await filesOn("trunk")).not.toContain("src/a.txt");
   // --no-goal-branch: as before, merged straight into the target.
   const old = await capcomd(["run", "write a and b", "--planner", "planner", "--no-goal-branch", "--json"], env);

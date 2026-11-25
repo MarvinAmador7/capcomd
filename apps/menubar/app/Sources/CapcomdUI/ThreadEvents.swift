@@ -67,6 +67,16 @@ package struct ThreadItemView: View {
     switch item.kind {
     case .status(let s):
       Text(verbatim: s).font(Theme.chip).foregroundStyle(.tertiary)
+    case .answered(let rec, let byName):
+      // A question answered (agents.ask): its card's one-line record.
+      AnsweredLine(record: rec, byName: byName)
+    case .woke(let s):
+      // What woke the agent (agents.wake): quiet, between its turns.
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Image(systemName: "alarm").font(.system(size: 10)).foregroundStyle(.tertiary)
+        Text(verbatim: s).font(Theme.chip).foregroundStyle(.tertiary)
+      }
+      .accessibilityElement(children: .combine)
     case .notice(let kind, let detail):
       HStack(alignment: .firstTextBaseline, spacing: 6) {
         Image(systemName: "wrench").foregroundStyle(.secondary).font(.system(size: 11))

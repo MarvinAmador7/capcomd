@@ -84,6 +84,10 @@ capcomd result --summary done >/dev/null`);
   expect(goodReviewer.task).toContain("Acceptance criteria:");
   expect(goodReviewer.task).toContain("the file src/a.txt exists");
   expect(goodReviewer.result.verdict).toEqual({ passed: true, reasons: ["does what the task asks"] });
+  // Its hand-back (the summary its parent's thread shows) is the verdict, then its reasons; no verdict says so.
+  expect(goodReviewer.result.summary).toBe("**Approve**\n\n- does what the task asks");
+  expect(reviewers.find((x: any) => /write BAD b/.test(x.task))!.result.summary).toBe("**Changes needed**\n\n- returns the wrong value");
+  expect(reviewers.find((x: any) => /write GARBLE c/.test(x.task))!.result.summary).toBe("probably fine, I think");
 
   await w.repo.seed.ok(["fetch", "-q", "origin"]);
   const files = (await w.repo.seed.ok(["ls-tree", "-r", "--name-only", "origin/trunk"])).split("\n");

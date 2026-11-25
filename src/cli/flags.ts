@@ -69,6 +69,7 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   service: { type: "boolean" },
   "no-service": { type: "boolean" },
   "no-login": { type: "boolean" },
+  "no-restart": { type: "boolean" },
   "no-skill": { type: "boolean" },
   "no-plugin": { type: "boolean" },
   "no-hermes": { type: "boolean" },

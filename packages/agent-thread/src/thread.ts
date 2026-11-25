@@ -15,6 +15,7 @@ import { checkImage, type StoredImage } from "./images";
 import { capBytes, oneLine, sanitize, tailBytes } from "./sanitize";
 import { claudeSummary, codexSummary, fxSummary } from "./summary";
 import { isClaudeNamingCall, isCodexNamingCall, isFxNamingCall } from "./naming";
+import { BOOKKEEPING_SYSTEM, isBookkeepingCommand, isBookkeepingTool } from "./bookkeeping";
 import { THREAD_FORMAT, type BlockNode, type ItemDraft, type LinkNode, type ToolDiffT, type ToolInfoT } from "./schema";
 
 const EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
@@ -48,11 +49,19 @@ function reportedMs(r: any): number | null {
 }
 
 /**
- * Claude Code system events that are its own bookkeeping, not something the agent did: the session's start and status,
- * and a background task starting or ending (`task_started`, `task_notification`: the tool call that ran it and the
- * child's hand-back already show both). Any other system event still shows ("System: <subtype>").
+ * Claude Code system events: most are its own bookkeeping (the session's start and status, thinking-token estimates,
+ * background tasks, hooks, UI and session state; Claude Code 2.1.311 has some seventy), not something the agent did,
+ * and the thread leaves them out. The few a reader should see are said in plain words (SYSTEM_SAID); a refused tool
+ * call (`permission_denied`) is folded into that call's row (its error code "refused") rather than shown on its own.
  */
-const QUIET_SYSTEM = new Set(["init", "status", "task_started", "task_progress", "task_notification"]);
+const SYSTEM_SAID: Record<string, (raw: any) => string> = {
+	compact_boundary: () => "Compacted the conversation",
+	api_retry: (raw) => {
+		const at = Number(raw.attempt), of = Number(raw.max_retries);
+		return `Retrying the model request${at > 0 ? ` (attempt ${at}${of > 0 ? ` of ${of}` : ""})` : ""}`;
+	},
+	model_fallback: (raw) => str(raw.content) || "Switched to a fallback model",
+};
 
 export function threadBuilder(o: ThreadOptions) {
 	const now = o.now ?? Date.now;
@@ -63,6 +72,8 @@ export function threadBuilder(o: ThreadOptions) {
 	const ignoredCalls = new Set<string>(); // calls shown as something else (TodoWrite → plan), or not at all (naming the tab)
 	const seenBlocks = new Set<string>();
 	const editPaths = new Map<string, unknown>(); // claude file-editing call id → its input's path
+	const callItems = new Map<string, string>(); // CLI call id → item id, kept after the call closes
+	const deniedCalls = new Set<string>(); // open claude calls its permission rules refused: closed with code "refused"
 	let n = 0, lastText: string | null = null;
 	const rel = (p: unknown) => { const s = str(p); return workspacePath(s, ctx.root) ?? s; };
 
@@ -70,7 +81,7 @@ export function threadBuilder(o: ThreadOptions) {
 		const item: ItemDraft = {
 			id: `${o.idPrefix}-${++n}`, rev: 1, kind: d.kind, status: d.status ?? "done", at: new Date(now()).toISOString(), durationMs: d.durationMs ?? null,
 			text: d.text, blocks: d.blocks ?? [], format: THREAD_FORMAT, redacted: d.redacted ?? false, tool: d.tool ?? null, error: d.error ?? null,
-			truncated: d.truncated ?? null, child: d.child ?? null,
+			truncated: d.truncated ?? null, child: d.child ?? null, ...(d.internal ? { internal: true } : {}),
 		};
 		items.set(item.id, item);
 		if (item.kind === "say" || item.kind === "result" || item.kind === "error") lastText = item.text.trim();
@@ -90,7 +101,9 @@ export function threadBuilder(o: ThreadOptions) {
 		const m = capBytes(sanitize(message), ERROR_MAX_BYTES);
 		return create({ kind: "error", text: m, blocks: plainBlocks(m), error: { message: m, code } });
 	};
-	const other = (summary: string): ItemDraft => create({ kind: "other", text: oneLine(summary) || "Event" });
+	const other = (summary: string, internal = false): ItemDraft => create({ kind: "other", text: oneLine(summary) || "Event", internal });
+	/** A CLI system event (BOOKKEEPING_SYSTEM): recorded, internal. */
+	const system = (subtype: string, summary: string): ItemDraft => other(summary, BOOKKEEPING_SYSTEM.has(subtype));
 	const thinking = (text: string, redacted: boolean): ItemDraft => {
 		if (redacted || !text.trim()) return create({ kind: "thinking", text: "", redacted: true });
 		const p = toBlocks(text, ctx);
@@ -98,10 +111,12 @@ export function threadBuilder(o: ThreadOptions) {
 	};
 	const fileLinks = (paths: unknown[]): LinkNode[] =>
 		paths.flatMap((p) => { const s = str(p); if (!s) return []; const l = classifyLink(s, workspacePath(s, ctx.root) ?? s, ctx); return l.target === "file" ? [l] : []; });
-	const openTool = (callId: string, t: Omit<ToolInfoT, "callId" | "isError" | "output">): ItemDraft => {
+	/** `internal`: the call is bookkeeping (BOOKKEEPING_CALLS): a wake, a wait, a poll of its own state. */
+	const openTool = (callId: string, t: Omit<ToolInfoT, "callId" | "isError" | "output">, internal = false): ItemDraft => {
 		const tool: ToolInfoT = { callId, name: oneLine(t.name, 200), kind: t.kind, summary: t.summary, isError: false, args: t.args, output: null, files: t.files, diff: t.diff };
-		const item = create({ kind: "tool", status: "open", text: tool.summary, tool });
+		const item = create({ kind: "tool", status: "open", text: tool.summary, tool, internal });
 		tools.set(callId, item.id);
+		callItems.set(callId, item.id);
 		return item;
 	};
 	const closeTool = (callId: string, r: { isError: boolean; output: string | null; durationMs: number | null; blocks?: BlockNode[]; error?: string | null; code?: string | null; diff?: ToolDiffT | null }): ItemDraft | null => {
@@ -177,7 +192,7 @@ export function threadBuilder(o: ThreadOptions) {
 						name, kind: claudeToolKind(name, input), summary: claudeSummary(name, input, rel), args: capBytes(json(input), ARGS_MAX_BYTES),
 						files: edits ? fileLinks([input.file_path ?? input.notebook_path]) : [],
 						diff: edits ? claudeInputDiff(name, input, ctx.root) : null,
-					}));
+					}, name === "Bash" ? isBookkeepingCommand(str(input.command)) : isBookkeepingTool(name)));
 				} else out.push(other(`Assistant ${bt || "block"}`));
 			}
 		} else if (type === "user" && Array.isArray(content)) {
@@ -191,7 +206,8 @@ export function threadBuilder(o: ThreadOptions) {
 				// The applied change, with context, replaces the input's; a failed call keeps what it proposed.
 				const diff = editPaths.has(callId) && !r.is_error ? claudeResultDiff(one, editPaths.get(callId), ctx.root) : undefined;
 				editPaths.delete(callId);
-				const closed = closeTool(callId, { isError: !!r.is_error, output: res.text, durationMs: one !== undefined ? reportedMs(one) : null, blocks: res.blocks, error: r.is_error ? res.text : null, diff });
+				const refused = deniedCalls.delete(callId) && !!r.is_error;
+				const closed = closeTool(callId, { isError: !!r.is_error, output: res.text, durationMs: one !== undefined ? reportedMs(one) : null, blocks: res.blocks, error: r.is_error ? res.text : null, code: refused ? "refused" : null, diff });
 				out.push(closed ?? other("A tool result for a call this thread didn't see"));
 			}
 		} else if (type === "result") {
@@ -199,15 +215,30 @@ export function threadBuilder(o: ThreadOptions) {
 			const text = str(raw.result).trim();
 			if (raw.is_error) { if (!text || text !== lastText) out.push(errorItem(text || str(raw.subtype) || "error", str(raw.subtype) || null)); }
 			else if (text && text !== lastText) out.push(markdownItem("result", str(raw.result)));
-		} else if (type === "system") {
-			if (raw.subtype === "compact_boundary") out.push(other("Compacted the conversation"));
-			else if (!QUIET_SYSTEM.has(str(raw.subtype)) && !str(raw.subtype).startsWith("hook_")) out.push(other(`System: ${str(raw.subtype) || "event"}`));
-		} else if (type === "rate_limit_event") {
+		} else if (type === "system") out.push(...claudeSystem(raw)); else if (type === "rate_limit_event") {
 			if (raw.rate_limit_info?.status === "rejected") out.push(other("Usage limit reached"));
 		} else if (["stream_event", "tool_progress", "tool_use_summary", "auth_status", "keep_alive", "user", "assistant"].includes(type)) {
 			// Known and not shown: partial-message deltas (token streaming is a follow-up), progress ticks, echoed input.
 		} else out.push(other(`Unknown event: ${type || "?"}`));
 		return out;
+	};
+
+	/** A Claude Code system event: plain words for the few a reader should see, nothing for its bookkeeping. */
+	const claudeSystem = (raw: any): ItemDraft[] => {
+		const subtype = str(raw.subtype);
+		if (subtype === "permission_denied") {
+			// The refused call's own row says it (red, "not allowed"): an open call closes refused, a closed one is marked.
+			const callId = str(raw.tool_use_id);
+			if (callId && ignoredCalls.has(callId)) return [];
+			if (callId && tools.has(callId)) { deniedCalls.add(callId); return []; }
+			const id = callId ? callItems.get(callId) : undefined;
+			const prev = id ? items.get(id) : undefined;
+			if (id && prev?.error) return prev.error.code === "refused" ? [] : [update(id, { error: { ...prev.error, code: "refused" } })];
+			const name = oneLine(str(raw.tool_name), 200);
+			return [other(name ? `Not allowed: ${name}` : "A tool call wasn't allowed")];
+		}
+		const said = SYSTEM_SAID[subtype];
+		return said ? [system(subtype, said(raw))] : [];
 	};
 
 	const codex = (raw: any): ItemDraft[] => {
@@ -227,7 +258,8 @@ export function threadBuilder(o: ThreadOptions) {
 						const args = item.type === "command_execution" ? str(item.command) : item.type === "mcp_tool_call" ? json(item.arguments) : item.type === "file_change" ? json(item.changes) : str(item.query);
 						const files = item.type === "file_change" && Array.isArray(item.changes) ? fileLinks(item.changes.filter((ch: any) => ch?.kind !== "delete").map((ch: any) => ch?.path)) : [];
 						// file_change carries paths and kinds, not lines: no diff (the files are links).
-						out.push(openTool(id, { name, kind: codexItemKind(item) ?? "tool", summary: codexSummary(item, rel), args: capBytes(args, ARGS_MAX_BYTES), files, diff: null }));
+						const internal = item.type === "command_execution" ? isBookkeepingCommand(str(item.command)) : item.type === "mcp_tool_call" && item.server === "capcomd" && isBookkeepingTool(str(item.tool));
+						out.push(openTool(id, { name, kind: codexItemKind(item) ?? "tool", summary: codexSummary(item, rel), args: capBytes(args, ARGS_MAX_BYTES), files, diff: null }, internal));
 					}
 					if (done) {
 						const failed = item.status === "failed" || (item.type === "command_execution" && item.exit_code != null && Number(item.exit_code) !== 0);
@@ -251,7 +283,7 @@ export function threadBuilder(o: ThreadOptions) {
 					out.push(d);
 					break;
 				}
-				case "error": if (done || type === "item.started") { const m = str(item.message); out.push(RETRYING.test(m) ? other(m) : errorItem(m || "error", null)); } break;
+				case "error": if (done || type === "item.started") { const m = str(item.message); out.push(RETRYING.test(m) ? system("codex_retry", m) : errorItem(m || "error", null)); } break;
 				default: if (done) out.push(other(`Codex ${str(item.type) || "item"}`));
 			}
 		} else if (type === "turn.failed") {
@@ -259,7 +291,7 @@ export function threadBuilder(o: ThreadOptions) {
 			out.push(errorItem(str(raw.error?.message) || "The turn failed", "turn_failed"));
 		} else if (type === "error") {
 			const m = str(raw.message) || str(raw.error?.message);
-			out.push(RETRYING.test(m) ? other(m) : errorItem(m || "error", null));
+			out.push(RETRYING.test(m) ? system("codex_retry", m) : errorItem(m || "error", null));
 		} else if (["thread.started", "turn.started", "turn.completed"].includes(type)) {
 			// Known and not shown.
 		} else out.push(other(`Unknown event: ${type || "?"}`));
@@ -286,7 +318,7 @@ export function threadBuilder(o: ThreadOptions) {
 				out.push(openTool(callId, {
 					name: mcp ? `${str(mcp.server)}.${str(mcp.tool)}` : name || str(u.kind) || "tool", kind: fxToolKind(name, input, mcp), summary: fxSummary(name, input, mcp, rel),
 					args: capBytes(name === "shell" ? str(input.command) || json(input) : json(input), ARGS_MAX_BYTES), files: edits ? fileLinks([input.path]) : [], diff: null,
-				}));
+				}, name === "shell" ? isBookkeepingCommand(str(input.command)) : mcp?.server === "capcomd" && isBookkeepingTool(str(mcp.tool))));
 			} else if (kind === "tool_call_update" && (u.status === "completed" || u.status === "failed")) {
 				const callId = str(u.toolCallId);
 				if (ignoredCalls.delete(callId)) return out;
@@ -300,7 +332,7 @@ export function threadBuilder(o: ThreadOptions) {
 				out.push(closed ?? other("A tool result for a call this thread didn't see"));
 			} else if (kind === "session_info_update" && u._meta?.fx?.modelResponseRecovery?.message) {
 				// fx waiting on the model (a rate limit, a dropped connection): progress, not a failure.
-				out.push(other(str(u._meta.fx.modelResponseRecovery.message).replace(/^\W+\s*/, "")));
+				out.push(system("fx_model_recovery", str(u._meta.fx.modelResponseRecovery.message).replace(/^\W+\s*/, "")));
 			}
 			// Known and not shown: title and context-window updates, a steering message fx replays, running output.
 		} else if (type === "result") {

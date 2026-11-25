@@ -26,6 +26,9 @@ export interface SandboxCaps {
   interactive: boolean;
   idleLifetime: "platform" | "sweep" | "none";
   shell: boolean;
+  /** ADR-026 §6 (additive): what a parked (hibernated) machine keeps: memory, disk (files, not processes), or none (the
+   *  provider can't park machines; absent means none). With memory or disk the seam has `hibernate` and `wake`. */
+  hibernate?: "memory" | "disk" | "none";
 }
 
 /** ADR-021's ProviderDescriptor (`src/providers/registry.ts`), served to clients as data. */
@@ -39,7 +42,7 @@ export interface SandboxDescriptor {
   mark: string;
   listed: boolean;
   caps: SandboxCaps;
-  settings: readonly ("idleLifetime" | "agentMemory")[];
+  settings: readonly ("idleLifetime" | "agentMemory" | "parkedRetention")[];
   info: readonly ("logins" | "checkpoints" | "agentSlots")[];
   resourceKinds: readonly "machine"[];
   actions: readonly ("open_terminal" | "delete")[];
@@ -77,6 +80,10 @@ export interface SandboxProvider {
   list(prefix: string, c: SeamCall): Promise<MachineInfo[]>;
   /** Move the delete deadline to `seconds` from now (a lease the running work renews). */
   extendTtl?(id: string, seconds: number, c: SeamCall): Promise<void>;
+  /** `caps.hibernate` memory or disk: park the machine (it stops costing compute; its disk stays). */
+  hibernate?(id: string, c: SeamCall): Promise<void>;
+  /** Wake a parked machine; rejects `not_found` when it is gone. */
+  wake?(id: string, c: SeamCall): Promise<void>;
   /** Resolves when the provider answers at all (about `id` when given; not-found is an answer), rejects when it does not. */
   probe?(id: string | undefined, c: SeamCall): Promise<void>;
   /** `caps.idleLifetime === "sweep"`: delete machines past their deadline; the kernel calls it every few minutes. */
@@ -124,6 +131,34 @@ export interface AgentCommandCtx {
    *  for a CLI that takes servers as flags. A `trusted` server's tools are approved up front, as capcomd's own are. */
   mcp?: { config: string; servers: Array<{ name: string; command: string[]; trust: "trusted" | "untrusted" }> };
   stdinPrompt?: boolean;
+  /** ADR-026 §2 (additive): the CLI session this run is, for a provider with `session`. `resume: false`: a new one under
+   *  `id` (`session.firstRunArgs(id)`; a CLI that names its own sessions ignores `id` and reports its id from `parse`
+   *  as `AgentRunState.sessionId`); `resume: true`: the saved session `id`, continued (`session.resumeArgs(id)`) with
+   *  the prompt as its next user turn. Absent: the CLI's default (a new session, or none kept). */
+  session?: { id: string; resume: boolean };
+}
+
+/**
+ * ADR-026 §2: how a CLI's own session is kept and continued (`AgentProvider.session`, additive; absent: the CLI's
+ * sessions can't be resumed, and a woken agent starts a fresh one). Every method is pure. The kernel copies the
+ * session file out of the machine as it grows (`locate`), stores it on the host, and puts it back where `place` says on
+ * a fresh machine before running the CLI with `resumeArgs`.
+ */
+export interface AgentSession {
+  /** The args that start a new session under `id` (Claude Code `--session-id <id>`); `[]` for a CLI that names its
+   *  own (codex: its id comes from `parse`, as `AgentRunState.sessionId`). */
+  firstRunArgs(id: string): string[];
+  /** The args that continue session `id` (Claude Code `--resume <id>`; codex's `resume <id>` subcommand). */
+  resumeArgs(id: string): string[];
+  /** Whether the CLI's output (its stderr's tail, then its stream's) says session `id` isn't there to continue, so the
+   *  kernel starts a fresh one instead (Claude Code "No conversation found", codex "no rollout found"). */
+  detectMissing(output: string): boolean;
+  /** One shell line printing the session file's path in the machine (nothing when there is none yet), for a CLI run
+   *  with `HOME=home` in `cwd`. */
+  locate(o: { home: string; cwd: string; id: string }, q: (s: string) => string): string;
+  /** Where a saved session file named `file` (its name as the CLI wrote it) goes for a CLI run with `HOME=home` in
+   *  `cwd`, and its companion folder when it has one (Claude Code's `<id>/`: subagents, tool results). */
+  place(o: { home: string; cwd: string; id: string; file: string }): { path: string; folder?: string };
 }
 
 /** `commands` (optional, §16.4): the foreground shell commands the event starts (`started`, by the CLI's call id) and
@@ -137,6 +172,8 @@ export interface AgentRunState {
   cacheReadTokens?: number; model?: string;
   resultText?: string; done: boolean; error?: string; stopReason?: string;
   quota?: { message: string; resetAt?: number };
+  /** ADR-026 §2 (additive): the CLI's session id, when it reports one (a provider with `session` that names its own). */
+  sessionId?: string;
 }
 
 /** One release archive of an agent CLI (`describe().install`): where it is, and its sha256 (lowercase hex). */
@@ -226,6 +263,8 @@ export interface AgentProvider {
    *  refusals only there (codex 0.163 logs a command its rules forbid and leaves it out of `--json`); null otherwise.
    *  `reason` must pass `redact`. The kernel shows it in the agent's log as `refused <call>: <reason>`. */
   refusal?(line: string, redact: (s: string) => string): { call: string; reason: string } | null;
+  /** Optional (ADR-026 §2): the CLI's sessions can be kept and continued on another machine. */
+  session?: AgentSession;
 }
 
 /** A family of environment variables an agent provider declares (`describe().envPrefixes`, §7.3): `ANTHROPIC_`,

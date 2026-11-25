@@ -18,7 +18,7 @@ struct StartProjectField: View {
     // A picked folder that isn't set up yet: its next steps take the tool row's place (design/setup).
     let setup = model.setupScreen(goal: goal).flatMap { $0.phase == .loading ? nil : $0 }
     // Goal branches: under the goal, the branch the work lands on and its base, as soon as a project folder is chosen
-    // (the base menu fills at once; the branch field follows the goal once there is one).
+    // (the base menu fills at once; the branch name follows the goal once there is one).
     let branches = model.goalBranchesOffered && setup == nil && !model.setup.isOpen
     let showBranches = branches
     let ready = !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !starting && (!branches || model.goalSetup.canStart)
@@ -105,90 +105,60 @@ struct StartProjectField: View {
 
   /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project. While a
   /// picked folder is looked at or set up, that folder, with a spinner or the orange "not set up" dot; × cancels.
-  @ViewBuilder private var folderChip: some View {
+  private var folderChip: some View {
+    let place: ComposerFolderChip.Where
     if model.setup.isOpen, let path = model.setup.path {
       let screen = model.setupScreen(goal: "")
-      Chip2(leading: AnyView(Image(systemName: "folder").font(.system(size: 11))), text: screen?.name ?? (path as NSString).lastPathComponent,
-            onRemove: { model.cancelSetup() },
-            trailing: AnyView(Group {
-              if screen?.phase == .loading { ProgressView().controlSize(.mini).frame(width: Theme.Setup.spinner, height: Theme.Setup.spinner).accessibilityLabel("Looking at the folder") }
-              else { SetupDot() }
-            }))
-        .help(path)
+      place = .settingUp(name: screen?.name ?? (path as NSString).lastPathComponent, path: path, loading: screen?.phase == .loading)
     } else if let repo = model.startRepo {
-      Chip2(icon: "folder", text: (repo as NSString).lastPathComponent, onRemove: { model.startRepo = nil })
-        .help(repo)
+      place = .checkout(path: repo)
     } else {
-      Button { model.chooseProjectFolder() } label: {
-        Chip2(icon: "folder", text: "Default project", onRemove: nil)
-      }
-      .buttonStyle(.plain).help("capcomd's default project; click to choose a checkout")
+      place = .defaultProject
     }
+    return ComposerFolderChip(place, remove: { if model.setup.isOpen { model.cancelSetup() } else { model.startRepo = nil } },
+                              choose: { model.chooseProjectFolder() })
   }
 
+  /// The composer's tool row (shared with the window's Home, CapcomdUI/ComposerToolRow.swift): + , where it runs, who
+  /// drives it (by the send, like the reference's model menu), the mic, send.
   private func toolRow(ready: Bool, starting: Bool) -> some View {
     HStack(spacing: Theme.Composer2.chipGap) {
       addMenu
-      sandboxSwitch
+      ComposerPlaceSwitch(places: model.sandboxes, current: model.startSandbox?.name) { model.pickSandbox($0) }
       Spacer(minLength: 0)
-      driverChip   // who drives it sits by the send, like the reference's model menu
+      driverChip
       if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
+      ComposerMicButton { focused = true }.disabled(starting)
       SendCircle(ready: ready, stop: false, label: "Start project", action: submit)
     }
   }
 
-  /// Where the run's agents work (owner's reference: the Web · Computer · Files group): Local (Docker on this Mac) or
-  /// VM (boxd), as the daemon offers them. The pick is remembered; one it can't use now is dimmed, with its reason.
-  @ViewBuilder private var sandboxSwitch: some View {
-    if let current = model.startSandbox, model.sandboxes.count > 1 {
-      HStack(spacing: 2) {
-        ForEach(model.sandboxes) { s in
-          let on = s.name == current.name
-          Button { model.pickSandbox(s.name) } label: {
-            // Icons only (owner's call); the name is the tooltip and what VoiceOver reads.
-            Image(systemName: s.name == "boxd" ? "cloud" : "laptopcomputer").font(Theme.Composer2.segmentIcon)
-              .foregroundStyle(on ? Color.white : Theme.Composer2.pillText)
-              .frame(width: Theme.Composer2.segmentWidth, height: Theme.Composer2.pillHeight)
-            .background {
-              if on {
-                Capsule().fill(Theme.Composer2.segmentOn)
-                  .overlay(Capsule().strokeBorder(Theme.Composer2.segmentOnStroke, lineWidth: 0.5))
-                  .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-              }
-            }
-            .contentShape(Capsule())
-          }
-          .buttonStyle(PressableStyle()).disabled(!s.available).opacity(s.available ? 1 : 0.4)
-          .help(s.available ? (s.name == "boxd" ? "\(s.label): agents run on boxd machines" : "\(s.label): agents run in Docker on this Mac")
-                            : "\(s.label): \(s.reason ?? "unavailable")")
-          .accessibilityLabel(s.label).accessibilityAddTraits(on ? .isSelected : [])
-        }
-      }
-      .padding(3).background(Capsule().fill(Theme.Composer2.pillGroupFill))
-      .fixedSize()
-      .animation(Theme.Motion.fast, value: current.name)
-      .accessibilityElement(children: .contain).accessibilityLabel("Where it runs")
-    }
-  }
-
-  /// Who drives the run (the planner agent): Claude Code or Codex, as the daemon offers them (`runs.driver`). The
-  /// choice is remembered; a driver the daemon reports unavailable is listed, disabled, with its reason.
+  /// Who drives the run (the planner agent) and on which model: each harness the daemon offers (`runs.driver`) with its
+  /// models (`runs.options.models`), then the effort. The picks are remembered; a harness that can't run where the run
+  /// would start stays listed, disabled, with the daemon's reason (always a menu, never a dead name). A daemon that
+  /// offers no drivers (no `runs.options`): no chip.
   @ViewBuilder private var driverChip: some View {
-    if let current = model.startDriver, let provider = Provider(wire: current.provider) {
+    let m = model.modelMenu
+    let levels = m.efforts
+    if !m.sections.isEmpty {
       Menu {
-        Picker("Driver", selection: Binding(get: { current.provider }, set: { model.pickDriver($0) })) {
-          ForEach(model.drivers.filter(\.available)) { d in Text(verbatim: d.label + (d.model.map { " · \($0)" } ?? "")).tag(d.provider) }
-        }
-        .pickerStyle(.inline)
-        ForEach(model.drivers.filter { !$0.available }) { d in
-          Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true)
+        ForEach(m.sections) { s in
+          Section(s.title) {
+            ForEach(s.options) { o in
+              Toggle(isOn: Binding(get: { o.checked }, set: { _ in model.pickModel(o) })) {
+                Text(verbatim: o.note.isEmpty || o.note == s.title ? o.name : "\(o.name) · \(o.note)")
+              }
+              .disabled(!o.enabled)
+            }
+            if let why = s.reason { Button(why) {}.disabled(true) }
+          }
         }
         // Reasoning effort for the picked driver, lowest first; the bars show it on the chip.
-        if let levels = current.efforts, !levels.isEmpty {
+        if m.enabled, !levels.isEmpty {
           Divider()
-          Picker("Effort", selection: Binding(get: { model.startEffort ?? EffortBars.auto }, set: { model.pickEffort($0 == EffortBars.auto ? nil : $0) })) {
+          Picker("Effort", selection: Binding(get: { m.effort ?? EffortBars.auto }, set: { model.pickEffort($0 == EffortBars.auto ? nil : $0) })) {
             // Auto: send nothing; the CLI picks (offered when the driver has no fixed default).
-            if current.effort == nil { Text("Auto").tag(EffortBars.auto) }
+            if m.offersAuto { Text("Auto").tag(EffortBars.auto) }
             ForEach(Array(levels.enumerated()), id: \.element) { i, l in
               Label { Text(verbatim: EffortBars.title(l)) } icon: { Image(systemName: "cellularbars", variableValue: EffortBars.value(i, of: levels.count)) }.tag(l)
             }
@@ -196,44 +166,23 @@ struct StartProjectField: View {
           .pickerStyle(.inline)
         }
       } label: {
-        let effort = model.startEffort, levels = current.efforts ?? []
-        Chip2(leading: ProviderMark(provider: provider, size: Theme.Provider.chipMark).foregroundStyle(ProviderMarks.badgeTint(provider)),
-              text: current.label, chevron: true, onRemove: nil,
-              trailing: effort.flatMap { levels.firstIndex(of: $0) }.map { AnyView(EffortBars(level: $0, of: levels.count)) })
+        DriverChipLabel(provider: Provider(wire: m.provider), text: m.chip, effort: m.effortIndex.map { ($0, levels.count) }, available: m.enabled)
       }
       .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-      .help(([current.label, current.model, model.startEffort.map { "\(EffortBars.title($0)) effort" }] as [String?]).compactMap { $0 }.joined(separator: " · "))
-      .accessibilityLabel("Driver: \(current.label)" + (model.startEffort.map { ", \(EffortBars.title($0)) effort" } ?? ""))
-    } else if let shown = model.drivers.first(where: { $0.isDefault == true }) ?? model.drivers.first, let provider = Provider(wire: shown.provider) {
-      // No driver can run (no planner profile, no login): the chip stays, dimmed, and says why, instead of vanishing.
-      Menu {
-        ForEach(model.drivers) { d in Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true) }
-      } label: {
-        Chip2(leading: ProviderMark(provider: provider, size: Theme.Provider.chipMark).foregroundStyle(Theme.Composer2.chipX),
-              text: shown.label, chevron: true, onRemove: nil)
-          .opacity(Theme.Composer2.unavailableOpacity)
-      }
-      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-      .help(shown.reason ?? "No AI can drive a run yet")
-      .accessibilityLabel("Driver unavailable: \(shown.reason ?? "no AI can drive a run yet")")
+      .help(m.label)
+      .accessibilityLabel(m.label)
     }
   }
 
   private var addMenu: some View {
-    Menu {
+    ComposerAddMenu {
       Button("Choose Project Folder…") { model.chooseProjectFolder() }
       if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
       Divider()
       Button("Settings…") { SettingsWindow.open(openSettings) }
       // The menu bar item is the app's home: with no window open there's no app menu, so Quit lives here.
       Button("Quit capcomd") { NSApp.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
-    } label: {
-      Image(systemName: "plus").font(Theme.Composer2.plusFont).foregroundStyle(.white)
-        .frame(width: Theme.Composer2.round, height: Theme.Composer2.round)
-        .background(Circle().fill(Theme.Composer2.roundFill)).overlay(Circle().strokeBorder(Theme.Composer2.roundStroke, lineWidth: 0.5))
     }
-    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-    .accessibilityLabel("Add")
   }
 
   @ViewBuilder private func line(_ state: StartState, branches: Bool) -> some View {

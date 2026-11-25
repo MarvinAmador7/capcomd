@@ -36,6 +36,16 @@ before, `rivet-v2/` (what it left, set aside on the first 3.x start: docs/durabi
 Nothing reads or writes `~/.rivetkit`. When you run a daemon by hand, give it `CAPCOMD_ENGINE_DATA` and its own
 `--port`/`CAPCOMD_ENDPOINT`; `capcomd serve` on 6420 with no override is the user's real data.
 
+Agents' CLI sessions (ADR-026 §2, `src/sessions/`) are kept in the state folder (`.relay/` in a checkout,
+`~/.capcomd/state/` otherwise), never in the engine's data or in git: `sessions/<run>/<agent>/ref.json` (the latest
+saved session: its CLI, id, file name and size) and `<session id>/file/000001.gz …` (the session file, redacted, a gzip
+member per segment) with `<session id>/folder/…` (Claude Code's `<id>/` folder), folders 0700 and files 0600. They
+go with the run (`deleteRunSessions`). With `sessions.replica: "icloud-drive"` in the user config (or
+`CAPCOMD_SESSIONS_REPLICA`; `none` turns it off), every object is also written, sealed with AES-256-GCM, to
+`~/Library/Mobile Documents/com~apple~CloudDocs/capcomd/sessions/<key>.ccs`, under the key in
+`session-replica.key` (0600, beside `sessions/`): copy that file to read the replica on another Mac. Tests use their
+own folders through `useSessionStores` and never the real iCloud Drive.
+
 Persisted settings (`capcomd setup` writes them): `~/.capcomd/config.json` and the nearest `.capcomd/config.json` from
 the current directory are environment defaults, applied by `src/cli/apply-config.ts` before anything else loads
 (a real env var wins; the boxd key comes from the OS keychain). `bun test` preloads `tests/helpers/isolate-config.ts`
@@ -50,6 +60,8 @@ Design documents live in `docs/`. Start with:
 - `adr-018-agent-plugins.md` - capcomd as a plugin for your agent: MCP tools, skills, the driver role
 - `adr-019-agents-report-up.md` - (proposed) agents report up to their parents; turn, time and money limits are optional
 - `adr-022-agent-lifecycle-workflow.md` - an agent's lifecycle as a Rivet workflow in its worker actor (the default; `CAPCOMD_AGENT_WORKFLOW=0` on the engine brings back `agent-drive` processes for one release), and the rule for changing the workflow
+- `adr-026-durable-agents.md` - durable agents and threads (proposed): an agent is never done, its CLI session is kept, waits happen between turns (wake on events), waking falls back from a parked machine to a fresh one, planners hibernate
+- `adr-027-open-core-and-cloud.md` - what's open source (everything one person runs on their own machine and accounts) and what's capcomd cloud (always on, managed machines, anywhere, teams), and the rule for deciding a new feature
 - `adr-015-agent-envs-secrets-codex.md` - agent profiles, credentials, env snapshots
 - `actors-v1.md`, `adr-008-lifecycle-state-machines.md`, `durability.md` - actors, state machines, failure handling
 - `output-contract.md` - the JSON, events and spans that callers can rely on
@@ -146,6 +158,10 @@ src/
                   `capcomd setup project` writes are ../config/project-setup.ts
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
+  schemas/      - typed payloads (ADR-026 §7): registry.ts, the schema registry (`name@version`, immutable once
+                  registered, a bounded JSON Schema subset, checked on write); builtin.ts, the schemas capcomd ships
+                  (handback@1, review-verdict@1) and a hand-back's prose form. What counts as an agent's bookkeeping in
+                  its thread (internal items) is packages/agent-thread's bookkeeping.ts
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results
   triggers/     - the trigger intake (plugin API §16.3): intake.ts, what the daemon does with a source's trigger (dedupe,
                   a followed thread, the operator's gate, trigger.admitting, the accept mode, a run), subscriptions,
@@ -178,7 +194,7 @@ docs/           - design documents and ADRs
 
 ```bash
 bun run typecheck
-bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages/*
+bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages/*: no engine
 bun run test:apps              # apps/canvas and apps/tui
 bun run test:scenarios         # the regression suite: scenarios, sub-agents, primitives, agent adapters, merges
 bun run test:scenarios:timings # the same, then refresh tests/scenario-timings.json from this machine's times
@@ -192,12 +208,21 @@ What CI runs, and where (`.github/workflows/`):
 |---|---|
 | `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
-| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect` with every runnable arm, below) |
-| `ci.yml` package | the npm package (`bun pm pack`), installed with `bun add -g` and no lockfile, as a user installs it, and driven (`scripts/release-smoke.sh`: every `@rivet-dev/services` resolved is the pinned version, and the engine runs rivet-services as on the default port) |
-| `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
-| `ci.yml` plugin-package | `@capcomd/plugin` packed (`packages/plugin/scripts/pack.ts`), installed into a fresh project and used from Node 20, typechecked by a TypeScript 5 consumer (`packages/plugin/scripts/smoke.sh`) |
-| `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
+| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect` with every runnable arm, below); on a PR, only when something they run changed (src/, packages/, evals/, `scripts/eval-*`, tests/helpers/, plugins/, the dependencies, `ci.yml`) |
+| `ci.yml` install-smoke | what a user installs, installed and driven (`scripts/release-smoke.sh`): the npm package (`bun pm pack`), installed with `bun add -g` and no lockfile, as a user installs it (every `@rivet-dev/services` resolved is the pinned version, and the engine runs rivet-services as on the default port); the Linux single executable; and `@capcomd/plugin` packed (`packages/plugin/scripts/pack.ts`), installed into a fresh project and used from Node 20, typechecked by a TypeScript 5 consumer (`packages/plugin/scripts/smoke.sh`) |
+| `menubar.yml` macos | when the app, the contract or a file its tests read changes: the Swift app tests (`swift test --parallel`); on main, and on a PR that changes the client or the contract, also the client tests (`swift test`) and the mock daemon checked against the contract (`client/mock/validate.ts`) |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
+
+Both scripts run their files in parallel: `test:fast` on 8 workers, `test:scenarios` on 4 (most of its files start an
+engine of their own). `CAPCOMD_TEST_JOBS=N` sets the count (CI sets the runner's core count; `CAPCOMD_TEST_JOBS=1` runs
+one file at a time). A test without a timeout of its own gets 20 s, so a CLI- or git-spawning test doesn't time out
+when the machine is busy. `test:scenarios` starts the slowest files first, by `tests/scenario-timings.json`.
+`test:fast` starts no engine: a test that does (`capcomd serve`, `tests/helpers/test-engine.ts`, the scenarios'
+`world()`) goes in a `test:scenarios` directory, and a pure unit test goes in `test:fast` (`tests/unit`) even when
+what it tests lives under sub-agents, primitives, agents or merge. An engine a test helper starts writes its output to
+`serve-<label>.log` in that engine's own data dir.
+
+A PR that changes only the macOS app, design/, site/ or docs/ (other than the files a job reads) doesn't run `ci.yml`.
 
 Every `*.test.ts` in the repository is in one of them. Gated off by default, because they need real accounts or VMs:
 `tests/merge/github-live.test.ts` (`CAPCOMD_GH_LIVE=1`: a throwaway private GitHub repo through `gh`) and
@@ -231,7 +256,7 @@ from the pinned fx by `scripts/fx-record/record.sh` (needs Docker; fx runs only 
 against a scripted model server): run it after changing `FX_VERSION` or the bridge, and review the diff.
 `packages/plugin` too; its published form is built by `bun packages/plugin/scripts/pack.ts [--out <dir>]` (default
 `packages/plugin/dist`, not committed) and checked by `packages/plugin/test/pack.test.ts` (test:fast) and
-`packages/plugin/scripts/smoke.sh <tgz>` (needs node and npm; CI's plugin-package job). The examples import it by name
+`packages/plugin/scripts/smoke.sh <tgz>` (needs node and npm; CI's install-smoke job). The examples import it by name
 (`@capcomd/plugin`, the package referring to itself), as a plugin author's code does.
 `packages/bot-avatar` works the same way: its `fixtures/catalog.json` and `fixtures/golden/bots.json` refresh with
 `bun packages/bot-avatar/scripts/golden.ts`; a change to any golden bot means existing agents get a new face.
@@ -393,7 +418,7 @@ Binaries: the workflow builds the single executable for darwin-arm64, darwin-x64
 Linux runner (`scripts/build-binary.ts --target T`), then installs each with `install.sh` and drives it without Bun
 on a runner of its own platform (`scripts/release-smoke.sh dist/capcomd-T X.Y.Z`; on macOS arm64 it also installs
 the Homebrew formula from a throwaway tap). They go on the release with their `.sha256` files, which is where
-`install.sh` and `capcomd upgrade` download from. Last, for a non-prerelease, it commits `Formula/capcomd.rb`
+`install.sh` and `capcomd update` download from. Last, for a non-prerelease, it commits `Formula/capcomd.rb`
 (`scripts/homebrew-formula.ts`) to MarvinAmador7/homebrew-tap with the `HOMEBREW_TAP_DEPLOY_KEY` secret (the private
 half of an SSH deploy key with write access to that repository only); without the secret it warns and skips that
 step.

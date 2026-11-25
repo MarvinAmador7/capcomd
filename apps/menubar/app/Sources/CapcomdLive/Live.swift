@@ -29,7 +29,9 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   }
 
   public func subscribe(scope: String, feed: String?, thread: Bool, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
-    let query = (feed.map { ["feed=\($0)", "activity=1"] } ?? []) + (thread ? ["thread=1"] : [])
+    // internal=1: the agents' bookkeeping too (agents.thread_internal), which the app shows only on request; a daemon
+    // without the capability ignores it.
+    let query = (feed.map { ["feed=\($0)", "activity=1"] } ?? []) + (thread ? ["thread=1", "internal=1"] : [])
     let path = "/v1/streams/\(scope)/events" + (query.isEmpty ? "" : "?" + query.joined(separator: "&"))
     let h = Handle(); let t = transport, bo = backoff, cap = maxBackoff, idle = idleTimeout
     h.task = Task {
@@ -118,7 +120,7 @@ public struct LiveThread: ThreadFetching {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
   public func thread(runId: String, agentId: String, after: Int, limit: Int) async throws -> CapcomdThread.Page {
-    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread?after=\(after)&limit=\(limit)"
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread?after=\(after)&limit=\(limit)&internal=1"
     do { return try await transport.getJSON(path, as: CapcomdThread.Page.self, maxBytes: 16 << 20) }
     catch let e as HTTPStatusError {
       switch e.status { case 401: throw Unauthorized(); case 404: throw DetailUnavailable.unsupported; default: throw DetailUnavailable.failed("HTTP \(e.status)") }
@@ -126,7 +128,7 @@ public struct LiveThread: ThreadFetching {
     catch is DecodingError { throw DetailUnavailable.failed("unexpected response") }
   }
   public func threadTail(runId: String, agentId: String, before: Int?, limit: Int) async throws -> CapcomdThread.Tail {
-    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread/tail?limit=\(limit)" + (before.map { "&before=\($0)" } ?? "")
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread/tail?limit=\(limit)&internal=1" + (before.map { "&before=\($0)" } ?? "")
     do { return try await transport.getJSON(path, as: CapcomdThread.Tail.self, maxBytes: 16 << 20) }
     catch let e as HTTPStatusError {
       switch e.status { case 401: throw Unauthorized(); case 404: throw DetailUnavailable.unsupported; default: throw DetailUnavailable.failed("HTTP \(e.status)") }
@@ -198,13 +200,21 @@ public struct LiveStarter: RunStarting {
   }
 }
 
-/// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50). 409 `conflict` (the agent has ended) and 422 carry
-/// the daemon's sentence; a 404 that names the run or agent is a refusal, any other 404 means the route is missing.
+/// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50). Every agent of a run that isn't archived takes
+/// messages (an idle one continues: capability agents.idle); 409 `archived` (the run is archived) and 422 carry the
+/// daemon's sentence; a 404 that names the run or agent is a refusal, any other 404 means the route is missing.
 public struct LiveMessenger: AgentMessaging {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
   public func send(runId: String, agentId: String, body: String, skills: [String], idempotencyKey: String) async throws -> SentMessage {
+    try await send(runId: runId, agentId: agentId, body: body, skills: skills, model: nil, effort: nil, idempotencyKey: idempotencyKey)
+  }
+  /// `model` / `effort` ride along only when set: the store sends them only where the daemon advertises
+  /// `agents.messages.model`.
+  public func send(runId: String, agentId: String, body: String, skills: [String], model: String?, effort: String?, idempotencyKey: String) async throws -> SentMessage {
     var payload: [String: Any] = ["body": body]; if !skills.isEmpty { payload["skills"] = skills }
+    if let model { payload["model"] = model }
+    if let effort { payload["effort"] = effort }
     let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/messages"
     let (status, data) = try await transport.post(path, headers: [("Idempotency-Key", idempotencyKey)], json: try JSONSerialization.data(withJSONObject: payload))
     let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -217,7 +227,26 @@ public struct LiveMessenger: AgentMessaging {
     case 403: throw MessageRefused("This app's capcomd token can't send messages (needs the steer scope)")
     case 404 where (obj?["code"] as? String) == "not_found" && (message.hasPrefix("run ") || message.hasPrefix("agent ")): throw MessageRefused(message)
     case 404: throw DetailUnavailable.unsupported
-    case 409, 422: throw MessageRefused(message)
+    case 409, 422: throw MessageRefused(message, code: obj?["code"] as? String)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
+/// `POST /v1/runs/{runId}/archive` and `/restore` (capability runs.archive, the steer scope): the controls' transport.
+extension LiveControls: RunArchiving {
+  public func restore(runId: String, idempotencyKey: String) async throws { try await archivePost(runId, "restore", idempotencyKey) }
+  public func archive(runId: String, idempotencyKey: String) async throws { try await archivePost(runId, "archive", idempotencyKey) }
+  func archivePost(_ runId: String, _ action: String, _ idempotencyKey: String) async throws {
+    let (status, body) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/\(action)", headers: [("Idempotency-Key", idempotencyKey)])
+    let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+    switch status {
+    case 200: return
+    case 401: throw Unauthorized()
+    case 403: throw MessageRefused("This app's capcomd token can't \(action) runs (needs the steer scope)")
+    case 404 where (obj?["code"] as? String) == "not_found" && ((obj?["message"] as? String) ?? "").hasPrefix("run "): throw MessageRefused((obj?["message"] as? String) ?? "run not found")
+    case 404: throw DetailUnavailable.unsupported
+    case 409: throw MessageRefused((obj?["message"] as? String) ?? "capcomd refused", code: obj?["code"] as? String)
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }

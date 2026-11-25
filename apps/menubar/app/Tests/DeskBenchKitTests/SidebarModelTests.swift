@@ -10,7 +10,7 @@ import DeskBenchKit
 final class SidebarModelTests: XCTestCase {
   #if canImport(SwiftUI) && os(macOS)
   @MainActor func model(_ fixture: String = "crew17", defaults: UserDefaults? = nil) -> (DeskModel, CapcomdStore, World) {
-    let w = Fixtures.make(fixture)!
+    let w = CachedFixtures.make(fixture)!
     let s = CapcomdStore()
     w.load(into: s)
     return (DeskModel(store: s, defaults: defaults), s, w)
@@ -242,7 +242,8 @@ final class SidebarModelTests: XCTestCase {
     let c = m.sidebar.content
     XCTAssertTrue(c.needs.isEmpty)
     XCTAssertTrue(c.running.isEmpty)
-    XCTAssertEqual(c.finished.first?.rows.map(\.word), ["done", "done", "failed"])
+    // ADR-026 §9: the root agent is idle (a message continues it); its children keep their outcome.
+    XCTAssertEqual(c.finished.first?.rows.map(\.word), ["idle", "done", "failed"])
     m.closeNewProject()
     if m.selectedAgent != nil {
       // Its selected agent never hides: Finished shows while it holds the selection.
@@ -262,6 +263,12 @@ final class SidebarModelTests: XCTestCase {
     XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Copy Agent ID"])
     s.capabilities.insert(Capability.agentPause)
     XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Pause", "Copy Agent ID"])
+    // agents.thread_internal: the agent's bookkeeping is hidden in its thread; the menu shows and hides it.
+    s.capabilities.insert(Capability.agentsThreadInternal)
+    XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Pause", "Show Bookkeeping", "Copy Agent ID"])
+    m.perform(.bookkeeping(shown: false), on: row)
+    XCTAssertTrue(s.bookkeepingShown.contains(row.id))
+    XCTAssertEqual(m.agentMenu(row).map(\.title)[2], "Hide Bookkeeping")
   }
   #endif
 }

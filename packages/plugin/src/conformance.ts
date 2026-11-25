@@ -116,6 +116,22 @@ export const SANDBOX_CASES: readonly Case[] = [
     if (!d.caps.egressAllowlist && !unsupported(await rejection(r.p.setEgress(id, ["example.com"], r.call()), "setEgress without caps.egressAllowlist"))) fail("setEgress without caps.egressAllowlist must reject unsupported");
     if (!d.caps.snapshots && !unsupported(await rejection(r.p.snapshot(id, "capcomd-conformance", r.call()), "snapshot without caps.snapshots"))) fail("snapshot without caps.snapshots must reject unsupported");
   } },
+  { name: "hibernate and wake exactly when caps.hibernate parks machines; a parked machine keeps its files", async run(r) {
+    const d = r.p.describe();
+    const parks = d.caps.hibernate === "memory" || d.caps.hibernate === "disk";
+    if ((typeof r.p.hibernate === "function") !== parks || (typeof r.p.wake === "function") !== parks) fail(`hibernate and wake must be implemented exactly when caps.hibernate is memory or disk (it is ${d.caps.hibernate ?? "absent"})`);
+    if (!parks) return;
+    const id = await r.box("park");
+    const bytes = new TextEncoder().encode(`parked ${r.tag}\n`);
+    const path = `${r.o.scratch}/capcomd-conformance-park-${r.tag}.txt`;
+    await r.p.upload(id, path, bytes, r.call());
+    await r.p.hibernate!(id, r.call());
+    await r.p.wake!(id, r.call());
+    await r.p.waitReady(id, r.call(r.o.readyMs));
+    const back = await r.p.download(id, path, r.call());
+    if (r.o.exec) await r.p.exec(id, ["rm", "-f", path], {}, r.call()).catch(() => {});
+    if (new TextDecoder().decode(back) !== new TextDecoder().decode(bytes)) fail("a file written before hibernate wasn't there, as it was, after wake");
+  } },
 ];
 
 /** A fresh run of the suite against `p`. */

@@ -41,7 +41,7 @@ final class PaneSplitsTests: XCTestCase {
 
   #if canImport(SwiftUI) && os(macOS)
   @MainActor func model() -> (DeskModel, CapcomdStore, World) {
-    let w = Fixtures.make("crew17")!
+    let w = CachedFixtures.make("crew17")!
     let s = CapcomdStore()
     w.load(into: s)
     return (DeskModel(store: s), s, w)

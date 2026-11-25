@@ -51,7 +51,7 @@ test("something that accepts but never answers also counts as in use", async () 
 	try {
 		const s = await probeHarnessSocket(sock, 300);
 		expect(s.state).toBe("live");
-		expect(await serveHarnessSocket(sock, app()).catch((x) => x)).toBeInstanceOf(HarnessSocketInUseError);
+		expect(await serveHarnessSocket(sock, app(), { probeMs: 300 }).catch((x) => x)).toBeInstanceOf(HarnessSocketInUseError);
 		expect(existsSync(sock)).toBe(true);
 	} finally { hole.close(); }
 });

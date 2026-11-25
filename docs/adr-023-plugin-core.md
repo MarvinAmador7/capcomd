@@ -425,7 +425,7 @@ user-visible output (dsh's rule for product-visible plugins, research §2.10; `t
    `tests/scenarios/review.test.ts`, plus a second test gate that fails and shows the AND.
 6. **Forges as plugins** (§7.3). Tests: `tests/merge/*` with `forge-fake`; `tests/api/project-git.test.ts`.
 7. **Front doors**: the MCP tool list and the CLI `switch` become registrations by built-in `front-*` plugins; the
-   `hermes` writer is `front-hermes`. Tests: `tests/mcp/client.test.ts` lists the same tools; `tests/cli` passes; a test
+   `hermes` writer is `front-hermes`. Tests: `tests/scenarios/mcp-client.test.ts` lists the same tools; `tests/cli` passes; a test
    plugin registers one command and one tool and both answer with the `relay.v1` envelope and the caller's principal.
 8. **Out-of-process runtime**: the stdio JSON-RPC transport, the filtered environment, the plugin's client token,
    restart and fail-closed on crash. Tests: a fixture plugin as a child process (the `tests/agents/fake-claude.sh`

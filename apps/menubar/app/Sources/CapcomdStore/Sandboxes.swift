@@ -232,7 +232,8 @@ public struct SandboxResource: Decodable, Sendable, Hashable, Identifiable {
   }
   public var id: String
   public var kind: String
-  /// starting, running, asleep (reserved), orphaned, stopping, unknown.
+  /// starting, running, parked (an idle planner's machine, hibernated; `deleteAfter` is when it goes), asleep
+  /// (reserved), orphaned, stopping, unknown.
   public var state: String
   public var owner: Owner?
   public var createdAt: String?
@@ -267,6 +268,9 @@ public struct SandboxResource: Decodable, Sendable, Hashable, Identifiable {
   public var orphaned: Bool { state == "orphaned" || owner == nil }
   /// capcomd's own short-lived machine (checks, a login, an environment build): never opened or deleted from the app.
   public var capcomdJob: Bool { owner.map { !$0.isAgent } ?? false }
+  /// An idle planner's or lead's machine, parked for a message to wake (`agents.park`): it runs nothing, and Delete
+  /// deletes only the machine.
+  public var parked: Bool { state == "parked" }
 }
 
 /// `GET /v1/sandboxes/{name}/resources`: the last list capcomd got from the provider. `stale`: the provider didn't answer
@@ -516,7 +520,9 @@ public struct MachineRow: Sendable, Hashable, Identifiable {
   public var deleteAfter: Date?
   /// The daemon's question before a Delete; nil when it sends none (the app then asks plainly).
   public var confirm: String? = nil
-}
+  /// Parked (an idle planner's machine, deleted at `deleteAfter`): the row says so instead of its age.
+  public var parked: Bool = false
+  }
 
 /// The confirmation a Delete… shows: a title, the rest of the daemon's question as the message, and the button.
 public struct DeleteQuestion: Sendable, Hashable {
@@ -616,6 +622,8 @@ public struct DetailSections: Sendable, Hashable {
 /// Maps what the daemon says about places to rows. Platform-neutral and tested.
 public enum SandboxRows {
   public static let idleLifetime = "idleLifetime"
+  /// How long parked machines are kept (`agents.park`): with the idle lifetime, under the machines.
+  public static let parkedRetention = "parkedRetention"
   public static let logins = "logins"
   public static let checkpoints = "checkpoints"
   public static let openTerminal = "open_terminal"
@@ -626,7 +634,7 @@ public enum SandboxRows {
   public static func sections(_ d: SandboxDetail) -> DetailSections {
     var s = DetailSections()
     for f in d.settings {
-      if f.id == idleLifetime { s.machines.append(f) } else if f.kind == .status { s.status.append(f) } else { s.more.append(f) }
+      if f.id == idleLifetime || f.id == parkedRetention { s.machines.append(f) } else if f.kind == .status { s.status.append(f) } else { s.more.append(f) }
     }
     for f in d.info {
       if f.kind == .status && f.id != logins && f.id != checkpoints { s.status.append(f) }
@@ -663,7 +671,7 @@ public enum SandboxRows {
       return MachineRow(id: r.id, title: title, age: created.map { age(from: $0, now: now) } ?? "", tone: tone, orphaned: r.orphaned, capcomdJob: job,
                         canOpenTerminal: !job && shell && r.actions.contains(openTerminal) && r.state != "stopping",
                         canDelete: !job && r.actions.contains(delete),
-                        createdAt: created, deleteAfter: r.deleteAfter.flatMap(SettingsRows.parseISO), confirm: r.confirm)
+                        createdAt: created, deleteAfter: r.deleteAfter.flatMap(SettingsRows.parseISO), confirm: r.confirm, parked: r.parked)
     }
     return rows.enumerated().sorted { a, b in
       if a.element.orphaned != b.element.orphaned { return !a.element.orphaned }

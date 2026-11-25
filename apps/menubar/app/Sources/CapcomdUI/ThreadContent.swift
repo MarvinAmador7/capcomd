@@ -389,7 +389,7 @@ package struct ThreadItemRow: View {
           if !tail.prose.isEmpty { BlocksView(runId: runId, agentId: agentId, blocks: tail.prose, leadingMargin: above, proseWidth: proseWidth) }
           VerdictCard(runId: runId, agentId: agentId, verdict: tail.verdict).modifier(ProseColumn(proseWidth))
         } else { blocks }
-      case "thinking": ThinkingRow(runId: runId, agentId: agentId, item: item, seconds: item.thinkingSeconds(next: next)).modifier(ProseColumn(proseWidth))
+      case "thinking": ThinkingRunRow(runId: runId, agentId: agentId, run: ThinkingRun([item], next: next)).modifier(ProseColumn(proseWidth))
       case "tool": ToolCallRow(item: item, proseWidth: proseWidth)
       case "plan":
         Text("Plan").font(Theme.Content.headingFont).foregroundStyle(Theme.Content.headingText)
@@ -427,61 +427,31 @@ package struct ThreadItemRow: View {
     }
   }
 
-  /// What this item leaves under itself: tool and thinking rows have no margin; prose ends with its last block's.
+  /// What this item leaves under itself: tool and thinking rows their 8 pt; prose ends with its last block's.
   package static func bottomMargin(_ i: CapcomdThread.Item) -> CGFloat {
     switch i.kind {
-    case "tool", "thinking": 0
+    case "tool": i.tool?.diff == nil ? Theme.Rows.bottom : Theme.Content.diffBottom
+    case "thinking": Theme.Rows.bottom
     case "handoff": Theme.Content.handoffBottom
     default: i.blocks.last.map(BlocksView.bottomMargin) ?? Theme.Content.proseBottom
     }
   }
 }
 
-/// `.thk` / `.thb`: folded to "Thought for 8s"; a click unfolds the reasoning under a hairline.
-package struct ThinkingRow: View {
-  package let runId: String
-  package let agentId: String
-  package let item: CapcomdThread.Item
-  package let seconds: Int?
-  package init(runId: String, agentId: String, item: CapcomdThread.Item, seconds: Int?) { self.runId = runId; self.agentId = agentId; self.item = item; self.seconds = seconds }
-  @State private var open = false
-
-  package var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
-        HStack(spacing: Theme.Content.thinkGap) {
-          Chevron(open: open)
-          Text(verbatim: label)
-        }
-        .font(Theme.Content.thinkFont).foregroundStyle(Theme.Content.thinkText)
-        .frame(height: Theme.Content.thinkHeight).contentShape(Rectangle())
-      }
-      .buttonStyle(.plain).disabled(item.redacted).accessibilityLabel(label)
-      if open && !item.redacted {
-        BlocksView(runId: runId, agentId: agentId, blocks: item.blocks, font: Theme.Content.thoughtFont, color: Theme.Content.thoughtText, spacing: Theme.Content.thoughtSpacing)
-          .padding(.leading, Theme.Content.thoughtIndent)
-          .overlay(alignment: .leading) { Rectangle().fill(Theme.Content.thoughtRule).frame(width: 1) }
-          .padding(Theme.Content.thoughtMargin)
-          .transition(.opacity)
-      }
-    }
-  }
-
-  package var label: String {
-    if item.open { return "Thinking…" }
-    let base = seconds.map { "Thought for \($0)s" } ?? "Thought"
-    return item.redacted ? "\(base) · hidden by the CLI" : base
-  }
-}
-
-/// `.tc` / `.tx`: icon · summary · mono duration · chevron; a click shows Arguments and Result.
+/// `.tr`: a 16 pt muted icon, the tool's name in mono, what it was about at 62 %, and on the right its status (a running
+/// arc, a done tick, "Failed", "Not allowed": only that word and glyph take colour) and its time. A click shows its
+/// Arguments and Result. An edit with a diff is its diff card.
 package struct ToolCallRow: View {
   package let item: CapcomdThread.Item
   /// Expanded pane: the summary line keeps to the reading column, the result (the log) and a diff run wide.
   package var proseWidth: CGFloat? = nil
-  package init(item: CapcomdThread.Item, proseWidth: CGFloat? = nil) { self.item = item; self.proseWidth = proseWidth }
+  /// A call inside an open group: no space under it (the group's rows sit together).
+  package var inGroup = false
+  package init(item: CapcomdThread.Item, proseWidth: CGFloat? = nil, inGroup: Bool = false) { self.item = item; self.proseWidth = proseWidth; self.inGroup = inGroup }
   @State private var open = false
   @State private var hover = false
+  /// It was running when this row first drew: when it finishes here, its tick pops.
+  @State private var sawRunning = false
 
   package var body: some View {
     if let tool = item.tool, let diff = tool.diff {
@@ -489,42 +459,38 @@ package struct ToolCallRow: View {
     } else { row }
   }
 
-  /// A shell command reads as one (`>_`), whatever it runs, since the row shows the command itself; capcomd's own
-  /// commands (spawn, wait, verify, merge…) and other tools keep their kind's icon.
-  private func toolSymbol(_ tool: CapcomdThread.Item.Tool?) -> String {
-    let shell: Set<String> = ["Bash", "BashOutput", "KillShell", "KillBash", "command_execution"]
-    let capcomd: Set<String> = ["spawn", "wait", "message", "verify", "merge", "report", "delegate"]
-    if let tool, shell.contains(tool.name), !capcomd.contains(tool.kind) { return "terminal" }
-    return StepKind(activityKind: tool?.kind).symbol
-  }
-
   package var row: some View {
-    let tool = item.tool
+    let tool = item.tool, status = item.toolStatus
+    let name = tool?.displayName ?? "tool", what = tool?.detail ?? item.text
     return VStack(alignment: .leading, spacing: 0) {
       Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
-        HStack(spacing: Theme.Content.toolGap) {
-          Image(systemName: toolSymbol(tool)).font(.system(size: 11))
-            .foregroundStyle(tool?.isError == true ? Theme.red : item.open ? Theme.accent : Theme.Content.label.opacity(0.6))
-            .frame(width: Theme.Content.toolIcon)
-          Text(verbatim: tool?.summary ?? item.text).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
-          if item.open {
-            Image(systemName: "smallcircle.filled.circle").font(.system(size: 10)).foregroundStyle(Theme.accent).accessibilityLabel("Running")
-          } else if let d = item.durationMs {
-            Text(verbatim: callDuration(ms: d)).font(Theme.Content.toolDuration).foregroundStyle(Theme.Content.toolDurationText)
-          }
-          Chevron(open: open).frame(width: Theme.Content.toolChevron)
+        HStack(spacing: Theme.Rows.gap) {
+          Image(systemName: ToolIcon.symbol(tool)).font(Theme.Rows.iconFont).foregroundStyle(Theme.Rows.iconText)
+            .frame(width: Theme.Rows.icon, height: Theme.Rows.icon)
+          Text(verbatim: name).font(Theme.Rows.name)
+            .foregroundStyle(status == .notAllowed ? Theme.Rows.nameRefusedText : Theme.Rows.nameText).fixedSize()
+          Text(verbatim: what).font(Theme.Rows.detail).foregroundStyle(Theme.Rows.detailText)
+            .lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+          ToolStatusView(status: status, duration: item.durationMs.map { callDuration(ms: $0) }, finishedNow: sawRunning && status == .done)
+            .padding(.leading, Theme.Rows.statusLead)
         }
-        .font(Theme.Content.toolFont).foregroundStyle(tool?.isError == true ? Theme.Content.errorText : Theme.Content.toolText)
-        .frame(height: Theme.Content.toolHeight).padding(.horizontal, Theme.Content.toolInset)
-        .background(RoundedRectangle(cornerRadius: Theme.Content.toolRadius, style: .continuous).fill(hover ? Theme.Content.toolHover : .clear))
+        .frame(height: Theme.Rows.height).padding(.horizontal, Theme.Rows.hoverInset)
+        .background(RoundedRectangle(cornerRadius: Theme.Rows.hoverRadius, style: .continuous).fill(hover ? Theme.Rows.hover : .clear))
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain).onHover { hover = $0 }
-      .padding(.horizontal, -Theme.Content.toolInset)
-      .accessibilityLabel(tool?.summary ?? item.text)
+      .padding(.horizontal, -Theme.Rows.hoverInset)
+      .accessibilityLabel(Self.spoken(name: name, what: what, status: status))
       .modifier(ProseColumn(proseWidth))
-      if open, let tool { detail(tool).transition(.opacity) }
+      if open, let tool { detail(tool).modifier(RiseIn()) }
     }
+    .padding(.bottom, inGroup ? 0 : Theme.Rows.bottom)
+    .onAppear { if item.open { sawRunning = true } }
+  }
+
+  package static func spoken(name: String, what: String, status: ToolStatus) -> String {
+    let s: String = switch status { case .running: "running"; case .done: "done"; case .failed: "failed"; case .notAllowed: "not allowed" }
+    return "\(name) \(what), \(s)"
   }
 
   package func detail(_ t: CapcomdThread.Item.Tool) -> some View {
@@ -625,11 +591,22 @@ package struct DiffCard<Detail: View>: View {
   }
 }
 
-/// `.ho`: a child that finished: profile icon, name + suffix, "handed back", its summary and artifacts; › opens its thread.
-/// A reviewer's verdict (its message was `{"passed", "reasons"}`) as a card instead of raw JSON: the reviewer's bot, a
-/// green or red seal with "Passed review" / "Didn't pass review", then each reason. An identity moment: the bot cheers
-/// with a happy face when the work passes (as in the run-finished moment) and makes its "oops" face when it doesn't;
-/// the face is the bot's own, nothing is drawn on it. The reasons are agent text, shown as plain text.
+/// A card in the thread (`.card`): a step above the pane, 10 pt corners, a 0.5 pt inset hairline and a 1 pt shadow.
+package struct ThreadCard: ViewModifier {
+  package init() {}
+  package func body(content: Content) -> some View {
+    let r = RoundedRectangle(cornerRadius: Theme.Affect.cardRadius, style: .continuous)
+    content
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(Theme.Affect.cardPadding)
+      .background(r.fill(Theme.Affect.card).shadow(color: Theme.Affect.cardShadow, radius: 1, y: 1))
+      .overlay(r.strokeBorder(Theme.Affect.cardStroke, lineWidth: Theme.Affect.hairline))
+  }
+}
+
+/// A reviewer's verdict (its message was `{"passed", "reasons"}`) as a card instead of raw JSON: the reviewer's bot (it
+/// cheers when the work passes, makes its "oops" face when it doesn't: the face is the bot's own), the seal and "Passed
+/// review" / "Didn't pass review", then each reason. The reasons are agent text, shown as plain text.
 package struct VerdictCard: View {
   @Environment(\.threadHost) private var host
   package let runId: String
@@ -642,74 +619,105 @@ package struct VerdictCard: View {
                           : ((try? withOverrides(t, mood: .oops)) ?? t)
   }
   package var body: some View {
-    VStack(alignment: .leading, spacing: Theme.Content.verdictGap) {
-      HStack(spacing: Theme.Content.handoffGap) {
-        if let face { BotAvatar(traits: face, size: .small).accessibilityHidden(true) }
-        Image(systemName: verdict.passed ? "checkmark.seal.fill" : "xmark.seal.fill").font(Theme.Content.verdictIcon)
-          .foregroundStyle(verdict.passed ? Theme.green : Theme.red)
-        Text(verdict.passed ? "Passed review" : "Didn't pass review").font(Theme.Content.handoffName).foregroundStyle(.white)
+    VStack(alignment: .leading, spacing: Theme.Affect.cardGap) {
+      HStack(spacing: Theme.Rows.whoGap) {
+        if let face { BotAvatar(traits: face, size: .xs).frame(width: Theme.Rows.whoBot, height: Theme.Rows.whoBot).accessibilityHidden(true) }
+        VerdictLine(verdict: verdict)
       }
-      if !verdict.reasons.isEmpty {
-        VStack(alignment: .leading, spacing: Theme.Content.verdictReasonGap) {
-          ForEach(Array(verdict.reasons.enumerated()), id: \.offset) { _, r in
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Content.handoffGap) {
-              Text(verbatim: "•").foregroundStyle(Theme.Content.verdictBullet).accessibilityHidden(true)
-              Text(verbatim: r).foregroundStyle(Theme.Content.handoffSummaryText).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .font(Theme.Content.handoffSummary)
-          }
-        }
-      }
+      if !verdict.findings.isEmpty { FindingsList(findings: verdict.findings) }
+      else if !verdict.reasons.isEmpty { ReasonsList(reasons: verdict.reasons) }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(Theme.Content.handoffPadding)
-    .background(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).fill(Theme.Content.handoffFill))
-    .overlay(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).strokeBorder(Theme.Content.handoffStroke, lineWidth: 0.5))
+    .modifier(ThreadCard())
     .padding(.bottom, Theme.Content.handoffBottom)
     .accessibilityElement(children: .combine)
   }
 }
 
+/// `.card`: a child that finished. The who line: its bot (16 pt), its name, "role · handed back" quietly, a chevron (a
+/// click opens its thread). A reviewer's verdict as the seal and "Passed review" / "Didn't pass review" with its reasons;
+/// else its summary as markdown blocks. The body is clamped to about three lines, fading out, with Show more; its
+/// artifacts as chips. The text is selectable.
 package struct HandoffCard: View {
   @Environment(\.threadHost) private var host
   package let runId: String
   package let item: CapcomdThread.Item
-  package init(runId: String, item: CapcomdThread.Item) { self.runId = runId; self.item = item }
+  /// `expanded`: open past its clamp from the start (a capture of the whole card).
+  package init(runId: String, item: CapcomdThread.Item, expanded: Bool = false) { self.runId = runId; self.item = item; _more = State(initialValue: expanded) }
+  @State private var more = false
+  /// The body's own height, measured unclamped: Show more only when it runs past the clamp.
+  @State private var fullHeight: CGFloat = 0
 
   package var body: some View {
     let childId = item.child?.agentId
     let h = host?.host
-    Button { if let childId { h?.openAgent(runId: runId, agentId: childId) } } label: {
-      VStack(alignment: .leading, spacing: 0) {
-        HStack(spacing: Theme.Content.handoffGap) {
+    let verdict = item.handoffVerdict
+    let (summary, artifacts) = Self.split(verdict?.rest ?? item.blocks)
+    let clamps = fullHeight > Theme.Rows.clamp + Theme.Rows.clampSlack
+    VStack(alignment: .leading, spacing: Theme.Affect.cardGap) {
+      Button { if let childId { h?.openAgent(runId: runId, agentId: childId) } } label: {
+        HStack(spacing: Theme.Rows.whoGap) {
           let bot = childId.flatMap { h?.bot(runId: runId, agentId: $0) }
-          ProvidedBot(traits: bot, size: .small, provider: childId.flatMap { h?.agentProvider(runId: runId, agentId: $0) })
+          ProvidedBot(traits: bot, size: .xs, provider: childId.flatMap { h?.agentProvider(runId: runId, agentId: $0) })
+            .frame(width: Theme.Rows.whoBot, height: Theme.Rows.whoBot)
           // The bot's name leads; the role joins the note ("worker · handed back").
           let role = childId.flatMap { h?.role(runId: runId, agentId: $0) } ?? "Agent", name = bot?.name
-          Text(verbatim: name ?? role).font(Theme.Content.handoffName).foregroundStyle(.white)
+          Text(verbatim: name ?? role).font(Theme.Rows.whoName).foregroundStyle(Theme.Rows.whoNameText)
           let note = item.child?.status == "failed" ? "failed" : "handed back"
-          Text(verbatim: name == nil ? note : "\(role) · \(note)")
-            .font(Theme.Content.handoffNote).foregroundStyle(Theme.Content.handoffNoteText)
+          Text(verbatim: name == nil ? note : "\(role) · \(note)").font(Theme.Rows.whoFont).foregroundStyle(Theme.Rows.whoText)
           Spacer(minLength: 0)
-          Chevron(open: false)
+          Image(systemName: "chevron.right").font(Theme.Rows.chevron).foregroundStyle(Theme.Rows.whoChevron)
         }
-        let (summary, artifacts) = Self.split(item.blocks)
-        BlocksView(runId: runId, agentId: childId ?? "", blocks: summary, font: Theme.Content.handoffSummary,
-                   color: Theme.Content.handoffSummaryText, spacing: Theme.Content.handoffSummarySpacing)
-          .padding(Theme.Content.handoffSummaryMargin).padding(.bottom, -Theme.Content.proseBottom)
-        if !artifacts.isEmpty {
-          HStack(spacing: Theme.Content.artGap) { ForEach(Array(artifacts.enumerated()), id: \.offset) { _, l in ArtifactChip(link: l) } }
+        .lineLimit(1)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain).disabled(childId == nil)
+      .help(childId == nil ? "" : "Open its thread")
+      if let v = verdict?.verdict { VerdictLine(verdict: v) }
+      VStack(alignment: .leading, spacing: 0) {
+        // ADR-026 §7: a typed hand-back is drawn from its fields (its blocks say the same in prose); a reviewer's
+        // findings with their severity and place.
+        if let hb = item.typedHandback {
+          HandbackBody(handback: hb)
+        } else if let v = verdict?.verdict, !v.reasons.isEmpty, Self.reasonsOnly(summary, v) {
+          if v.findings.isEmpty { ReasonsList(reasons: v.reasons) } else { FindingsList(findings: v.findings) }
+        } else if !summary.isEmpty {
+          BlocksView(runId: runId, agentId: childId ?? "", blocks: summary, font: Theme.Rows.cardFont,
+                     color: Theme.Rows.cardText, spacing: Theme.Affect.bodySpacing)
+            .padding(.bottom, -Theme.Content.proseBottom)
         }
       }
-      .multilineTextAlignment(.leading)
-      .padding(Theme.Content.handoffPadding)
-      .background(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).fill(Theme.Content.handoffFill))
-      .overlay(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).strokeBorder(Theme.Content.handoffStroke, lineWidth: 0.5))
-      .contentShape(Rectangle())
+      .fixedSize(horizontal: false, vertical: true)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }
+      .frame(maxHeight: clamps && !more ? Theme.Rows.clamp : nil, alignment: .top)
+      .clipped()
+      .mask { Self.fade(clamps && !more) }
+      if clamps {
+        Button(more ? "Show less" : "Show more") { withTransaction(Transaction(animation: nil)) { more.toggle() } }   // snaps, as a thought unfolds
+          .buttonStyle(.plain).font(Theme.Rows.more).foregroundStyle(Theme.Rows.moreText)
+      }
+      if !artifacts.isEmpty {
+        HStack(spacing: Theme.Content.artGap) { ForEach(Array(artifacts.enumerated()), id: \.offset) { _, l in ArtifactChip(link: l) } }
+      }
     }
-    .buttonStyle(.plain).disabled(childId == nil)
+    .multilineTextAlignment(.leading)
+    .modifier(ThreadCard())
     .padding(.bottom, Theme.Content.handoffBottom)
+  }
+
+  /// The daemon writes a reviewer's reasons into the hand-back as a list after the line that says the verdict: when the
+  /// summary is only that list, the reasons are drawn from the verdict itself.
+  static func reasonsOnly(_ summary: [Block], _ v: Verdict) -> Bool {
+    guard summary.count <= 1 else { return false }
+    guard case .list(false, _, let items)? = summary.first else { return summary.isEmpty }
+    return items.count == v.reasons.count
+  }
+
+  /// A clamped body fades out over its last lines (opaque to 62 %, then clear), so it reads as cut, not ended.
+  @ViewBuilder static func fade(_ on: Bool) -> some View {
+    if on {
+      LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: Theme.Rows.clampFadeFrom), .init(color: .clear, location: 1)],
+                     startPoint: .top, endPoint: .bottom)
+    } else { Color.black }
   }
 
   /// The daemon puts a handoff's artifacts last, as a list of one-link items (handoffDraft): those become `.art` chips.

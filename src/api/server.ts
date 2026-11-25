@@ -6,8 +6,9 @@ import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
-import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, type EventsPage, type EventsQuery, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
+import { listSchemas } from "../schemas";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, pluginClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import type { PluginDetail as HostPluginDetail, PluginProtocol, PluginSummary as HostPluginSummary } from "../../packages/plugin/src/host/host";
@@ -18,8 +19,9 @@ import { ProtocolError, type FrameSink } from "../../packages/plugin/src/host/pr
 import { PluginError, type PluginErrorCode } from "../../packages/plugin/src/errors";
 import type { PluginStore } from "../plugins/storage";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
-import { CreateRunError, entityOf, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
-import { isoTs } from "./envelope";
+import { CreateRunError, entityOf, envelopes, isQuestionApproval, messagesOf, SendRefused, toEnvelope, type CreateRunInput, type HarnessSource } from "./source";
+import { isoTs, type HarnessEvent } from "./envelope";
+import { agentIds, EVENTS_PAGE_MAX, eventTypes, listParam, matches, reachedStates, type EventFilter } from "./events-wait";
 import { lifecycleEvents } from "./lifecycle";
 import { daemonEnvelope, harnessState, type HarnessState } from "./state";
 import { parseSettingsPatch } from "./sandboxes";
@@ -51,6 +53,8 @@ const err = (c: Context, status: 401 | 403 | 404 | 409 | 413 | 422 | 503 | 504, 
 export const ACTIVITY_MS = 1000;
 /** agent.thread_item_changed: the thread is polled at most this often, latest rev per item (at most four frames per item per second). */
 export const THREAD_MS = 250;
+/** A query flag set: `true` or `1`. */
+const asked = (v: string | undefined) => v === "true" || v === "1";
 /** GET …/thread: a page stops at about this many bytes of items (`next` says where to go on). */
 export const THREAD_PAGE_MAX_BYTES = 4 * 1024 * 1024;
 /** The daemon's plugin host as the gateway uses it (capabilities plugins and plugins.protocol, plugin API §9, §13.2). */
@@ -167,6 +171,55 @@ export function harnessApp(o: ServerOptions) {
 
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
+	/**
+	 * GET /v1/events/wait (capability events.wait; src/api/events-wait.ts has the rules). Each
+	 * look reads every event after the cursor, so nothing appended between two looks is missed; the cursor ends at the
+	 * highest seq looked at. A run's log is read whole once (entitySeq counts from its start, as the plain replay's do),
+	 * then only what is new.
+	 */
+	const eventsPage = async (input: z.infer<typeof EventsQuery>, signal?: AbortSignal): Promise<z.infer<typeof EventsPage>> => {
+		let filter: EventFilter;
+		try { filter = { types: eventTypes(listParam(input.type)), agents: agentIds(listParam(input.agent)) }; } catch (e) {
+			throw new ORPCError("BAD_REQUEST", { message: (e as Error).message });
+		}
+		const scope = input.scope, after = input.after ?? 0;
+		if (scope !== "daemon" && !scope.startsWith("run-")) throw new ORPCError("BAD_REQUEST", { message: "type, agent and wait take a run or the daemon scope (a project's stream has only run.created)" });
+		const deadline = Date.now() + (input.wait ?? 0) * 1000;
+		// Before-or-after: the named agents' states, read before the events (a state changes with its event's append).
+		const agentsBefore = scope === "daemon" ? null : await src.agents(scope);
+		if (scope !== "daemon" && agentsBefore === null) throw nf(scope);
+		const log: HarnessEvent[] = [];
+		const counts = new Map<string, number>();
+		let cursor = after, read = 0;
+		const look = async (): Promise<HarnessEvent[]> => {
+			const fresh: HarnessEvent[] = scope === "daemon"
+				? state.daemonEvents(read).map(daemonEnvelope)
+				: (await src.events(scope, read)).map((e) => { const k = entityOf(scope, e); const n = (counts.get(k) ?? 0) + 1; counts.set(k, n); return toEnvelope(scope, e, n); });
+			const found: HarnessEvent[] = [];
+			for (const e of fresh) {
+				if (found.length >= EVENTS_PAGE_MAX) break; // a full page: the cursor stays on its last event
+				read = Math.max(read, e.seq);
+				if (scope !== "daemon") log.push(e);
+				if (e.seq <= cursor) continue;
+				cursor = e.seq;
+				if (matches(filter, e)) found.push(e);
+			}
+			return found;
+		};
+		// The daemon's events are kept in memory: read from the cursor. A run's whole log once, for entitySeq and `reached`.
+		if (scope === "daemon") read = after;
+		let events = await look();
+		if (events.length) return { events, cursor, reached: [], timedOut: false };
+		const reached = reachedStates(filter, agentsBefore, log, after);
+		if (reached.length) return { events: [], cursor, reached, timedOut: false };
+		while (Date.now() < deadline && !signal?.aborted) {
+			await new Promise((ok) => setTimeout(ok, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
+			if (signal?.aborted) break;
+			events = await look();
+			if (events.length) return { events, cursor, reached: [], timedOut: false };
+		}
+		return { events: [], cursor, reached: [], timedOut: input.wait !== undefined && input.wait > 0 };
+	};
 	const router = {
 		// The kernel's features, then the flags active plugins added (x.<plugin>.<flag>, plugin API §4.7.3).
 		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version, capabilities: [...CAPABILITY_NAMES, ...(o.pluginHost?.contributions.list("capability").map((e) => e.key) ?? [])] })),
@@ -217,7 +270,7 @@ export function harnessApp(o: ServerOptions) {
 			}),
 			thread: os.agents.thread.handler(async ({ input }) => {
 				const limit = Math.min(input.limit ?? 200, THREAD_PAGE_MAX);
-				const items = await src.thread(input.runId, input.agentId, input.after ?? 0, limit + 1);
+				const items = await src.thread(input.runId, input.agentId, input.after ?? 0, limit + 1, asked(input.internal));
 				if (!items) throw nf(input.agentId);
 				// At most `limit` items and about THREAD_PAGE_MAX_BYTES of them (always at least one).
 				const page: typeof items = [];
@@ -234,7 +287,7 @@ export function harnessApp(o: ServerOptions) {
 			threadTail: os.agents.threadTail.handler(async ({ input }) => {
 				const limit = Math.min(input.limit ?? 100, THREAD_PAGE_MAX);
 				const cursor = await src.threadHead(input.runId);
-				const items = await src.threadBefore(input.runId, input.agentId, input.before ?? null, limit + 1);
+				const items = await src.threadBefore(input.runId, input.agentId, input.before ?? null, limit + 1, asked(input.internal));
 				if (!items) throw nf(input.agentId);
 				const page: typeof items = [];   // newest first
 				let bytes = 0;
@@ -281,6 +334,7 @@ export function harnessApp(o: ServerOptions) {
 			update: os.profiles.update.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		skills: { list: os.skills.list.handler(() => src.skills()) },
+		schemas: { list: os.schemas.list.handler(() => ({ schemas: listSchemas().map((s) => ({ id: s.id, name: s.name, version: s.version, description: s.description, schema: s.schema as unknown as Record<string, unknown> })) })) },
 		// ?sandbox= (capability sandboxes): one place's rows; a name that isn't a listed place is 404.
 		logins: { list: os.logins.list.handler(async ({ input }) => {
 			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);
@@ -329,6 +383,7 @@ export function harnessApp(o: ServerOptions) {
 				if (!input.scope.startsWith("run-")) return [];
 				return envelopes(input.scope, await src.events(input.scope, 0)).filter((e) => e.seq > (input.after ?? 0));
 			}),
+			wait: os.events.wait.handler(({ input, signal }) => eventsPage(input, signal)),
 		},
 	};
 	const rpc = new OpenAPIHandler(router);
@@ -358,8 +413,14 @@ export function harnessApp(o: ServerOptions) {
 		const key = c.req.header("idempotency-key");
 		if (!key || key.length < 8 || key.length > 200) return err(c, 422, "invalid", "Idempotency-Key header (8-200 chars) is required");
 		const raw = await c.req.json().catch(() => null) as DecideBody | null;
-		if (!raw || (raw.decision !== "approve" && raw.decision !== "deny") || (raw.reason !== undefined && typeof raw.reason !== "string")) return err(c, 422, "invalid", "body must be {decision: approve|deny, reason?}");
-		const body: DecideBody = { decision: raw.decision, ...(raw.reason !== undefined ? { reason: raw.reason } : {}) };
+		if (!raw || (raw.decision !== "approve" && raw.decision !== "deny" && raw.decision !== "answer") || (raw.reason !== undefined && typeof raw.reason !== "string") || (raw.answer !== undefined && typeof raw.answer !== "string")) return err(c, 422, "invalid", "body must be {decision: approve|deny|answer, reason?, answer?}");
+		// Capability agents.ask: a question is answered (decision answer with `answer`, or approve: its recommendation); a
+		// merge is approved or denied.
+		const question = isQuestionApproval(approvalId);
+		if (raw.decision === "answer" && !question) return err(c, 422, "invalid", "only a question takes an answer: approve or deny this approval", { field: "decision" });
+		if (question && raw.decision === "deny") return err(c, 422, "invalid", "a question takes an answer (decision answer with `answer`), or approve to take its recommendation", { field: "decision" });
+		if (raw.decision === "answer" && !raw.answer?.trim()) return err(c, 422, "invalid", "decision answer needs `answer`", { field: "answer" });
+		const body: DecideBody = { decision: raw.decision, ...(raw.reason !== undefined ? { reason: raw.reason } : {}), ...(raw.decision === "answer" ? { answer: raw.answer } : {}) };
 		const client = c.get("client");
 		const kid = `${client.clientId}\u0000${key}`;
 		const hash = bodyHash(approvalId, body);
@@ -381,8 +442,14 @@ export function harnessApp(o: ServerOptions) {
 				const where = await src.approval(approvalId);
 				if (!where) { resolve(null); return err(c, 404, "not_found", `approval ${approvalId} not found`); }
 				if (!where.pending) { resolve(null); return conflict(where.decision ?? { approvalId, status: "approved", decidedBy: null, decidedAt: null, reason: null }); }
-				await src.decide(approvalId, body.decision === "approve", `client:${client.clientId}`, body.reason);
-				const decision = { approvalId, status: body.decision === "approve" ? "approved" : "denied", decidedBy: { clientId: client.clientId, principal: client.name }, decidedAt: isoTs(Date.now()), reason: body.reason ?? null };
+				const answered = await src.decide(approvalId, body.decision !== "deny", `client:${client.clientId}`, body.reason, body.decision === "answer" ? body.answer : undefined).catch((e) => {
+					// A question someone answered meanwhile (a person, or it was withdrawn): already decided.
+					if (["already_answered", "conflict"].includes(String((e as { code?: string }).code))) return "taken" as const;
+					throw e;
+				});
+				if (answered === "taken") { resolve(null); return conflict((await src.approval(approvalId))?.decision ?? undefined); }
+				const decision = { approvalId, status: question ? "answered" : body.decision === "approve" ? "approved" : "denied", decidedBy: { clientId: client.clientId, principal: client.name }, decidedAt: isoTs(Date.now()), reason: body.reason ?? null,
+					...(answered ? { answer: answered.answer, recommended: answered.recommended } : {}) };
 				state.recordDecision(kid, { approvalId, bodyHash: hash, status: 200, result: decision }, decision);
 				resolve(decision);
 				return c.json(decision, 200);
@@ -531,7 +598,6 @@ export function harnessApp(o: ServerOptions) {
 		} finally { writing.delete(kid); }
 	};
 	const gone = (what: string): Outcome => ({ status: 404, body: { code: "not_found", message: `${what} not found` } });
-	const ENDED = new Set(["done", "failed", "cancelled", "handed-off"]);
 
 	for (const action of ["pause", "resume", "cancel"] as const) {
 		app.post(`/v1/runs/:runId/${action}`, (c) => {
@@ -580,28 +646,63 @@ export function harnessApp(o: ServerOptions) {
 
 	app.post("/v1/runs/:runId/agents/:agentId/messages", async (c) => {
 		const runId = c.req.param("runId"), agentId = c.req.param("agentId");
-		const raw = await c.req.json().catch(() => null) as { body?: unknown; skills?: unknown } | null;
-		if (!raw || typeof raw.body !== "string" || !raw.body.length) return err(c, 422, "invalid", "body must be {body: non-empty string, skills?: [name]}");
+		const raw = await c.req.json().catch(() => null) as { body?: unknown; skills?: unknown; model?: unknown; effort?: unknown } | null;
+		if (!raw || typeof raw.body !== "string" || !raw.body.length) return err(c, 422, "invalid", "body must be {body: non-empty string, skills?: [name], model?: string, effort?: string}");
+		for (const f of ["model", "effort"] as const) if (raw[f] !== undefined && raw[f] !== null && (typeof raw[f] !== "string" || !(raw[f] as string).length || (raw[f] as string).length > 100)) return err(c, 422, "invalid", `${f} must be a non-empty string`, { field: f });
+		const turn = { model: (raw.model as string | null | undefined) ?? null, effort: (raw.effort as string | null | undefined) ?? null };
 		if (Buffer.byteLength(raw.body) > MESSAGE_BODY_MAX_BYTES) return err(c, 422, "invalid", `body is over ${MESSAGE_BODY_MAX_BYTES} bytes`);
 		if (raw.skills !== undefined && (!Array.isArray(raw.skills) || raw.skills.some((x) => typeof x !== "string" || !x))) return err(c, 422, "invalid", "skills must be a list of skill names from GET /v1/skills");
 		const body = raw.body;
 		const names = (raw.skills ?? []) as string[];
 		// Skills are part of the request: the same key with other skills is idempotency_conflict, like another body. A
 		// request without skills hashes as before skill attach, so a retry across the upgrade still replays.
-		return idempotent(c, ["agents.send", runId, agentId, body, ...(names.length ? [names] : [])], async (client, key) => {
+		// A model or effort is part of the request too (a request without them hashes as before).
+		return idempotent(c, ["agents.send", runId, agentId, body, ...(names.length ? [names] : []), ...(turn.model || turn.effort ? [turn] : [])], async (client, key) => {
 			const agents = await src.agents(runId);
 			if (agents === null) return gone(`run ${runId}`);
 			const a = agents.find((x) => x.id === agentId);
 			if (!a) return gone(`agent ${agentId}`);
-			if (ENDED.has(a.status)) return { status: 409, body: { code: "conflict", message: `${agentId} is ${a.status}: nothing will read this message` } };
+			// ADR-026 §1: every agent of a run that isn't archived takes messages; an idle one continues with it as its next
+			// turn. Capability agents.messages.model: a model and effort its provider's harness offers (GET /v1/run-options).
+			if (turn.model || turn.effort) {
+				const bad = await turnProblem(a, turn);
+				if (bad) return { status: 422, body: { code: "invalid", message: bad.message, field: bad.field } };
+			}
 			// Read here (not before the key check), so a replay still answers after a skill is removed.
 			const sk = await resolveSkills(names, { read: (n) => src.skill(n) });
 			if ("error" in sk) return { status: 422, body: { code: "invalid", message: sk.error } };
 			// The scope's own message key: a retry after a daemon restart (or after the 24h key window) still sends once.
-			const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`, sk.skills);
-			return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note } };
+			try {
+				const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`, sk.skills, turn.model || turn.effort ? turn : undefined);
+				return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note, ...(r.continued ? { continued: true } : {}) } };
+			} catch (e) {
+				if (e instanceof SendRefused) return { status: e.status, body: { code: e.code, message: e.message, ...(e.field ? { field: e.field } : {}) } };
+				throw e;
+			}
 		});
 	});
+
+	/** Capability agents.messages.model: a model and effort the agent's provider's harness offers (GET /v1/run-options
+	 *  drivers[].models / efforts), or why not (the field it is about). */
+	const turnProblem = async (a: { id: string; provider: string | null }, turn: { model: string | null; effort: string | null }): Promise<{ message: string; field: string } | null> => {
+		const driver = a.provider ? (await src.runOptions().catch(() => null))?.drivers.find((d) => d.provider === a.provider) : null;
+		if (!driver) return { message: `${a.id} has no model or effort a message can change (${a.provider ? `no ${a.provider} harness here` : "it isn't a Claude, Codex or fx agent"})`, field: turn.model ? "model" : "effort" };
+		if (turn.model && !driver.models.some((m) => m.id === turn.model)) return { message: `model ${JSON.stringify(turn.model)} isn't a ${driver.label} model capcomd offers: use one of ${driver.models.map((m) => m.id).join(", ")}`, field: "model" };
+		if (turn.effort && !driver.efforts.includes(turn.effort)) return { message: `effort ${JSON.stringify(turn.effort)} isn't one ${driver.label} offers: use one of ${driver.efforts.join(", ")}`, field: "effort" };
+		return null;
+	};
+
+	// Capability runs.archive: an archived run is read-only (its agents take no messages) until it is restored.
+	for (const action of ["archive", "restore"] as const) {
+		app.post(`/v1/runs/:runId/${action}`, (c) => {
+			const runId = c.req.param("runId");
+			return idempotent(c, [`runs.${action}`, runId], async (client) => {
+				const r = await src[action](runId, `client:${client.clientId}`);
+				if (!r.ok) return { status: r.status, body: { code: r.code, message: r.message } };
+				return { status: 200, body: { runId, archived: action === "archive", changed: r.changed } };
+			});
+		});
+	}
 
 	// Capability ops.front_door (plugin API §6.1): the CLI's and `capcomd mcp`'s verify, merge and approval of a merge run
 	// here, in the daemon, so every plugin's gate (an out-of-process plugin's too) judges them as it judges an agent's.
@@ -738,7 +839,7 @@ export function harnessApp(o: ServerOptions) {
 			const r = await src.sandboxAction(name, id, action, `client:${client.clientId}`);
 			if (!r.ok) return { status: r.status, body: { code: r.code, message: r.message } };
 			if (r.changed) {
-				state.recordDaemonEvent(resourceActionEvent(name, id, action, r.owner, client.clientId));
+				state.recordDaemonEvent(resourceActionEvent(name, id, action, r.owner, client.clientId, { parked: !!r.parked }));
 				state.recordDaemonEvent(resourceDeletedEvent(name, id, "action"));
 			}
 			return { status: 200, body: { resource: r.resource, changed: r.changed } };
@@ -996,6 +1097,8 @@ export function harnessApp(o: ServerOptions) {
 				// ?thread=1: ephemeral agent.thread_item_changed frames (THREAD_STREAM_DOC). Only a connection that asked polls the
 				// run's thread writes, at most every threadMs, and sends the latest rev of each item it found; no SSE id.
 				const wantThread = c.req.query("thread") === "1";
+				// Capability agents.thread_internal: an agent's bookkeeping only with ?internal=1 (or true).
+				const wantInternal = /^(1|true)$/.test(c.req.query("internal") ?? "");
 				let durable = all.at(-1)?.seq ?? 0, threadN = 0;
 				const startThread = async () => {
 					if (!wantThread || closed) return;
@@ -1007,6 +1110,7 @@ export function harnessApp(o: ServerOptions) {
 							const latest = new Map<string, Awaited<ReturnType<HarnessSource["threadAfter"]>>[number]>();
 							for (const it of await src.threadAfter(runId, tcur, 500)) { latest.set(it.id, it); tcur = Math.max(tcur, it.seq); }
 							for (const it of latest.values()) {
+								if (it.internal && !wantInternal) continue;
 								const now = Date.now();
 								send("agent.thread_item_changed", {
 									v: 1, id: `evt_${runId}_thread_${it.id}_${it.rev}_${++threadN}`, scope: runId, seq: durable, entity: it.agentId, entitySeq: 0, type: "agent.thread_item_changed", typeVersion: 1,

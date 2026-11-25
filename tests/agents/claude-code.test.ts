@@ -91,7 +91,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     const prompt = readFileSync(join(W, "prompt.txt"), "utf8");
     expect(prompt).toContain(`You are reviewing a change. The repository is checked out at commit ${pushed.sha}`);
     expect(prompt).toContain("Acceptance criteria:\n- sum adds");
-    expect(prompt).toContain('{"passed": true|false, "reasons": ["..."]}');
+    expect(prompt).toContain('{"passed": true|false, "findings": [{"severity": "blocker|major|minor|nit"');
     expect((await new Git(join(W, "repo")).ok(["rev-parse", "HEAD"])).trim()).toBe(pushed.sha);
     expect(getFinishedSpans().some((x) => x.name === "agent.claude_code" && x.attributes["agent.review"] === true)).toBe(true);
   });

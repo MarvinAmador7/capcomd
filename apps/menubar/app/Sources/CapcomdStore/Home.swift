@@ -39,6 +39,10 @@ public struct ModelMenu: Sendable, Hashable {
   public var chip: String
   public var bars: Int?
   public var enabled: Bool
+  /// The driver the button names (its provider mark): the one new runs go to, else the default one, shown dimmed.
+  public var provider: String?
+  /// The picked effort's place among `efforts` (the chip's signal bars fill to it); nil: Auto or no levels.
+  public var effortIndex: Int? { effort.flatMap { efforts.firstIndex(of: $0) } }
   /// For VoiceOver: "Planner: Claude Code, Opus 5.5, high effort".
   public var label: String
 
@@ -87,7 +91,8 @@ extension CapcomdStore {
     let label = current.map { d in (["Planner: \(d.label)", chip, spokenEffort] as [String?]).compactMap { $0 }.joined(separator: ", ") }
       ?? "Planner unavailable: \(shown?.reason ?? "no AI can drive a run yet")"
     return ModelMenu(sections: sections, efforts: levels, offersAuto: current.map { $0.effort == nil } ?? false, effort: effort, chip: chip,
-                     bars: current == nil || levels.isEmpty ? nil : ModelMenu.bars(effort), enabled: current != nil, label: label)
+                     bars: current == nil || levels.isEmpty ? nil : ModelMenu.bars(effort), enabled: current != nil, provider: shown?.provider,
+                     label: label)
   }
 }
 

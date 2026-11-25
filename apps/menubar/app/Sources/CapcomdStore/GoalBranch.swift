@@ -243,7 +243,7 @@ public struct ProjectBranches: Decodable, Sendable, Hashable {
   public var projectTarget: String?
   /// What to preselect in the base menu; nil: the person must pick one.
   public var suggestedBase: String?
-  /// capcomd/<goal-slug> for the goal sent, never an existing branch; nil without a goal.
+  /// A name for the goal sent, in the repository's branch convention (else <type>/<slug>, e.g. feat/csv-export), never an existing branch; nil without a goal.
   public var suggestedGoalBranch: String?
   /// The daemon's sentence under the goal branch field (or the base menu); nil when fine.
   public var goalBranchProblem: String?, baseProblem: String?

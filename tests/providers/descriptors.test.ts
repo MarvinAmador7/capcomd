@@ -33,9 +33,9 @@ describe("provider descriptors (registry)", () => {
 		expect(CreateRunBody.parse({ goal: "g", sandbox: "boxd" }).sandbox).toBe("boxd");
 		expect(CreateRunBody.safeParse({ goal: "g", sandbox: "fake-host" }).success).toBe(false);
 	});
-	test("caps: the ADR-020 five plus idleLifetime and shell; no costs; settings without egressDefault", () => {
-		expect(PROVIDERS.boxd.caps).toEqual({ isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true });
-		expect(PROVIDERS.docker.caps).toEqual({ isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true });
+	test("caps: the ADR-020 five plus idleLifetime, shell and hibernate; no costs; settings without egressDefault", () => {
+		expect(PROVIDERS.boxd.caps).toEqual({ isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true, hibernate: "memory" });
+		expect(PROVIDERS.docker.caps).toEqual({ isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true, hibernate: "disk" });
 		for (const n of ["fake", "fake-host"] as const) expect(PROVIDERS[n].caps).toMatchObject({ isolation: "host", idleLifetime: "none", shell: false });
 		for (const d of DESCRIPTORS) {
 			expect(Object.keys(d.caps)).not.toContain("costs");
@@ -49,8 +49,8 @@ describe("provider descriptors (registry)", () => {
 		const boxd = servedDescriptor(PROVIDERS.boxd);
 		expect(boxd).toEqual({
 			name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
-			caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
-			settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
+			caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true, hibernate: "memory" },
+			settings: ["idleLifetime", "parkedRetention"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
 		});
 		expect(PROVIDERS.boxd.actions).toEqual(["open_terminal", "delete"]);
 		expect(servedDescriptor(PROVIDERS.docker)).toMatchObject({ name: "docker", label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker" });
@@ -60,14 +60,14 @@ describe("provider descriptors (registry)", () => {
 
 describe("the registry is derived from the sandbox plugins (plugin API §17.2 step 3)", () => {
 	// The registry as it was written out by hand before the providers became plugins.
-	const hostCaps = { isolation: "host", snapshots: false, hostBoundSecrets: false, egressAllowlist: false, interactive: false, idleLifetime: "none", shell: false };
+	const hostCaps = { isolation: "host", snapshots: false, hostBoundSecrets: false, egressAllowlist: false, interactive: false, idleLifetime: "none", shell: false, hibernate: "none" };
 	const TODAY = [
 		{ name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
-			caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
-			settings: ["idleLifetime", "agentMemory"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"] },
+			caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true, hibernate: "disk" },
+			settings: ["idleLifetime", "agentMemory", "parkedRetention"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"] },
 		{ name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
-			caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
-			settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"] },
+			caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true, hibernate: "memory" },
+			settings: ["idleLifetime", "parkedRetention"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"] },
 		{ name: "fake", descriptorVersion: 1, label: "Fake", kind: "local", vendor: "in-memory", title: "Fake · in-memory", mark: "fake", listed: false,
 			caps: hostCaps, settings: [], info: [], resourceKinds: [], actions: [] },
 		{ name: "fake-host", descriptorVersion: 1, label: "Fake host", kind: "local", vendor: "this host", title: "Fake host · this host", mark: "fake-host", listed: false,

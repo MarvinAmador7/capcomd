@@ -91,6 +91,16 @@ final class DeskTests: XCTestCase {
     XCTAssertNil(store().decks().first?.endedHead)   // a running deck keeps its clock
   }
 
+  /// `capcomd run new --label install-check` then `capcomd cancel`, seven times: seven tabs with nothing behind them.
+  /// A run with no goal and no agents gets no deck; its first agent brings it in.
+  func testAnEmptyRunGetsNoDeckUntilItHasAnAgent() {
+    let s = store()
+    ev(s, "run-x", "run.created", nil, ["label": .string("install-check")], at: 4_000)
+    XCTAssertFalse(s.decks().contains { $0.runId == "run-x" })
+    ev(s, "run-x", "agent.spawned", "xl", ["profile": .string("lead")], at: 4_001)
+    XCTAssertEqual(s.decks().last?.runId, "run-x")
+  }
+
   func testADeckSaysWhereItRunsWhenTheDaemonDoes() {
     let s = CapcomdStore()
     ev(s, "run-c", "run.created", nil, ["goal": .string("Cloud one"), "sandbox": .string("boxd")], at: 1)

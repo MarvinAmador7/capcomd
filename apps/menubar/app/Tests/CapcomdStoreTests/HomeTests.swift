@@ -137,6 +137,9 @@ final class HomeTests: XCTestCase {
     XCTAssertEqual(s.modelMenu.bars, 1)
     XCTAssertEqual(s.modelMenu.label, "Planner: Claude Code, Opus 5.5, low effort")
     s.pickEffort("medium"); XCTAssertEqual(s.modelMenu.bars, 2)
+    // The chip (both composers): Claude Code's mark, the effort's place among its levels for the signal bars.
+    XCTAssertEqual(s.modelMenu.provider, "claude"); XCTAssertEqual(s.modelMenu.effortIndex, 1)
+    s.pickEffort(nil); XCTAssertNil(s.modelMenu.effortIndex)
   }
 
   func testAHarnessThatCantRunHereIsListedDisabledWithTheReason() {
@@ -158,6 +161,7 @@ final class HomeTests: XCTestCase {
     XCTAssertEqual(none.chip, "Opus 5.5")                       // the default driver's model, dimmed
     XCTAssertTrue(none.label.hasPrefix("Planner unavailable"))
     XCTAssertNil(none.bars)
+    XCTAssertEqual(none.provider, "claude")                     // the default driver's mark, dimmed
   }
 
   func testThePickReachesTheRunRequest() throws {

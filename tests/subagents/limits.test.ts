@@ -255,7 +255,8 @@ test("harness API (menu bar): steer message, pause, resume and cancel go through
   expect((await statusOf(run, b)).status).toBe("cancelled");
   expect((await lifecycle(run)).at(-1)).toBe("run.cancelled");
   expect(await post(`/v1/runs/${run}/cancel`)).toMatchObject({ status: 409, j: { code: "conflict" } });
-  expect(await post(`/v1/runs/${run}/agents/${b}/messages`, { body: "too late" })).toMatchObject({ status: 409, j: { code: "conflict" } });
+  // ADR-026 §1: a cancelled agent is idle, not done: a message (in a run that isn't archived) continues it.
+  expect(await post(`/v1/runs/${run}/agents/${b}/messages`, { body: "one more thing" })).toMatchObject({ status: 200, j: { to: b, continued: true } });
 }, 180_000);
 
 test("harness API (menu bar): pause one running agent while another works on; resume runs it on; a steer with skills echoes them", async () => {
@@ -332,36 +333,20 @@ test("a usage limit pauses the agent with its work kept; other agents on the log
   expect(events.split("\n").filter((l) => l.includes('"DRIVE_FAILED"')).length).toBe(0);
 }, 180_000);
 
-test("a paused agent wakes by itself at the provider's reset time while it is awaited", async () => {
-  rmSync(quotaLedger, { force: true });
-  const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:3] short limit", "--key", "w"])).j?.agentId;
-  const [agent] = (await cj(["await", run, id, "--timeout-ms", "90000"])).j?.agents;
-  expect(agent).toMatchObject({ status: "done", epoch: 2 });
-  expect((await capcomd(["events", run, "--json"], env)).stdout).toContain('"by":"reset"');
-}, 180_000);
-
-test("a paused agent wakes at its reset with nobody awaiting it (the engine schedules it)", async () => {
-  rmSync(quotaLedger, { force: true });
-  const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:3] short limit", "--key", "alone"])).j?.agentId;
-  // Only `inspect`: it never wakes or drives anything. The 3 s pause can fall between two looks on a slow runner, so
-  // the pause is read from the run's events afterwards, not caught as a status.
-  const a = await until(run, id, "done");
-  expect(a.epoch).toBe(2);
-  const events = (await capcomd(["events", run, "--json"], env)).stdout;
-  expect(events).toContain("AGENT_PAUSED");
-  expect(events).toContain('"by":"reset"');
-}, 180_000);
-
+// A paused agent wakes by itself at its reset: with nobody awaiting it, tests/subagents/workflow-restart.test.ts "quota
+// wake"; while awaited, here.
 test("waiting through a pause: a wait that ends while the agent is paused waits again (the run recipe's way)", async () => {
   rmSync(quotaLedger, { force: true });
   const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:40] short limit", "--key", "through"])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:15] short limit", "--key", "through"])).j?.agentId;
   await until(run, id, "paused");
   process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
   let pausedWaits = 0;
-  const r: any = await awaitThroughPauses(run, id, { timeoutMs: 30_000, onPaused: () => pausedWaits++ });
+  // The first 12 s wait ends while it is paused (its reset is 15 s from the pause); the next one sees it woken and done
+  // (a wait that ends while it runs again is a timeout like any other).
+  const r: any = await awaitThroughPauses(run, id, { timeoutMs: 12_000, onPaused: () => pausedWaits++ });
+  // It woke by itself at the provider's reset while it was awaited.
   expect(r.agents[0]).toMatchObject({ status: "done", epoch: 2 });
   expect(pausedWaits).toBeGreaterThan(0);
+  expect((await capcomd(["events", run, "--json"], env)).stdout).toContain('"by":"reset"');
 }, 180_000);

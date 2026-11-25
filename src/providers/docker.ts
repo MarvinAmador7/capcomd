@@ -106,7 +106,10 @@ export class DockerProvider implements SandboxProvider {
     this.labels.set(name, spec.labels);
     const state = await this.docker(["inspect", "-f", "{{.State.Status}}", name]);
     if (state.code === 0) {
-      if (new TextDecoder().decode(state.stdout).trim() !== "running") await this.must(["start", name], "start");
+      // A parked (stopped) container is started again, a paused one unpaused (ADR-026 §6: the same key wakes it).
+      const status = new TextDecoder().decode(state.stdout).trim();
+      if (status === "paused") await this.must(["unpause", name], "unpause");
+      else if (status !== "running") await this.must(["start", name], "start");
       return { id: name, created: false };
     }
     // Docker has no egress allowlist (ADR-020): the container gets Docker's network. An empty list is still refused.
@@ -163,6 +166,16 @@ export class DockerProvider implements SandboxProvider {
   async restore(): Promise<void> { throw new SandboxConfigError("docker sandboxes have no checkpoints (use snapshots)"); }
   async snapshot(id: VmId, name: string): Promise<void> { await this.snapshotCreate(id, name); }
   async suspend(id: VmId): Promise<void> { await this.must(["pause", id], "pause"); }
+  /** ADR-026 §6: park the container: stopped (5 s for its processes to end), its files kept, nothing running. Its delete
+   *  deadline is the caller's (extendTtl: this provider's ledger, which the sweep enforces on stopped containers too). */
+  async hibernate(id: VmId): Promise<void> { await this.must(["stop", "-t", "5", id], "stop"); }
+  /** ADR-026 §5 path 2: start a parked container again (a paused one is unpaused). */
+  async wake(id: VmId): Promise<void> {
+    const status = new TextDecoder().decode((await this.docker(["inspect", "-f", "{{.State.Status}}", id])).stdout).trim();
+    if (!status) await this.must(["inspect", id], "inspect"); // gone: not_found
+    if (status === "paused") await this.must(["unpause", id], "unpause");
+    else if (status !== "running") await this.must(["start", id], "start");
+  }
   async resume(id: VmId): Promise<void> { await this.must(["unpause", id], "unpause"); }
 
   async destroy(id: VmId): Promise<void> {

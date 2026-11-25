@@ -131,13 +131,19 @@ One window, folded (the default) or opened (§2.1). Folded, it has three parts: 
     keyboard): the folder chip (the remembered project checkout, × back to the default project; Default project
     chooses a folder), then with `runs.goal_branch` and a project folder the base menu beside it (the repository's
     branches, the daemon's `suggestedBase` preselected; never a guessed main: with no suggestion nothing is picked,
-    Start waits and "Pick the branch this work starts from" shows), and on a line of its own under them the goal
-    branch's name (the daemon's suggestion for the goal until edited), with the daemon's sentences under it. Older
-    daemons: no branch row. Then the goal (15 pt), then one tool row: + (Choose Project Folder…, Use the Default
-    Project), Local / Cloud, the **model** button (the model's name and the effort as three bars), the mic (macOS
-    dictation into the goal until the app has voice input), Start (white, 30 pt; 30 % while there's nothing to start).
-    Return starts.
-  - The model menu (260 pt, #1F1F23, 10 pt corners, 28 pt rows): "Claude Code" and its models, "Codex" and its, each
+    Start waits and "Pick the branch this work starts from" shows), and after it the goal branch's name as a quiet
+    chip (→ feat/csv-export, mono, dimmed; nothing before a goal): the daemon's name for the goal, in the repository's
+    own branch convention, until renamed. A click turns it into a field (Return keeps the name, Esc puts it back,
+    an emptied name follows the suggestion again); orange when the daemon refuses it, with its sentences under the
+    chips. No naming step. Older
+    daemons: no branch row. Then the goal (15 pt), then one tool row, the menu bar composer's (the same views,
+    `CapcomdUI/ComposerToolRow.swift`, at its sizes; it supersedes Home.dc.html's row): the round filled + (30 pt;
+    Choose Project Folder…, Use the Default Project), Local / Cloud as icon segments (laptop, cloud; the name is the
+    tooltip), then by Start the **model** chip (the harness's mark, the model's name, the picked effort as the menu
+    bar's signal bars, none for Auto, a chevron), the mic (macOS dictation into the goal until the app has voice
+    input), Start (the menu bar's white 32 pt send; its arrow dims while there's nothing to start). The folder chip is
+    the menu bar's too. Return starts.
+  - The model menu (260 pt, #1F1F23, 10 pt corners, 28 pt rows; under the chip, trailing edges aligned): "Claude Code" and its models, "Codex" and its, each
     with its note (`GET /v1/run-options` `drivers[].models`, capability `runs.options.models`; an older daemon lists
     each driver once, on its profile's model), a check on the one new runs get, then Effort as a segmented control
     (Auto for a driver without a fixed default, then the driver's levels). A harness that can't run where the run would

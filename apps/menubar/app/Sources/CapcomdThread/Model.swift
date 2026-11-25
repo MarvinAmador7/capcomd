@@ -29,6 +29,9 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
   public var error: ItemError?
   public var truncated: Truncated?
   public var child: Child?
+  /// The agent's bookkeeping (capability `agents.thread_internal`): a wake armed, a wait, a poll of its own state, a CLI
+  /// system event. Recorded, and shown only on request.
+  public var `internal`: Bool
 
   public struct Tool: Sendable, Hashable, Decodable {
     public var callId: String
@@ -95,9 +98,34 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
     }
   }
   public struct Truncated: Sendable, Hashable, Decodable { public var blocks: Int; public var bytes: Int }
-  public struct Child: Sendable, Hashable, Decodable { public var agentId: String; public var status: String }
+  public struct Child: Sendable, Hashable, Decodable {
+    public var agentId: String
+    public var status: String
+    /// A reviewer's verdict (the daemon's `child.verdict`); the blocks then start with a paragraph that says it.
+    public var verdict: Verdict?
+    /// Its typed hand-back (handback@1, capability `agents.handback_typed`); the blocks say the same in prose.
+    public var handback: Handback?
+    public init(agentId: String, status: String, verdict: Verdict? = nil, handback: Handback? = nil) { self.agentId = agentId; self.status = status; self.verdict = verdict; self.handback = handback }
+    struct WireFinding: Decodable { var text: String; var severity: String?; var file: String?; var line: Int? }
+    struct WireVerdict: Decodable { var passed: Bool; var reasons: [String]?; var findings: [WireFinding]? }
+    enum CodingKeys: String, CodingKey { case agentId, status, verdict, handback }
+    public init(from d: Decoder) throws {
+      let c = try d.container(keyedBy: CodingKeys.self)
+      agentId = try c.decode(String.self, forKey: .agentId); status = try c.decode(String.self, forKey: .status)
+      // A verdict this client can't read is no verdict: the blocks still say it.
+      verdict = (try? c.decodeIfPresent(WireVerdict.self, forKey: .verdict))?.flatMap { $0 }.map { v in
+        let findings = (v.findings ?? []).prefix(50).compactMap { f -> Finding? in
+          let t = clean(f.text).trimmingCharacters(in: .whitespacesAndNewlines)
+          return t.isEmpty ? nil : Finding(text: t, severity: f.severity.flatMap(Finding.Severity.init(rawValue:)), file: f.file.map(clean), line: f.line)
+        }
+        return Verdict(passed: v.passed, reasons: Array((v.reasons ?? []).map { clean($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(50)), findings: findings)
+      }
+      // A hand-back this client can't read is none: the blocks still say it.
+      handback = (try? c.decodeIfPresent(Handback.self, forKey: .handback)) ?? nil
+    }
+  }
 
-  enum CodingKeys: String, CodingKey { case id, rev, seq, order, agentId, kind, status, at, durationMs, text, blocks, format, redacted, tool, error, truncated, child }
+  enum CodingKeys: String, CodingKey { case id, rev, seq, order, agentId, kind, status, at, durationMs, text, blocks, format, redacted, tool, error, truncated, child, `internal` }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     id = try c.decode(String.self, forKey: .id); rev = try c.decode(Int.self, forKey: .rev)
@@ -111,10 +139,54 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
     redacted = try c.decodeIfPresent(Bool.self, forKey: .redacted) ?? false
     tool = try c.decodeIfPresent(Tool.self, forKey: .tool); error = try c.decodeIfPresent(ItemError.self, forKey: .error)
     truncated = try c.decodeIfPresent(Truncated.self, forKey: .truncated); child = try c.decodeIfPresent(Child.self, forKey: .child)
+    `internal` = (try? c.decodeIfPresent(Bool.self, forKey: .internal)) ?? false
   }
 
   /// `at` as epoch milliseconds (0 if it doesn't parse).
   public var atMs: Int { isoMs(at) ?? 0 }
+}
+
+/// A child's typed hand-back (handback@1, ADR-026 §7): the outcome first, then what changed, how it was checked, risks and
+/// decisions. Every string is agent text (plain, cleaned).
+public struct Handback: Sendable, Hashable, Decodable {
+  public enum Status: String, Sendable, Hashable { case done, partly, blocked }
+  public enum Result: String, Sendable, Hashable { case passed, failed, notRun = "not run" }
+  public struct Change: Sendable, Hashable {
+    public var path: String; public var what: String?
+    public init(path: String, what: String? = nil) { self.path = path; self.what = what }
+  }
+  public struct Check: Sendable, Hashable {
+    public var check: String; public var result: Result; public var note: String?
+    public init(check: String, result: Result, note: String? = nil) { self.check = check; self.result = result; self.note = note }
+  }
+  public var status: Status
+  public var outcome: String
+  public var changed: [Change]
+  public var checked: [Check]
+  public var risks: [String]
+  public var decide: [String]
+  public init(status: Status, outcome: String, changed: [Change] = [], checked: [Check] = [], risks: [String] = [], decide: [String] = []) {
+    self.status = status; self.outcome = outcome; self.changed = changed; self.checked = checked; self.risks = risks; self.decide = decide
+  }
+  struct WireChange: Decodable { var path: String; var what: String? }
+  struct WireCheck: Decodable { var check: String; var result: String; var note: String? }
+  enum CodingKeys: String, CodingKey { case status, outcome, changed, checked, risks, decide }
+  public init(from d: Decoder) throws {
+    let c = try d.container(keyedBy: CodingKeys.self)
+    let line = { (s: String) in clean(s).trimmingCharacters(in: .whitespacesAndNewlines) }
+    // A status this client doesn't know reads as done: the outcome line still says what happened.
+    status = Status(rawValue: try c.decode(String.self, forKey: .status)) ?? .done
+    outcome = line(try c.decode(String.self, forKey: .outcome))
+    changed = (try c.decodeIfPresent([WireChange].self, forKey: .changed) ?? []).prefix(50).compactMap { w in
+      let p = line(w.path); return p.isEmpty ? nil : Change(path: p, what: w.what.map(line).flatMap { $0.isEmpty ? nil : $0 })
+    }
+    // A result this client doesn't know isn't shown as passed: it reads as not run.
+    checked = (try c.decodeIfPresent([WireCheck].self, forKey: .checked) ?? []).prefix(20).compactMap { w in
+      let k = line(w.check); return k.isEmpty ? nil : Check(check: k, result: Result(rawValue: w.result) ?? .notRun, note: w.note.map(line).flatMap { $0.isEmpty ? nil : $0 })
+    }
+    risks = (try c.decodeIfPresent([String].self, forKey: .risks) ?? []).prefix(10).map(line).filter { !$0.isEmpty }
+    decide = (try c.decodeIfPresent([String].self, forKey: .decide) ?? []).prefix(10).map(line).filter { !$0.isEmpty }
+  }
 }
 
 /// `GET /v1/runs/{runId}/agents/{agentId}/thread` page: items created or changed after `after`, in write order.

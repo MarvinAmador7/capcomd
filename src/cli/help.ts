@@ -65,9 +65,10 @@ Usage:
                                        (agents schema: agents.json's; agents list --json: the rows under "agents")
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
-                                           onto the run's goal branch: --goal-branch G (default: capcomd/<goal-slug>), cut
-                                           from --base B (default: the project's target, else origin's default branch);
-                                           reviewed work lands on it with no approval. --no-goal-branch: merge into the
+                                           onto the run's goal branch: --goal-branch G (default: named from the goal in
+                                           the repository's branch convention, else <type>/<slug> like feat/csv-export),
+                                           cut from --base B (default: the project's target, else origin's default
+                                           branch); reviewed work lands on it with no approval. --no-goal-branch: merge into the
                                            target (--target-branch) as before
   capcomd goal <runId> [--json]            the goal branch against its base: what landed, what didn't, the planner's summary
   capcomd pr open <runId> [--yes]          open a pull request from the goal branch into its base (your gh login; idempotent;
@@ -90,6 +91,7 @@ Usage:
                                        for the app to keep (the capcomd app runs it to connect; all four scopes unless
                                        --scopes); revokes the token that app paired before
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE] | --goal-branch G --base B] [--sandbox docker|boxd]  → runId (a scope; plans nothing; sandbox default: the project's, then your user config's)
+  capcomd run archive|restore <runId>  → an archived run is read-only (its agents take no messages) until restored
   capcomd spawn <runId> --task T [--title "2-4 words"] [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
@@ -110,7 +112,7 @@ Usage:
   capcomd tree <runId> [--root agt]      subtree with cost/turn rollups and stuck flags
   capcomd tui [runId] [--view live|waterfall|timeline|rollups|events]   the terminal debugger (no runId: the latest run)
   capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N] [--follow]  ·  capcomd budget show <runId> [agt]
-  capcomd send <runId> <agt> <text> [--from agt] [--skill NAME]…  ·  capcomd token revoke <runId> <jti> [--reason R]
+  capcomd send <runId> <agt> <text> [--from agt] [--skill NAME]… [--model M] [--effort E]  ·  capcomd token revoke <runId> <jti> [--reason R]
   capcomd title <runId> <agt> <2-4 words>   name an agent's tab (as the driving harness: the agent's own later renames
                                        replace it; a title the user gave in the apps stays until they clear it)
   capcomd skills                         skills send --skill attaches (bundled and ~/.claude/skills): the agent reads each with the message
@@ -150,9 +152,12 @@ Usage:
   capcomd service install|uninstall|status [--port N] [--dry-run] [--no-login]
                                        The engine as a background service (launchd / systemd user unit);
                                        install --no-login starts it now but not at the next login
-  capcomd upgrade [--to X.Y.Z] [--dry-run]
-                                       Replace this capcomd with the latest release (the installed binary;
-                                       npm and Homebrew installs say how to upgrade them)
+  capcomd update [--to X.Y.Z] [--dry-run] [--no-restart]
+                                       Update capcomd to the latest release (or X.Y.Z), however it was installed:
+                                       the binary replaces itself; Bun and npm installs run bun add -g or
+                                       npm install -g; Homebrew runs brew upgrade capcomd. Then restarts the
+                                       engine service when the version changed (--no-restart: don't).
+                                       --dry-run says what it would run (alias: upgrade)
   capcomd sandbox shell <runId> <agentId>   A shell in the machine an agent runs on (its sandbox: what you change
   capcomd sandbox shell --sandbox docker|boxd --machine <id>   can change its work), or in a machine capcomd left behind
   capcomd plugins list [--json]          The plugins the running daemon has (or would load, when none runs): each

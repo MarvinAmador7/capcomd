@@ -21,6 +21,8 @@ public struct DeckInfo: Sendable, Hashable, Identifiable {
   public var askingName: String?
   /// Every agent, in tree order (the folded deck stacks these heads).
   public var agentIds: [String]
+  /// The title in full (`Project.fullTitle`: the goal's first line, cleaned, at most 400 characters), for tooltips.
+  public var fullTitle: String? = nil
 }
 
 /// A reel column's header: everything it shows about its agent, nothing about the thread.
@@ -39,12 +41,19 @@ public struct ColumnHeader: Sendable, Hashable, Identifiable {
   public var status: AgentStatus
   public var waiting: Bool
   public var activity: String?
+  /// Capability agents.wake: what it waits for between turns ("waiting for verify vfy-…"), and since when; nil while
+  /// it works (or isn't running).
+  public var waitLine: String? = nil
+  public var waitSinceMs: Int? = nil
   public var repo: String?
   public var spawnedAtMs: Int
   /// When it was spawned, when known: the header's elapsed clock (none when the daemon didn't say).
   public var startedAtMs: Int?
   public var provider: Provider?
   public var depth: Int
+  /// ADR-026 §1: idle (its turn ended; a message continues it), waking (a message woke it, set up for over a second),
+  /// archived (its run is read-only), else active (its status says the rest).
+  public var life: AgentLife = .active
 }
 
 extension ColumnHeader {
@@ -56,9 +65,11 @@ extension ColumnHeader {
 
 extension CapcomdStore {
   /// The projects with something to show, oldest first: a project keeps its place as others start and finish
-  /// (SPEC §2: nothing jumps). Finished projects drop out once they're no longer the newest outcome.
+  /// (SPEC §2: nothing jumps). Finished projects drop out once they're no longer the newest outcome. A run with no goal
+  /// and no agents (`capcomd run new` with nothing spawned yet) has no column to show: it gets a deck once it has one.
   public func decks() -> [DeckInfo] {
     let ps = projects.filter { $0.isActive || $0.latestRun.map { !$0.isActive } == true }
+      .filter { p in p.runs.contains { $0.goal != nil || !$0.agents.isEmpty || $0.waitingApprovals > 0 } }
     let firstStart: (Project) -> Int = { $0.runs.compactMap(\.startedAtMs).min() ?? $0.lastEventMs }
     // A run started without a place (`capcomd run` with no --sandbox) runs on the daemon's own: its place is that one.
     let daemonPlace = runOptions.sandboxes.first { $0.isDefault == true }?.name
@@ -69,7 +80,7 @@ extension CapcomdStore {
       return DeckInfo(id: p.id, runId: run.id, title: p.title, startedAtMs: run.startedAtMs,
                       endedHead: run.endedHead, isRunning: run.isRunning, sandbox: run.sandbox ?? daemonPlace,
                       askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map(\.label),
-                      agentIds: ids)
+                      agentIds: ids, fullTitle: p.fullTitle)
     }
   }
 
@@ -95,8 +106,15 @@ extension CapcomdStore {
   }
 
   func header(_ n: AgentNode, _ a: Agent, _ runId: String) -> ColumnHeader {
-    ColumnHeader(agentId: a.id, runId: runId, name: n.name, title: n.title, suffix: n.suffix, userTitled: a.titleSource == "user", kind: n.kind, status: n.status, waiting: n.waiting,
-                 activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
+    var h = ColumnHeader(agentId: a.id, runId: runId, name: n.name, title: n.title, suffix: n.suffix, userTitled: a.titleSource == "user", kind: n.kind, status: n.status, waiting: n.waiting,
+                         activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
+    h.life = a.life(archived: runs[runId]?.archived ?? false, nowMs: Int(Date().timeIntervalSince1970 * 1000))
+    if a.status == .running, let w = a.wake {
+      let agents = runs[runId]?.agents ?? [:]
+      h.waitLine = w.line { id in agents[id].map { $0.displayName } }
+      h.waitSinceMs = w.sinceMs
+    }
+    return h
   }
 }
 

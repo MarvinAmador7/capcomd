@@ -4,14 +4,15 @@ import { basename } from "node:path";
 import { existingActor, generateRunId } from "../core/relay";
 import { redactShapes } from "../agents/redact";
 import { listSkills, readSkill } from "../agents/skills";
-import { cancelAny, decideMerge, pauseAgents, recentRuns, resumeAgents, sendToAgent, TARGET_KV } from "../primitives/ops";
+import { archiveRun, cancelAny, decideMerge, pauseAgents, recentRuns, restoreRun, resumeAgents, sendToAgent, TARGET_KV } from "../primitives/ops";
 import { mergeConfigFor } from "../merge/run-config";
 import { tracePath } from "../utils/tracing-simple";
 import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
-import { agentActivity, describeEvent } from "./describe";
+import { agentActivity, describeEvent, waitActivity } from "./describe";
+import { armedData } from "../actors/wakes";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
+import { approvalIdFor, isQuestionApproval, questionApproval, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, SendRefused, type ArchiveOutcome, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
 import { applyRunPatch, hooks, principalOf, untrusted } from "../plugins/hooks";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { Principal } from "../../packages/plugin/src/shapes";
@@ -39,10 +40,10 @@ const existingScope = (runId: string) => existingActor("scope", [runId]);
 type Scope = NonNullable<Awaited<ReturnType<typeof existingScope>>>;
 /** Thread items in actor calls of at most ITEMS_PER_CALL rows (an item can be ~150 KB; a call answers at most 8 MB). */
 const ITEMS_PER_CALL = 25;
-async function itemsAfter(s: Scope, after: number, limit: number, agentId?: string): Promise<any[]> {
+async function itemsAfter(s: Scope, after: number, limit: number, agentId?: string, internal = true): Promise<any[]> {
 	const out: any[] = [];
 	for (let cur = after; out.length < limit;) {
-		const rows = (await s.getItems({ ...(agentId ? { agentId } : {}), after: cur, limit: Math.min(ITEMS_PER_CALL, limit - out.length) })) as any[];
+		const rows = (await s.getItems({ ...(agentId ? { agentId } : {}), after: cur, limit: Math.min(ITEMS_PER_CALL, limit - out.length), ...(internal ? {} : { shared: true }) })) as any[];
 		out.push(...rows);
 		if (rows.length < Math.min(ITEMS_PER_CALL, limit - out.length + rows.length)) break;
 		cur = rows.at(-1)!.seq;
@@ -51,11 +52,11 @@ async function itemsAfter(s: Scope, after: number, limit: number, agentId?: stri
 }
 
 /** One agent's items placed before `before` (null: the newest), newest first, in calls of ITEMS_PER_CALL rows. */
-async function itemsBefore(s: Scope, agentId: string, before: number | null, limit: number): Promise<any[]> {
+async function itemsBefore(s: Scope, agentId: string, before: number | null, limit: number, internal = true): Promise<any[]> {
 	const out: any[] = [];
 	for (let cur = before; out.length < limit;) {
 		const want = Math.min(ITEMS_PER_CALL, limit - out.length);
-		const rows = (await s.getItemsBefore({ agentId, ...(cur === null ? {} : { before: cur }), limit: want })) as any[];
+		const rows = (await s.getItemsBefore({ agentId, ...(cur === null ? {} : { before: cur }), limit: want, ...(internal ? {} : { shared: true }) })) as any[];
 		out.push(...rows);
 		if (rows.length < want) break;
 		cur = rows.at(-1)!.order;
@@ -136,6 +137,24 @@ async function recordedAgentOwner(rec: AgentMachine, sandbox: string | null): Pr
 }
 
 /**
+ * ADR-026 §6: a parked machine's owner, from its record in the machines ledger: its agent (whatever its status: an idle
+ * agent's machine is parked), with the worker state `parked` and its delete deadline (its retention). null when its
+ * worker doesn't hold it parked any more (woken by its next attempt, or deleted meanwhile). Throws when the engine
+ * can't say.
+ */
+async function parkedOwner(rec: AgentMachine & { parked: NonNullable<AgentMachine["parked"]> }): Promise<MachineOwner | null> {
+	const worker = await existingActor("worker", rec.workerKey);
+	if (!worker) throw new Error(`no worker ${rec.workerKey.join("/")} on this engine`);
+	const wk = await (worker as any).getWorker({ workerId: rec.agentId });
+	if (wk?.state !== "parked") return null;
+	const a = ((await (await existingScope(rec.runId))?.listAgents({})) ?? [] as any[]).find((x: any) => x.agentId === rec.agentId);
+	return {
+		sandbox: rec.sandbox, vmId: rec.parked.vmId, name: rec.name, runId: rec.runId, agentId: rec.agentId, role: lower(a?.profile ?? null), task: taskLine(a?.task),
+		workerState: "parked", createdAt: rec.createdAt, deleteAt: rec.parked.deleteAt, descendants: 0,
+	};
+}
+
+/**
  * Who uses capcomd's machines now (ADR-021 §3), from capcomd's own records, never from provider labels: each pending,
  * running or paused agent of the recent runs whose worker actor holds a VM that isn't destroyed; capcomd's own jobs
  * (the machines ledger); and, for a machine in this capcomd's ledger that none of those claims, that machine's own
@@ -164,7 +183,9 @@ export async function machineOwners(limit = 500, env: Record<string, string | un
 		const m: RecordedMachine = { sandbox: rec.sandbox, name: rec.name };
 		if (rec.kind !== "agent" || claimed.has(`${rec.sandbox}\u0000${rec.name}`)) return m;
 		try {
-			const held = await within((o.recordedOwner ?? recordedAgentOwner)(rec, daemon), o.checkMs ?? RECORD_CHECK_MS);
+			// ADR-026 §6: a parked machine is its idle agent's, parked (listed with its retention, deleted on its own).
+			const held = rec.parked && !o.recordedOwner ? await within(parkedOwner(rec as AgentMachine & { parked: NonNullable<AgentMachine["parked"]> }), o.checkMs ?? RECORD_CHECK_MS)
+				: await within((o.recordedOwner ?? recordedAgentOwner)(rec, daemon), o.checkMs ?? RECORD_CHECK_MS);
 			if (held) owners.push(held);
 			return m;
 		} catch { return { ...m, unsure: true }; }
@@ -240,13 +261,25 @@ function withTrigger(runId: string): { trigger?: NonNullable<ReturnType<typeof t
  *  (src/plugins/services.ts). */
 export async function runOfRow(r: ReturnType<typeof recentRuns>[number]) {
 	const s = await existingScope(r.runId).catch(() => null);
-	const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null; agentTitle?: { title: string } | null } | null;
+	const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null; agentTitle?: { title: string } | null; archived?: { at: number; by: string } | null } | null;
 	const agents = s && meta ? await s.listAgents({}).catch(() => []) : [];
 	const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
 	// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
 	const goal = meta?.goal ?? null;
 	return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agentTitle: meta?.agentTitle?.title ?? null, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
-		goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended), ...withTrigger(r.runId) };
+		goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended), ...withTrigger(r.runId),
+		// Capability runs.archive: set only on an archived run.
+		...(meta?.archived ? { archived: true as const, archivedAt: isoTs(meta.archived.at) } : {}) };
+}
+
+/** POST …/archive|restore from what the op did or threw. */
+async function archiveOutcome(run: () => Promise<{ changed: boolean }>): Promise<ArchiveOutcome> {
+	try { return { ok: true, changed: (await run()).changed }; } catch (e) {
+		const err = e as { code?: string; message?: string };
+		if (err.code === "not_found") return { ok: false, status: 404, code: "not_found", message: String(err.message) };
+		if (err.code === "conflict") return { ok: false, status: 409, code: "conflict", message: String(err.message) };
+		throw e;
+	}
 }
 
 export function rivetSource(): HarnessSource {
@@ -270,6 +303,8 @@ export function rivetSource(): HarnessSource {
 		// the agent the way `capcomd cancel <run> <agt>` does (its worker then destroys the machine).
 		destroy: async (name, vmId) => (await lister(name)).destroy(vmId),
 		forget: (_name, machine) => forgetMachine(machine),
+		// ADR-026 §6: a parked machine's Delete deletes only the machine (its worker destroys it); its agent stays idle.
+		deleteParked: async (name, machine) => (await import("../primitives/park")).deleteParked(name, machine),
 		cancelAgent: async (runId, agentId, by) => {
 			const r = await cancelAny(runId, agentId, `cancelled by ${by}`, by);
 			return { changed: r.kind === "agents" ? r.agents.cancelled.includes(agentId) : !!r.agents?.cancelled.includes(agentId) };
@@ -296,7 +331,14 @@ export function rivetSource(): HarnessSource {
 			// A run in the index whose scope this engine doesn't have (another engine's): listed as "unknown", no agents.
 			if (!s) return indexed ? [] : null;
 			if (!indexed && !(await s.getScope({}).catch(() => null))) return null;
-			const all = (await s.listAgents({})) as any[];
+			const [all, armed] = await Promise.all([s.listAgents({}) as Promise<any[]>, (s.wakeList({ state: "armed" }) as Promise<any[]>).catch(() => [] as any[])]);
+			// Capability agents.wake: a running agent waiting between turns shows what it waits for, not its last tool call.
+			const waits = new Map<string, any>();
+			for (const w of armed) if (!waits.has(w.agentId)) waits.set(w.agentId, w);
+			const activityOf = (a: any) => {
+				const w = a.status === "running" ? waits.get(a.agentId) : undefined;
+				return w ? waitActivity({ wakeId: w.wakeId, ...armedData(w), armedAt: w.createdAt } as any) : agentActivity(a.activity, a.status);
+			};
 			// Agents spawned before the workspace was recorded: the run's repository, where every agent works today.
 			const runRepo = all.some((a) => !a.workspace)
 				? ((await s.kvGet({ k: RUN_REPO_KV }).catch(() => null))?.value as Record<string, string> | undefined)?.CAPCOMD_REPO ?? runsIndex().find((r) => r.runId === runId)?.repo ?? null
@@ -306,10 +348,15 @@ export function rivetSource(): HarnessSource {
 				return {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile),
 					profileVersion: a.profileVersion ?? null, profileSource: a.profileSource ?? null, status: a.status,
-					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
+					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: activityOf(a),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
 					...agentRuntime(a.spec), createdAt: a.createdAt ? isoTs(a.createdAt) : null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
 					...shownTitle(a.titleState, inl.text ?? redactShapes(String(a.task ?? ""))),
+					// Capability agents.idle: a message woke its current attempt (while it is set up, it is waking).
+					...(a.continued ? { continued: { at: isoTs(a.continued.at), by: String(a.continued.by), from: a.continued.from } } : {}),
+					// Capability agents.ask: the question it asked and stopped on, until it is answered.
+					asked: a.asked ? { questionId: a.asked.questionId, approvalId: approvalIdFor(runId, a.asked.questionId), question: a.asked.question, recommend: a.asked.recommend,
+						options: a.asked.options, why: a.asked.why ?? null, holds: a.asked.holds ?? null, to: a.asked.to ?? null, at: isoTs(a.asked.at) } : null,
 				};
 			});
 		},
@@ -334,17 +381,17 @@ export function rivetSource(): HarnessSource {
 			const b64 = r.mediaType.endsWith(";base64");
 			return { mime: b64 ? r.mediaType.slice(0, -7) : r.mediaType, bytes: new Uint8Array(Buffer.from(r.body, b64 ? "base64" : "utf8")) };
 		},
-		thread: async (runId, agentId, after, limit) => {
+		thread: async (runId, agentId, after, limit, internal = false) => {
 			const s = await existingScope(runId).catch(() => null);
 			const a = s ? await s.getAgent({ agentId }).catch(() => null) : null;
 			if (!s || !a) return null;
-			return itemsAfter(s, after, limit, agentId);
+			return itemsAfter(s, after, limit, agentId, internal);
 		},
-		threadBefore: async (runId, agentId, before, limit) => {
+		threadBefore: async (runId, agentId, before, limit, internal = false) => {
 			const s = await existingScope(runId).catch(() => null);
 			const a = s ? await s.getAgent({ agentId }).catch(() => null) : null;
 			if (!s || !a) return null;
-			return itemsBefore(s, agentId, before, limit);
+			return itemsBefore(s, agentId, before, limit, internal);
 		},
 		threadAfter: async (runId, after, limit) => existingScope(runId).then((s) => (s ? itemsAfter(s, after, limit) : [])).catch(() => []),
 		threadHead: async (runId) => Number(await existingScope(runId).then((s) => s?.itemsHead() ?? 0).catch(() => 0)),
@@ -378,24 +425,43 @@ export function rivetSource(): HarnessSource {
 		environments: async () => (await import("./settings")).environments(),
 		service: async () => (await import("./settings")).serviceState(),
 		approvals: async (runId) => {
-			const ops = (await existingScope(runId).then((s) => s?.listOps({ state: "awaiting_approval", kind: "merge" }) ?? []).catch(() => [])) as any[];
-			return ops.map((op): PendingApproval => {
+			const s = await existingScope(runId).catch(() => null);
+			const ops = (await (s?.listOps({ state: "awaiting_approval", kind: "merge" }) ?? Promise.resolve([])).catch(() => [])) as any[];
+			const merges = ops.map((op): PendingApproval => {
 				const text = mergeApprovalText(op.data);
 				return { approvalId: approvalIdFor(runId, op.id), kind: "merge", status: "pending", question: text.question,
 					requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: text.subject, expiresAt: null, requestedAt: isoTs(op.updatedAt) };
 			});
+			// Capability agents.ask: every open question, whoever it is asked of (the user can always answer), oldest first.
+			const qs = (await (s?.listQuestions({ state: "open" }) ?? Promise.resolve([])).catch(() => [])) as any[];
+			return [...merges, ...qs.reverse().map((q) => questionApproval(runId, q))];
 		},
 		approval: async (approvalId) => {
 			const id = parseApprovalId(approvalId);
 			if (!id) return null;
+			if (isQuestionApproval(approvalId)) {
+				const q = (await existingScope(id.runId).then((s) => s?.getQuestion({ questionId: id.opId }) ?? null).catch(() => null)) as any;
+				if (!q) return null;
+				// Open, or answered by an agent: a person can still answer it (their answer replaces the agent's).
+				const pending = q.state === "open" || (q.state === "answered" && /^agt-/.test(String(q.answeredBy)));
+				const by = q.answeredBy as string | null;
+				return { runId: id.runId, pending, decision: pending ? null : { approvalId, status: q.state === "withdrawn" ? "withdrawn" : "answered", decidedBy: by ? { clientId: by, principal: by } : null,
+					decidedAt: q.answeredAt ? isoTs(q.answeredAt) : null, reason: q.note ?? null, ...(q.answer ? { answer: q.answer } : {}) } };
+			}
 			const op = (await existingScope(id.runId).then((s) => s?.getOp({ opId: id.opId }) ?? null).catch(() => null)) as any;
 			if (!op || op.kind !== "merge") return null;
 			const pending = op.state === "awaiting_approval";
 			const by = (op.data?.by ?? op.result?.by) as string | undefined;
 			return { runId: id.runId, pending, decision: pending ? null : { approvalId, status: op.state === "denied" || op.data?.denied ? "denied" : "approved", decidedBy: by ? { clientId: by, principal: by } : null, decidedAt: op.updatedAt ? isoTs(op.updatedAt) : null, reason: null } };
 		},
-		decide: async (approvalId, approve, by, reason) => {
+		decide: async (approvalId, approve, by, reason, answer) => {
 			const id = parseApprovalId(approvalId)!;
+			if (isQuestionApproval(approvalId)) {
+				const s = await existingScope(id.runId);
+				if (!s) throw new RelayError("not_found", `run ${id.runId} not found`, "Check the approval id.");
+				const r: any = await s.answerQuestion({ questionId: id.opId, by, ...(answer !== undefined ? { answer } : { recommended: approve }), note: reason ?? null });
+				return { answer: String(r.question?.answer ?? answer ?? ""), recommended: r.question ? String(r.question.answer).trim().toLowerCase() === String(r.question.recommend).trim().toLowerCase() : answer === undefined };
+			}
 			await decideMerge(id.runId, id.opId, { approve, by, ...(reason ? { reason } : {}) });
 		},
 		createRun: (input) => createRunAs(input),
@@ -438,10 +504,19 @@ export function rivetSource(): HarnessSource {
 				throw e;
 			}
 		},
-		send: async (runId, to, body, key, skills) => {
-			const r = await sendToAgent(runId, { to, from: "operator", body, key, ...(skills?.length ? { skills } : {}) });
-			return { seq: r.seq, note: r.note };
+		send: async (runId, to, body, key, skills, turn) => {
+			try {
+				const r = await sendToAgent(runId, { to, from: "operator", body, key, ...(skills?.length ? { skills } : {}), ...(turn?.model ? { model: turn.model } : {}), ...(turn?.effort ? { effort: turn.effort } : {}) });
+				return { seq: r.seq, note: r.note, ...((r as { continued?: boolean }).continued ? { continued: true } : {}) };
+			} catch (e) {
+				const err = e as { code?: string; reason?: string; message?: string };
+				if (err.reason === "archived" || err.code === "archived") throw new SendRefused(409, "archived", String(err.message));
+				if (err.reason === "invalid") throw new SendRefused(422, "invalid", String(err.message), /effort/.test(String(err.message)) ? "effort" : "model");
+				throw e;
+			}
 		},
+		archive: (runId, by) => archiveOutcome(() => archiveRun(runId, by)),
+		restore: (runId, by) => archiveOutcome(() => restoreRun(runId, by)),
 		inspectProject: async (path) => { const P = await import("./projects"); return P.inspectProject(path, await projectDeps()); },
 		knownProjects: async () => { const P = await import("./projects"); return P.knownProjects(await projectDeps()); },
 		setUpProject: async (input) => { const P = await import("./projects"); return P.setUpProject(input, await projectDeps()); },

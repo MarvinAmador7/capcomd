@@ -1161,6 +1161,7 @@ progress is cancelled (an `exec` is killed inside the machine), and the method r
 | `destroy(id, c)` | | idempotent: a gone machine resolves | |
 | `list(prefix, c)` | | machines whose name starts with `prefix` (`MACHINE_PREFIX`) | |
 | `extendTtl?`, `probe?` | | as today's optional methods | |
+| `hibernate?(id, c)`, `wake?(id, c)` | `caps.hibernate` is `memory` or `disk` | park a machine (it keeps its disk, and with `memory` its processes) and wake it again; the kernel parks a planner's machine when its turn ends (ADR-026 §6) | `not_found` (a gone machine can't be woken) |
 | `sweep?(c)` | `caps.idleLifetime === "sweep"` | deletes machines past their deadline; the kernel calls it every 5 min | |
 
 Conformance: the cases of `tests/providers/conformance.test.ts` (ADR-020 §3) on the seam, with `describe`,
@@ -1226,6 +1227,23 @@ login before anything is saved. `AgentConfig.usdPerMtok` is the provider's own r
 when the operator set them (`CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN` and `_OUT`, both or neither), else codex's, as before.
 ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude`, `codex` and `fx` are the built-ins
 (`agent-claude`, `agent-codex`, `agent-fx`: `src/plugins/agent-claude.ts`, `agent-codex.ts`, `agent-fx.ts`).
+
+**Sessions** (ADR-026 §2, additive): a provider whose CLI's sessions can be continued on another machine has
+`session` (`AgentSession`, `packages/plugin/src/seams.ts`; every method pure): `firstRunArgs(id)` (Claude Code
+`--session-id <id>`; `[]` for a CLI that names its own, which then sets `AgentRunState.sessionId` from `parse`, as codex
+does from `thread.started`), `resumeArgs(id)` (`--resume <id>`; codex's `resume <id>` subcommand), `detectMissing(output)`
+(the CLI couldn't find the session it was to continue), `locate({home, cwd, id}, q)` (a shell line printing the session
+file's path in the machine) and `place({home, cwd, id, file})` (where a saved file goes for a new working directory, and
+its companion folder). `command`'s `AgentCommandCtx.session` (additive) is `{id, resume}`: a new session under `id`, or
+`id` continued with the prompt as its next user turn; a provider puts its own args in its command line. The kernel's
+runner keeps the file as it grows (`src/agents/session-sync.ts`: by byte offset, every string through the redactor,
+gzipped, into the session stores) for an agent of a run (not a reviewer), and a resumed run whose CLI reports the session
+missing fails as `SessionMissingError` (kind `failed`). A provider without `session` keeps none: a woken agent on it
+starts a fresh session from its thread (fx's ACP bridge: `session/load` isn't used yet). The session stores are a seam
+of their own, `SessionStore` (`packages/plugin/src/session-store.ts`: `describe`, `available`, `put`, `get`, `list`,
+`delete` by `<run>/<agent>/…` key): the built-in `host` store is the source of truth, and one replica at most
+(`sessions.replica` in the user config: `icloud-drive`, encrypting before it writes) gets a copy of every object.
+Plugins can't register a store yet (`ctx.sessions` comes with the next store, an S3-compatible one).
 
 **Variable families** (the owner's decision of 2026-11-10): every agent provider declares its own environment variable
 families, so capcomd no longer keeps a hand-written list of them. `describe().envPrefixes` (optional, additive; absent:
@@ -2826,11 +2844,11 @@ step changes `relay.v1`/`capcomd.v1` output or harness.v1 except by adding featu
 | 5 | Gates: `gate-reviewer`; a second test judge shows the AND; `--operator` bypass recorded (`plugin.gate_bypassed`) | `tests/primitives/verify-merge.test.ts`, `tests/scenarios/review.test.ts`, a bypass scenario asserting the event names the plugin |
 | 6 | Forges: `forge-github`, `forge-git`, `forge-fake`; `mergeTask` → `forge.land` under the kernel lock | `tests/merge/*` with `forge-fake`; `tests/api/project-git.test.ts` |
 | 7 | Jobs (§16.2): the service, `_jobs/` records, `exec` on the owner's machine via the spool, timers, `job.*` events, in-VM `capcomd job`, slots | a scenario: a scripted agent starts a 10 s job with `foregroundMs: 1000`, gets `running`, its result arrives as a message; restart mid-job settles it; the Docker sweep as a timer |
-| 8 | Front doors: MCP tools and CLI groups as registrations; `front-hermes`; `skill-orchestration` on `agent.preparing`, with `skills` and `env` attached to the agent's run (§6.6.7) | `tests/mcp/client.test.ts` lists the same tools; `tests/cli` passes; a test plugin's command and tool answer with the envelope and the caller's principal (`tests/plugins/front-doors.test.ts`); a test plugin's skill and variable reach the agent (`tests/subagents/prepare-skills.test.ts`) |
+| 8 | Front doors: MCP tools and CLI groups as registrations; `front-hermes`; `skill-orchestration` on `agent.preparing`, with `skills` and `env` attached to the agent's run (§6.6.7) | `tests/scenarios/mcp-client.test.ts` lists the same tools; `tests/cli` passes; a test plugin's command and tool answer with the envelope and the caller's principal (`tests/plugins/front-doors.test.ts`); a test plugin's skill and variable reach the agent (`tests/subagents/profile-skills.test.ts`) |
 | 9 | Out-of-process runtime (§9): spawn, filtered env, token minting, handshake, hooks stream, answers, restart, `plugins.protocol` routes applied to `contract.ts` (the fragment deleted) | a fixture process plugin (`tests/agents/fake-claude.sh` pattern); chaos killpoints `plugin.hook.mid`, `plugin.process.crash` with the audit "gate denied, nothing landed": `plugin.process.crash` kills the plugin's process, `plugin.hook.mid` the daemon, each with a gate call in flight (`tests/scenarios/plugin-process.test.ts`); the runtime against the fixture (`tests/plugins/process.test.ts`) and its frames (`packages/plugin/test/process.test.ts`) |
 | 10 | Triggers (§16.3): sources, the intake, `triggers.sources.*` config, `observe` default, subscriptions, `trigger.*` events, `capcomd triggers log`; a `schedule` source; the GitHub source | a scenario with a fixture source: deduped, denied, recorded, started, continued; a subscription expires; `observe` runs nothing |
 | 11 | Watchdog built-in (§16.4) enabled by `setup` | a scenario with a scripted agent that stops producing checkpoints: `stalled` raised at the configured time, cancelled after |
-| 12 | Install, trust, update: `capcomd plugins install|trust|update|remove|allow-version`, `LOCK`, the project trust prompt; with it (the owner's call) config layering: the project layer, validation per layer, the run layer | a local git fixture repository; a manifest escaping its directory refused; a changed hash reported; an untrusted project plugin never activates (`tests/plugins/install.test.ts`, `trust.test.ts`); the layers, a refused layer named, the run layer through a real engine (`tests/plugins/config-layers.test.ts`, `tests/scenarios/plugin-run-config.test.ts`) |
+| 12 | Install, trust, update: `capcomd plugins install|trust|update|remove|allow-version`, `LOCK`, the project trust prompt; with it (the owner's call) config layering: the project layer, validation per layer, the run layer | a local git fixture repository; a manifest escaping its directory refused; a changed hash reported; an untrusted project plugin never activates (`tests/plugins/install.test.ts`, `trust.test.ts`); the layers, a refused layer named, the run layer through a real engine (`tests/plugins/config-layers.test.ts`, `tests/scenarios/plugin-events.test.ts`) |
 | 13 | `@capcomd/plugin` publishable (the client library `connect`, the test kit with `bootWith`; §14.6) and published by the release workflow once the repository variable `PUBLISH_PLUGIN_PACKAGE` is on, `docs/plugins.md`, the Slack example run by CI against the fake sandbox | the examples' conformance in CI (`tests/plugins/host.test.ts`, `bun test packages/plugin`, `tests/scenarios/plugin-slack-example.test.ts`); the package packed, installed and used from Node (`packages/plugin/test/pack.test.ts`, `packages/plugin/scripts/smoke.sh` in CI) |
 
 Steps 1–2 are additions. Steps 3–8 are refactors behind unchanged tests. Steps 9–13 are the third-party surface.

@@ -342,7 +342,7 @@ struct MachineRowView: View {
       if let dot = row.tone.dot { StatusDot(kind: dot) }
       Text(verbatim: row.title).lineLimit(1).truncationMode(.tail)
         .frame(maxWidth: .infinity, alignment: .leading)
-      Text(verbatim: row.age).font(Theme.Settings.Details.ageFont).foregroundStyle(.secondary)
+      Text(verbatim: trailing).font(Theme.Settings.Details.ageFont).foregroundStyle(.secondary)
       if row.canOpenTerminal {
         if opening { ProgressView().controlSize(.mini).accessibilityHidden(true) }
         Button("Open in Terminal", action: open)
@@ -365,11 +365,23 @@ struct MachineRowView: View {
     .accessibilityLabel(help)
   }
 
-  /// "relay-3f9c2a1b · started 4 min ago · deleted at 10:22 if left idle".
+  /// Its age, or for a parked machine "parked · deletes at 10:22".
+  private var trailing: String {
+    guard row.parked else { return row.age }
+    return row.deleteAfter.map { "parked · deletes at \(Self.when($0))" } ?? "parked"
+  }
+
+  /// "10:22", or "Thu 10:22" when it isn't today (a parked machine is kept up to 7 days).
+  static func when(_ at: Date) -> String {
+    Calendar.current.isDateInToday(at) ? at.formatted(date: .omitted, time: .shortened)
+      : at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+  }
+
+  /// "relay-3f9c2a1b · started 4 min ago · deleted at 10:22 if left idle"; a parked one "… · parked, deleted at 10:22".
   private var help: String {
     var parts = [row.title, row.id]
     if !row.age.isEmpty { parts.append(row.age == "now" ? "started just now" : "started \(row.age) ago") }
-    if let at = row.deleteAfter { parts.append("deleted at \(at.formatted(date: .omitted, time: .shortened)) if left idle") }
+    if let at = row.deleteAfter { parts.append(row.parked ? "parked, deleted at \(Self.when(at))" : "deleted at \(at.formatted(date: .omitted, time: .shortened)) if left idle") }
     return parts.joined(separator: " · ")
   }
 }

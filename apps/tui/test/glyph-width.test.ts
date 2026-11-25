@@ -10,8 +10,3 @@ test("every glyph-set char is exactly one cell, even with ambiguous-wide termina
     }
   }
 });
-
-test("the old set is flagged: it has ambiguous-width chars", () => {
-  const old = [...Object.values(SETS["glyph-v1"].kind), ...Object.values(SETS["glyph-v1"].status)];
-  expect(old.filter((g) => stringWidth(g, { ambiguousIsNarrow: false }) !== 1).sort()).toEqual(["·", "◆", "◇", "◎", "●"].sort());
-});

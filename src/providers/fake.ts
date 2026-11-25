@@ -6,7 +6,7 @@ import type {
   VmInfo,
 } from "./sandbox";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
-import { SandboxAuthError, SandboxNotFoundError, SandboxTimeoutError, SandboxUnavailableError } from "./boxd-errors";
+import { SandboxAuthError, SandboxNotFoundError, SandboxNotReadyError, SandboxTimeoutError, SandboxUnavailableError } from "./boxd-errors";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 
@@ -52,7 +52,7 @@ function withHostShims(env: Record<string, string>): Record<string, string> {
 interface FakeVm {
   id: VmId;
   name: string;
-  state: "creating" | "ready" | "suspended" | "destroyed";
+  state: "creating" | "ready" | "suspended" | "hibernated" | "destroyed";
   spec: VmSpec;
   files: Map<string, Uint8Array>;
   checkpoints: Map<string, any>;
@@ -64,9 +64,10 @@ interface FakeVm {
 /**
  * Test hook: the provider fails like a real one in an outage. Until `until` (ms epoch), every call (or only `ops`:
  * ensure, waitReady, exec, upload, download, setEgress, destroy, list, extendTtl, probe) throws `error`: "timeout" (boxd's
- * "Deadline exceeded", the default), "unavailable" (connection refused), "not_found" or "auth" (permanent).
+ * "Deadline exceeded", the default), "unavailable" (connection refused), "not_found" or "auth" (permanent), or
+ * "not_ready" (a machine slow to boot: boxd's waitReady giving up).
  */
-export interface FakeFault { until: number; error?: "timeout" | "unavailable" | "not_found" | "auth"; ops?: string[] }
+export interface FakeFault { until: number; error?: "timeout" | "unavailable" | "not_found" | "auth" | "not_ready"; ops?: string[] }
 
 export interface FakeProviderOptions {
   /** A JSON file holding a FakeFault, read at every call (engine-process tests: CAPCOMD_FAKE_OUTAGE_FILE). */
@@ -84,6 +85,9 @@ export interface FakeProviderOptions {
   failEnsure?: "auth";
   /** Machine env every VM sees (exec env overrides it), e.g. simulated boxd secret placeholders. */
   vmEnv?: Record<string, string>;
+  /** ADR-026 §6: model a provider that parks machines (`hibernate`/`wake`, as boxd and Docker have). Off by default, so
+   *  agents on the fakes are destroyed when they end, as before (`CAPCOMD_FAKE_HIBERNATE=1` turns it on). */
+  hibernate?: boolean;
 }
 
 export class FakeProvider implements SandboxProvider {
@@ -100,7 +104,30 @@ export class FakeProvider implements SandboxProvider {
   public faults: FakeFault | null = null;
   /** Calls that failed by injection, by method. */
   public faulted: Record<string, number> = {};
-  constructor(readonly opts: FakeProviderOptions = {}) {}
+  /** Hibernate and wake calls made, in order (tests). */
+  public parkLog: Array<{ op: "hibernate" | "wake"; id: VmId }> = [];
+  /** ADR-026 §6: present only with `opts.hibernate` (the kernel parks machines only on a provider that has them). */
+  hibernate?: (id: VmId) => Promise<void>;
+  wake?: (id: VmId) => Promise<void>;
+  constructor(readonly opts: FakeProviderOptions = {}) {
+    if (opts.hibernate) {
+      // Like boxd's hibernate: the machine keeps its files, runs nothing (exec refuses) until woken.
+      this.hibernate = async (id) => {
+        this.fault("hibernate", id);
+        const vm = this.vms.get(id);
+        if (!vm || vm.state === "destroyed") throw new SandboxNotFoundError(`VM ${id} not found`, id);
+        this.parkLog.push({ op: "hibernate", id });
+        vm.state = "hibernated";
+      };
+      this.wake = async (id) => {
+        this.fault("wake", id);
+        const vm = this.vms.get(id);
+        if (!vm || vm.state === "destroyed") throw new SandboxNotFoundError(`VM ${id} not found`, id);
+        this.parkLog.push({ op: "wake", id });
+        if (vm.state === "hibernated" || vm.state === "suspended") vm.state = "ready";
+      };
+    }
+  }
 
   private fault(op: string, id?: VmId): void {
     let f = this.faults;
@@ -112,6 +139,7 @@ export class FakeProvider implements SandboxProvider {
       case "unavailable": throw new SandboxUnavailableError(`${where}: connect ECONNREFUSED 127.0.0.1:9443`, id);
       case "not_found": throw new SandboxNotFoundError(`${where}: machine not found`, id);
       case "auth": throw new SandboxAuthError(`${where}: BOXD_API_KEY was rejected by boxd (AuthenticationError: invalid or expired api key)`, id);
+      case "not_ready": throw new SandboxNotReadyError(`VM ${id} not ready within 90000ms`, id);
       default: throw new SandboxTimeoutError(`${where}: Deadline exceeded after 60.000s,remote_addr=127.0.0.1:9443`, id);
     }
   }
@@ -180,6 +208,8 @@ export class FakeProvider implements SandboxProvider {
     );
 
     if (existing) {
+      // A parked machine is woken by an ensure with its key, as boxd's and Docker's are.
+      if (existing.state === "hibernated") existing.state = "ready";
       return { id: existing.id, created: false };
     }
 

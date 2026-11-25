@@ -7,6 +7,10 @@
 // - the memory per agent (Docker, src/providers/capacity.ts): how much of Docker's memory each agent gets, which caps
 //   how many run at once. Precedence: CAPCOMD_DOCKER_AGENT_MEMORY_MB, then `sandboxes.docker.agentMemory` (MB), then
 //   1 GB. Read each time an agent asks for a slot, so a change applies to the next agent that starts.
+// - how long a parked machine is kept (a place that parks machines, ADR-026 §6): a planner's or lead's machine is
+//   hibernated when its turn ends and deleted this long after (or sooner: more than 10 parked at the place, the run
+//   archived, the agent cancelled, the user's Delete). Precedence: CAPCOMD_PARKED_RETENTION_SECONDS, then
+//   `sandboxes.<name>.parkedRetention` (seconds), then 24 hours; recorded with the run like the idle lifetime.
 // Settings live in the user config, never the project's: they decide billing and load for the machine and account.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -39,10 +43,26 @@ export function validMemoryMb(v: unknown): number | null {
 	return typeof n === "number" && Number.isSafeInteger(n) && n >= AGENT_MEMORY_MIN_MB && n <= 1024 * 1024 ? n : null;
 }
 
+export const PARKED_RETENTION_ENV = "CAPCOMD_PARKED_RETENTION_SECONDS";
+/** 24 hours (the owner's decision, 2026-11-19). */
+export const PARKED_RETENTION_DEFAULT = 86_400;
+/** The presets the app offers: 4 hours, 24 hours, 7 days (decided 2026-11-19). */
+export const PARKED_RETENTION_PRESETS = [14_400, 86_400, 604_800] as const;
+/** At most this many parked machines per place: past it, the oldest is deleted first (decided 2026-11-19). */
+export const PARKED_MAX_DEFAULT = 10;
+export interface ParkedRetention { seconds: number; source: SettingSource }
+
+/** A retention capcomd accepts (the environment, the user config, a run's record): whole seconds, more than none, at
+ *  most 7 days. The environment may go below the presets (tests, an operator who wants machines gone sooner). */
+export function validRetention(v: unknown): number | null {
+	const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v) : v;
+	return typeof n === "number" && Number.isSafeInteger(n) && n > 0 && n <= 7 * 86_400 ? n : null;
+}
+
 /** The values a setting holds in the user config, by id (only valid ones are read back). */
-export interface StoredSettings { idleLifetime?: number; agentMemory?: number }
+export interface StoredSettings { idleLifetime?: number; agentMemory?: number; parkedRetention?: number }
 export type StoredSettingId = keyof StoredSettings;
-const VALID: Record<StoredSettingId, (v: unknown) => number | null> = { idleLifetime: (v) => validLifetime(v), agentMemory: validMemoryMb };
+const VALID: Record<StoredSettingId, (v: unknown) => number | null> = { idleLifetime: (v) => validLifetime(v), agentMemory: validMemoryMb, parkedRetention: validRetention };
 
 /** CAPCOMD_SANDBOX_IDLE_SECONDS as seconds: a positive whole number, raised to the 15-minute minimum; null when unset or
  *  not a number (then the user config and the default apply). */
@@ -158,7 +178,23 @@ export function currentAgentMemory(name = "docker", o: { env?: Env; store?: Sett
 	return { mb: AGENT_MEMORY_DEFAULT_MB, source: "default" };
 }
 
+/** How long a parked machine on `name` is kept now: CAPCOMD_PARKED_RETENTION_SECONDS, else the user config, else 24 h. */
+export function currentParkedRetention(name: string, o: { env?: Env; store?: SettingsStore } = {}): ParkedRetention {
+	const env = o.env ?? process.env;
+	const fromEnv = validRetention(env[PARKED_RETENTION_ENV]?.trim());
+	if (fromEnv !== null) return { seconds: fromEnv, source: "env" };
+	const stored = (o.store ?? fileSettingsStore(settingsPath(env))).read(name).parkedRetention;
+	if (stored !== undefined) return { seconds: stored, source: "config" };
+	return { seconds: PARKED_RETENTION_DEFAULT, source: "default" };
+}
+
+/** How many parked machines a place keeps at most: CAPCOMD_PARKED_MAX (tests), else 10. */
+export function parkedMax(env: Env = process.env): number {
+	const n = Number(env.CAPCOMD_PARKED_MAX);
+	return Number.isSafeInteger(n) && n >= 0 ? n : PARKED_MAX_DEFAULT;
+}
+
 /** What `run new` records with a run (`_sandbox.settings`): the provider's settings as they are now. */
-export function settingsForRun(name: string, o: { env?: Env; store?: SettingsStore } = {}): { idleLifetime: number } {
-	return { idleLifetime: currentIdleLifetime(name, o).seconds };
+export function settingsForRun(name: string, o: { env?: Env; store?: SettingsStore } = {}): { idleLifetime: number; parkedRetention: number } {
+	return { idleLifetime: currentIdleLifetime(name, o).seconds, parkedRetention: currentParkedRetention(name, o).seconds };
 }

@@ -91,7 +91,7 @@ const reviewFailed = (o: ReviewTarget, reviewer: string | null, e: unknown): Rev
 
 /** How many times the gate tries a reviewer whose machinery failed, and the pause before each try again. */
 const INFRA_TRIES = () => Math.max(1, Number(env("REVIEW_INFRA_TRIES") ?? 4));
-const INFRA_BACKOFF_MS = (n: number) => Math.min(8000, 1000 * 2 ** (n - 1));
+const INFRA_BACKOFF_MS = (n: number) => { const base = Math.max(0, Number(env("REVIEW_INFRA_BACKOFF_MS") ?? 1000)); return Math.min(8 * base, base * 2 ** (n - 1)); };
 
 /** Spawn the reviewer for this verification (keyed: a retry reuses it). */
 async function startReview(o: ReviewTarget): Promise<Reviewing> {
@@ -125,7 +125,7 @@ async function finishReview(o: ReviewTarget, started: Reviewing, waitMs: number)
       dropReview(o.runId, started, "the verify's deadline passed");
       return { profile: o.profile, agentId, passed: false, reasons: [], error: "the reviewer gave no verdict before the verify's deadline" };
     }
-    return { profile: o.profile, agentId, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "reasons": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
+    return { profile: o.profile, agentId, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "findings": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
   } catch (e) { return reviewFailed(o, started.agentId, e); }
 }
 

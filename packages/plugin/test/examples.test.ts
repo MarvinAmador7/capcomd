@@ -1,5 +1,6 @@
-// Spec §15: every worked example's manifest validates against the JSON Schema (ajv) and the zod schema, declares only
-// known hooks, and the examples typecheck against the package (tsc on packages/plugin/tsconfig.json).
+// Spec §15: every worked example's manifest validates against the JSON Schema (ajv) and the zod schema and declares only
+// known hooks. That the examples typecheck against the package is `bun run typecheck` (packages/plugin/tsconfig.json
+// includes examples/ and test/).
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -42,10 +43,4 @@ describe("worked examples (spec §15)", () => {
     expect(validate({ schema: "capcomd.plugin/v1", name: "x" })).toBe(false);
     expect(validate({ ...JSON.parse(readFileSync(join(root, "examples", "slack-notifier", "plugin.json"), "utf8")), scopes: ["approve"] })).toBe(false);
   });
-  test("the package, its examples and tests typecheck", async () => {
-    const proc = Bun.spawn(["bun", "x", "tsc", "--noEmit", "-p", join(root, "tsconfig.json")], { cwd: join(root, "..", ".."), stdout: "pipe", stderr: "pipe" });
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    expect(out + err).toBe("");
-    expect(code).toBe(0);
-  }, 120_000);
 });

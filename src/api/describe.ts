@@ -39,6 +39,20 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "agent.adopted": return `Agent ${d.to} took over from ${d.from}.`;
 		case "agent.reaped": return `${a} was stopped because its parent ${d.orphanOf} ended.`;
 		case "agent.cancelled": return `${a} was cancelled.`;
+		// Capability agents.wake: ids, kinds and the daemon's own sentence only (the agent's note stays in data).
+		case "agent.wake_armed": return `${a} ended its turn, ${waitLine(d).replace(/^W/, "w")}.`;
+		case "agent.woken": return d.by === "time" ? `${a} was woken: its check-in time came.` : d.by === "deadline" ? `${a} was woken: its wait ran out.` : `${a} was woken: what it waited for happened.`;
+		case "agent.wake_cancelled": return d.reason === "ended" ? `${a} ended while it waited.` : d.reason === "archived" ? `${a}'s check-ins ended with the run.` : `${a} stopped waiting.`;
+		// Capability agents.ask: ids only (the question and the answer are agent-written: they stay in data).
+		case "agent.asked": return `${a} asked ${typeof d.to === "string" ? d.to : "you"} a question and stopped until it is answered.`;
+		case "agent.answered": return `${a}'s question was answered${typeof d.by === "string" ? ` by ${/^agt-/.test(d.by) ? d.by : "a person"}` : ""}.`;
+		case "agent.question_passed": return `${a}'s question went up to ${typeof d.to === "string" ? d.to : "you"}.`;
+		case "agent.question_withdrawn": return `${a}'s question was withdrawn.`;
+		// ADR-026 §1: a message woke an idle agent into its next attempt; a message changed the model it runs with.
+		case "agent.continued": return `${a} picked up a message and is working again.`;
+		case "agent.model_changed": return d.applied === false ? `${a} switches model after its current turn.` : `${a}'s model changed.`;
+		case "run.archived": return "The run was archived: restore it to continue.";
+		case "run.restored": return "The run was restored.";
 		case "agent.status_changed": return `${a} is now ${d.status}.`;
 		// The server sets this event's text to the activity line itself (built from the stored kind and count).
 		case "agent.activity_changed": return `${a} is ${d.status === "running" ? "working" : `now ${d.status ?? "idle"}`}.`;
@@ -63,8 +77,8 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		// The label is the starter's words (untrusted): the text names the job by its id only.
 		case "job.started": return d.kind === "timer" ? `A timer (${d.jobId}) was set.` : `${d.plugin || !agentId ? `The ${d.plugin ?? "capcomd"} plugin` : a} started a background job (${d.jobId}).`;
 		case "job.ended": return d.state === "done" ? `Background job ${d.jobId} finished.` : d.state === "failed" ? `Background job ${d.jobId} failed (exit ${d.code ?? "?"}).` : d.state === "killed" ? `Background job ${d.jobId} was stopped.` : `Background job ${d.jobId} was lost.`;
-		case "approval.requested": return `Waiting for your approval (${d.kind ?? "request"}).`;
-		case "approval.decided": return `Approval ${d.status ?? "decided"}.`;
+		case "approval.requested": return d.kind === "question" ? `${a} asked a question.` : `Waiting for your approval (${d.kind ?? "request"}).`;
+		case "approval.decided": return d.status === "answered" ? "Question answered." : `Approval ${d.status ?? "decided"}.`;
 		case "task.added": return "A task was added.";
 		case "task.claimed": return "A task was picked up.";
 		case "task.lease_expired": return "A task timed out and is free again.";
@@ -138,6 +152,7 @@ const ACTIVITY_TEXT: Record<string, [string, string, string, string]> = {
 	plan: ["Planning the work", "Planning the work", "Planned the work", "Planned the work"],
 	think: ["Thinking", "Thinking", "Thought it through", "Thought it through"],
 	tool: ["Using a tool", "Using # tools", "Used a tool", "Used # tools"],
+	setup: ["Getting ready", "Getting ready", "Got ready", "Got ready"],
 };
 
 /** The activity line for a kind and count; `done` gives the past tense (the agent is no longer working). */
@@ -147,10 +162,65 @@ export function describeActivity(kind: string, n: number, done: boolean): string
 	return t[(done ? 2 : 0) + (count > 1 ? 1 : 0)]!.replace("#", String(count));
 }
 
-/** Agent.activity from what the scope actor stores ({kind, n, at}) and the agent's status. */
-export function agentActivity(stored: { kind?: unknown; n?: unknown; at?: unknown } | null | undefined, status: string): { text: string; kind: string; at: string } | null {
+// Getting the agent ready (kind "setup", src/agents/activity.ts SETUP_PHASES): [while, once it stopped there].
+const SETUP_TEXT: Record<string, [string, string]> = {
+	machine: ["Starting the machine", "Stopped while starting the machine"],
+	workspace: ["Preparing the workspace", "Stopped while preparing the workspace"],
+	fetch: ["Fetching the repository", "Stopped while fetching the repository"],
+	copy: ["Copying the repository", "Stopped while copying the repository"],
+	install: ["Installing the agent's CLI", "Stopped while installing the agent's CLI"],
+	// ADR-026 §5: a continued attempt restores its conversation (its saved session, or its thread) before its CLI starts.
+	restore: ["Restoring the conversation", "Stopped while restoring the conversation"],
+	agent: ["Starting the agent", "Stopped while starting the agent"],
+};
+
+/** Megabytes for a progress line: one decimal under 10 MB, whole above. */
+const mbText = (b: number) => { const m = b / 1024 ** 2; return m < 10 ? m.toFixed(1).replace(/\.0$/, "") : String(Math.round(m)); };
+
+/** The line for a setup phase ("Copying the repository · 53% (56 of 105 MB)"); `done`: the agent stopped there. */
+export function describeSetup(s: { phase?: unknown; bytes?: unknown; total?: unknown }, done: boolean): string {
+	const t = SETUP_TEXT[String(s.phase)] ?? SETUP_TEXT.workspace!;
+	if (done) return t[1];
+	const bytes = typeof s.bytes === "number" ? s.bytes : null, total = typeof s.total === "number" && s.total > 0 ? s.total : null;
+	if (s.phase !== "copy" || bytes === null) return t[0];
+	if (total === null) return `${t[0]} (${mbText(bytes)} MB)`;
+	return `${t[0]} · ${Math.min(100, Math.floor((bytes / total) * 100))}% (${mbText(Math.min(bytes, total))} of ${mbText(total)} MB)`;
+}
+
+/** What an agent waits for between turns (capability agents.wake), from its wake's trusted fields: "Waiting for verify
+ *  vfy-…", "Waiting for 3 agents", "Waiting for its check-in". */
+export function waitLine(w: { kind?: unknown; op?: unknown; opKind?: unknown; agents?: unknown; mode?: unknown; types?: unknown }): string {
+	if (w.kind === "op" && typeof w.op === "string") return `Waiting for ${typeof w.opKind === "string" ? w.opKind : "op"} ${w.op}`;
+	if (w.kind === "agents" && Array.isArray(w.agents)) {
+		const n = w.agents.length;
+		return n === 1 ? `Waiting for ${String(w.agents[0])}` : w.mode === "all" ? `Waiting for ${n} agents` : `Waiting for one of ${n} agents`;
+	}
+	if (w.kind === "events" && Array.isArray(w.types)) return `Waiting for ${w.types.length === 1 ? String(w.types[0]) : `${w.types.length} kinds of event`}`;
+	if (w.kind === "timer") return "Waiting for its check-in";
+	return "Waiting";
+}
+
+/** Agent.activity while the agent waits between turns: kind wait, and its wake (capability agents.wake). */
+export function waitActivity(w: { wakeId: string; kind: string; op?: string; opKind?: string; agents?: string[]; mode?: string; types?: string[]; armedAt: number; at: number | null }) {
+	return {
+		text: waitLine(w), kind: "wait", at: new Date(w.armedAt).toISOString(),
+		wake: {
+			id: w.wakeId, kind: w.kind, ...(w.op ? { op: w.op } : {}), ...(w.opKind ? { opKind: w.opKind } : {}), ...(w.agents ? { agents: w.agents } : {}),
+			...(w.mode ? { mode: w.mode } : {}), ...(w.types ? { types: w.types } : {}), armedAt: new Date(w.armedAt).toISOString(), at: w.at === null ? null : new Date(w.at).toISOString(),
+		},
+	};
+}
+
+/** Agent.activity from what the scope actor stores ({kind, n, at}, and a setup's phase) and the agent's status. */
+export function agentActivity(stored: { kind?: unknown; n?: unknown; at?: unknown; setup?: unknown } | null | undefined, status: string): { text: string; kind: string; at: string; setup?: { phase: string; bytes: number | null; totalBytes: number | null } } | null {
 	if (!stored || typeof stored.kind !== "string") return null;
+	const at = new Date(Number.isFinite(Number(stored.at)) ? Number(stored.at) : 0).toISOString();
+	const done = status !== "running" && status !== "pending";
+	const s = stored.kind === "setup" && stored.setup && typeof stored.setup === "object" ? stored.setup as { phase?: unknown; bytes?: unknown; total?: unknown } : null;
+	if (s && typeof s.phase === "string") {
+		const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+		return { text: describeSetup(s, done), kind: "setup", at, setup: { phase: s.phase, bytes: num(s.bytes), totalBytes: num(s.total) } };
+	}
 	const kind = stored.kind in ACTIVITY_TEXT ? stored.kind : "tool";
-	const at = Number(stored.at);
-	return { text: describeActivity(kind, Number(stored.n), status !== "running" && status !== "pending"), kind, at: new Date(Number.isFinite(at) ? at : 0).toISOString() };
+	return { text: describeActivity(kind, Number(stored.n), done), kind, at };
 }

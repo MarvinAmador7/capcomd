@@ -4,7 +4,10 @@
 //   sandbox.resource_deleted {sandbox, resourceId, cause}                    a machine capcomd deleted, and why:
 //     action        a client's Delete (POST …/resources/{id}/actions/delete)
 //     idle_lifetime its idle lifetime ran out (Docker's sweep; a worker's own lifetime alarm)
-//     run_ended     its agent ended (finished, failed, handed off or cancelled) and its worker destroyed it
+//     run_ended     its agent ended (finished, failed, handed off or cancelled) and its worker destroyed it, or (a
+//                   parked machine, ADR-026 §6) its run was archived or its agent cancelled
+//     retention     a parked machine's retention ran out (ADR-026 §6)
+//     parked_limit  more machines were parked at its place than the limit (10): the oldest goes first
 // Only what capcomd itself does and sees: boxd's own platform-side deletes aren't observed.
 //
 // Deletes happen in two places in the daemon: the API (an orphan's Delete, the audit of an agent's Delete) and the
@@ -15,7 +18,7 @@
 // worker's late report still says `action`.
 import { descriptorOf, isListedProvider, PROVIDER_LABEL } from "./registry";
 
-export type DeleteCause = "action" | "idle_lifetime" | "run_ended";
+export type DeleteCause = "action" | "idle_lifetime" | "run_ended" | "retention" | "parked_limit";
 /** A daemon event as state.recordDaemonEvent takes it. */
 export interface AuditRecord { type: string; entity: string; text: string; data: Record<string, unknown> }
 export type AuditSink = (e: AuditRecord) => void;
@@ -30,6 +33,8 @@ const WHY: Record<DeleteCause, string> = {
 	action: "deleted from capcomd",
 	idle_lifetime: "deleted after its idle lifetime ran out",
 	run_ended: "deleted when its agent ended",
+	retention: "deleted after it was parked for its retention",
+	parked_limit: "deleted to keep the parked machines here within the limit (the oldest goes first)",
 };
 /** sandbox.resource_deleted: "Cloud: machine relay-3f9c… was deleted when its agent ended." */
 export function resourceDeletedEvent(sandbox: string, resourceId: string, cause: DeleteCause): AuditRecord {
@@ -43,9 +48,11 @@ export function resourceDeletedEvent(sandbox: string, resourceId: string, cause:
 /** Who a machine belonged to when a client acted on it (the resource's owner as the API serves it). */
 export interface ActionOwner { kind: string; runId: string | null; agentId: string | null; role: string | null; task?: string | null; label?: string | null }
 /** sandbox.resource_action: "Cloud: Delete on machine relay-3f9c…: cancelled worker agt-41 of run-8kq2." */
-export function resourceActionEvent(sandbox: string, resourceId: string, action: string, owner: ActionOwner | null, clientId: string): AuditRecord {
+export function resourceActionEvent(sandbox: string, resourceId: string, action: string, owner: ActionOwner | null, clientId: string, o: { parked?: boolean } = {}): AuditRecord {
 	const what = action === "delete" ? "Delete" : action;
 	const who = !owner ? "no agent was using it"
+		// ADR-026 §6: a parked machine's Delete deletes only the machine; its agent stays idle.
+		: owner.kind === "agent" && o.parked ? `the parked machine of ${owner.role ?? "agent"} ${owner.agentId ?? ""}${owner.runId ? ` of ${owner.runId}` : ""}, which stays idle`.replace(/\s+/g, " ").trim()
 		: owner.kind === "agent" ? `cancelled ${owner.role ?? "agent"} ${owner.agentId ?? ""}${owner.runId ? ` of ${owner.runId}` : ""}`.replace(/\s+/g, " ").trim()
 		: `it was capcomd's own (${owner.label ?? owner.kind})`;
 	// The owner as recorded: ids and the role only (the task is agent-written text, never copied into the audit).
@@ -53,7 +60,7 @@ export function resourceActionEvent(sandbox: string, resourceId: string, action:
 	return {
 		type: "sandbox.resource_action", entity: `sandbox:${sandbox}`,
 		text: `${placeOf(sandbox)}: ${what} on machine ${resourceId}: ${who}.`,
-		data: { sandbox, resourceId, action, owner: rec, clientId },
+		data: { sandbox, resourceId, action, owner: rec, clientId, ...(o.parked ? { parked: true } : {}) },
 	};
 }
 

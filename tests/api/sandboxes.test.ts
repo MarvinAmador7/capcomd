@@ -74,11 +74,11 @@ describe("GET /v1/sandboxes (capability sandboxes)", () => {
 		expect(Sandboxes.parse(r.body)).toBeTruthy();
 		expect(r.body).toEqual({ sandboxes: [
 			{ name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
-				caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
-				settings: ["idleLifetime", "agentMemory"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "Docker isn't running", default: false },
+				caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true, hibernate: "disk" },
+				settings: ["idleLifetime", "agentMemory", "parkedRetention"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "Docker isn't running", default: false },
 			{ name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
-				caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
-				settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "No boxd API key (run capcomd setup)", default: false },
+				caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true, hibernate: "memory" },
+				settings: ["idleLifetime", "parkedRetention"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "No boxd API key (run capcomd setup)", default: false },
 		] });
 	});
 	test("availability and the default follow GET /v1/run-options", async () => {
@@ -102,7 +102,7 @@ describe("GET /v1/sandboxes/{name}", () => {
 			value: "3600", display: "1 hour", default: "3600",
 			choices: [{ value: "900", label: "15 minutes" }, { value: "3600", label: "1 hour" }, { value: "14400", label: "4 hours" }, { value: "43200", label: "12 hours" }],
 			source: "default", editable: true, appliesTo: "new_runs", needsRestart: false, state: null,
-		}]);
+		}, expect.objectContaining({ id: "parkedRetention", value: "86400", display: "24 hours", source: "default" })]);
 		expect(r.body.info).toEqual([
 			{ id: "logins", type: "info", label: "Logins", help: "A bound login is swapped in on the way to its AI's API, so agents only ever see a placeholder. Plan logins kept in the agent environment aren't bound.",
 				value: "none", display: "No logins yet", default: null, choices: [], source: "daemon", editable: false, appliesTo: null, needsRestart: false, state: null },

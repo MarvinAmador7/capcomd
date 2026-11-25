@@ -24,14 +24,6 @@ public struct TranscriptPage: Codable, Sendable, Hashable {
   public var next: Int?
 }
 
-/// One line of the Log pane.
-public struct LogLine: Sendable, Hashable, Identifiable {
-  public var id: Int { seq }
-  public var seq: Int
-  public var atMs: Int
-  public var text: UntrustedText
-}
-
 /// `GET /v1/runs/{runId}/files`: the files a run's agents changed. `path`/`oldPath` are x-untrusted.
 public struct RunFiles: Codable, Sendable, Hashable {
   public struct File: Codable, Sendable, Hashable {
@@ -136,22 +128,6 @@ public enum TraceShape {
   }
 }
 
-/// "now", "45s ago", "6m ago", "2h ago", "3d ago": an Activity row's time.
-public func relativeAgo(ms: Int, nowMs: Int) -> String {
-  let s = max(0, (nowMs - ms) / 1000)
-  if s < 10 { return "now" }
-  if s < 60 { return "\(s)s ago" }
-  if s < 3600 { return "\(s / 60)m ago" }
-  if s < 86_400 { return "\(s / 3600)h ago" }
-  return "\(s / 86_400)d ago"
-}
-
-/// "0:33", "5:12", "1:02:07": a span's duration or the run's elapsed time.
-public func clockDuration(ms: Int) -> String {
-  let s = max(0, ms / 1000)
-  return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
-}
-
 extension StepKind {
   /// Agent.activity `kind` (harness #48 vocabulary) → step icon. Unknown kinds are a tool, as the contract asks.
   public init(activityKind k: String?) {
@@ -159,7 +135,7 @@ extension StepKind {
     case "read", "search", "report": self = .fileRead
     case "edit", "write": self = .fileWrite
     case "run": self = .shell
-    case "install": self = .sandbox
+    case "install", "setup": self = .sandbox   // setup: the machine and workspace getting ready (agents.setup)
     case "git", "merge": self = .git
     case "web": self = .network
     case "plan": self = .plan

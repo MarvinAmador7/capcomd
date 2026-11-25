@@ -24,7 +24,7 @@ import { applyTitle, normalizeTitle, shownTitle, type TitleState } from "../prim
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown>;
 	/** A plugin's own event (plugin.<name>.<event>) only: the entity it named and its own sentence. */
 	entity?: string; text?: string };
-export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
+export type PendingApproval = { approvalId: string; kind: "merge" | "question"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
@@ -57,6 +57,13 @@ export function brainSendOutcome(runId: string, actor: string, sent: O<typeof Br
 /** A project groups runs on one repository: its id is derived from the run's repository (CAPCOMD_REPO). */
 export const projectIdOf = (repo: string | null) => (repo ? `prj-${createHash("sha256").update(repo).digest("hex").slice(0, 12)}` : null);
 
+/** A message the daemon refused for the run's or the request's state (POST …/messages). */
+export class SendRefused extends Error {
+	constructor(readonly status: 409 | 422, readonly code: "archived" | "conflict" | "invalid", message: string, readonly field?: string) { super(message); }
+}
+/** POST /v1/runs/{runId}/archive|restore. */
+export type ArchiveOutcome = { ok: true; changed: boolean } | { ok: false; status: 404 | 409; code: "not_found" | "conflict"; message: string };
+
 export interface HarnessSource {
 	version: string;
 	runs(): Promise<O<typeof Run>[]>;
@@ -66,11 +73,12 @@ export interface HarnessSource {
 	events(runId: string, after: number): Promise<RawEvent[]>;
 	transcript(runId: string, agentId: string, after: number, limit: number): Promise<O<typeof TranscriptItem>[] | null>;
 	attachment(runId: string, id: string): Promise<O<typeof Attachment> | null>;
-	/** An agent's thread items after `after` (seq), in write order; null when the run or agent is unknown. */
-	thread(runId: string, agentId: string, after: number, limit: number): Promise<O<typeof ThreadItem>[] | null>;
+	/** An agent's thread items after `after` (seq), in write order; null when the run or agent is unknown. Its
+	 *  bookkeeping (items marked `internal`, ADR-026 §7) only with `internal`. */
+	thread(runId: string, agentId: string, after: number, limit: number, internal?: boolean): Promise<O<typeof ThreadItem>[] | null>;
 	/** An agent's items placed before `before` (an `order`; null: the newest), newest first, at most `limit`; null when
 	 * the run or agent is unknown. */
-	threadBefore(runId: string, agentId: string, before: number | null, limit: number): Promise<O<typeof ThreadItem>[] | null>;
+	threadBefore(runId: string, agentId: string, before: number | null, limit: number, internal?: boolean): Promise<O<typeof ThreadItem>[] | null>;
 	/** The whole run's thread writes after `after` (live frames). */
 	threadAfter(runId: string, after: number, limit: number): Promise<O<typeof ThreadItem>[]>;
 	/** The run's newest thread write (0 when none). */
@@ -115,7 +123,9 @@ export interface HarnessSource {
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
-	decide(approvalId: string, approve: boolean, by: string, reason?: string): Promise<void>;
+	/** Capability agents.ask: a question's approval is answered (`answer`, or with approve its recommendation; `reason` is the
+	 *  answerer's note), and resolves with the answer as recorded. */
+	decide(approvalId: string, approve: boolean, by: string, reason?: string, answer?: string): Promise<{ answer: string; recommended: boolean } | void>;
 	/** Start a run, detached; resolves once it is started (not finished). Throws CreateRunError for a 422. */
 	createRun(input: CreateRunInput): Promise<O<typeof Run>>;
 	/** The run's repository and target branch (GET /v1/runs/{runId}/files); null when the run has none. */
@@ -127,8 +137,13 @@ export interface HarnessSource {
 	 * `noop` explains why nothing changed (→ 409 conflict).
 	 */
 	control(runId: string, action: RunAction, by: string, agentId?: string): Promise<ControlResult>;
-	/** Send `to` a message from the operator, with skills to read with it; idempotent by `key`. */
-	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[]): Promise<{ seq: number; note: string | null }>;
+	/** Send `to` a message from the operator, with skills to read with it; idempotent by `key`. ADR-026 §1: an idle agent
+	 *  continues with it (`continued`); `turn` (capability agents.messages.model) is the model/effort of its next turn.
+	 *  Throws SendRefused when the run is archived (409 archived) or the scope refuses the change (422 invalid). */
+	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[], turn?: { model: string | null; effort: string | null }): Promise<{ seq: number; note: string | null; continued?: boolean }>;
+	/** Capability runs.archive: archive the run (read-only until restored; refused while an agent works) or restore it. */
+	archive(runId: string, by: string): Promise<ArchiveOutcome>;
+	restore(runId: string, by: string): Promise<ArchiveOutcome>;
 	/** GET /v1/projects/inspect (capability projects.setup): a folder's facts and what blocks setting it up. Writes nothing. */
 	inspectProject(path: string): Promise<ProjectInspection>;
 	/** GET /v1/projects/known (capability projects.known): capcomd's projects and their checkouts. */
@@ -205,6 +220,21 @@ export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?
 }
 
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;
+/** Capability agents.ask: an approval of kind question (its id names a qst- question, not an op). */
+export const isQuestionApproval = (id: string) => parseApprovalId(id)?.opId.startsWith("qst-") ?? false;
+/**
+ * A question as an approval of kind question (ADR-026 §4): the question is the asker's words; `subject` carries the
+ * card: the options with the recommended one first, the reason for it, what waits on it, and who it is asked of.
+ */
+export function questionApproval(runId: string, q: { questionId: string; agentId: string; to: string | null; question: string; recommend: string; options: string[]; why: string | null; holds: string | null; askedAt: number; passed?: string[] }): PendingApproval {
+	return {
+		approvalId: approvalIdFor(runId, q.questionId), kind: "question", status: "pending", question: q.question,
+		requestedBy: { agentId: q.agentId, runId }, subject: questionSubject(q), expiresAt: null, requestedAt: new Date(q.askedAt).toISOString(),
+	};
+}
+export function questionSubject(q: { questionId: string; to: string | null; recommend: string; options: string[]; why: string | null; holds: string | null; passed?: string[] }): Record<string, unknown> {
+	return { questionId: q.questionId, options: q.options.map((label, i) => ({ label, recommended: i === 0 })), recommend: q.recommend, why: q.why, holds: q.holds, to: q.to, ...(q.passed?.length ? { passedBy: q.passed } : {}) };
+}
 export function parseApprovalId(id: string): { runId: string; opId: string } | null {
 	const m = /^apr-([0-9a-f]+)$/.exec(id);
 	if (!m) return null;
@@ -260,7 +290,7 @@ export function memorySource(seed: Partial<{
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
-	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }>;
+	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[]; turn?: { model: string | null; effort: string | null } }>;
 	/** Machines deleted at a provider (an orphan's Delete), in order. */
 	destroyed: Array<{ sandbox: string; vmId: string }>;
 	/** Brain proposals sent (POST …/brain-proposals/send), in order: each a draft in the brain as `actor`. */
@@ -283,7 +313,10 @@ export function memorySource(seed: Partial<{
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
-	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }> = [];
+	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[]; turn?: { model: string | null; effort: string | null } }> = [];
+	// Capability runs.archive (archived runs), and each continued agent's attempt (ADR-026 §1).
+	const archived = new Set<string>();
+	const epochs = new Map<string, number>();
 	const loginsOf = async (only?: O<typeof Login>["provider"]) => (seed.logins ?? (["claude", "codex", "fx"] as const).flatMap((provider) => LISTED_PROVIDERS.map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` }))))
 		.filter((l) => (only ? l.provider === only : l.provider !== "fx"));
 	const driverLoginsOf = async () => (await loginsOf()).filter((l): l is O<typeof Login> & { provider: "claude" | "codex" } => l.provider !== "fx");
@@ -384,14 +417,40 @@ export function memorySource(seed: Partial<{
 			});
 			return brainSendOutcome(runId, actor, out);
 		},
-		send: async (runId, to, body, key, skills = []) => {
+		send: async (runId, to, body, key, skills = [], turn) => {
 			const prior = sent.get(key);
 			if (prior !== undefined) return { seq: prior, note: null };
+			if (archived.has(runId)) throw new SendRefused(409, "archived", `run ${runId} is archived · restore to continue`);
 			const seq = messagesOf(events[runId] ?? []).reduce((m, x) => Math.max(m, x.seq), 0) + 1;
 			push(runId, { at: Date.now(), type: "MESSAGE_SENT", agentId: "operator", data: { to, seq, bytes: Buffer.byteLength(body), text: body, attachment: null, skills: skills.map((x) => x.name) } });
-			delivered.push({ runId, to, seq, body, skills });
+			delivered.push({ runId, to, seq, body, skills, ...(turn ? { turn } : {}) });
 			sent.set(key, seq);
+			// ADR-026 §1, as the scope does it: an idle agent continues with the message as its next turn.
+			const a = (seed.agents?.[runId] ?? []).find((x) => x.id === to);
+			if (a && ["done", "failed", "cancelled"].includes(a.status)) {
+				const from = a.status;
+				a.status = "running";
+				const epoch = (epochs.get(`${runId}\u0000${to}`) ?? 1) + 1;
+				epochs.set(`${runId}\u0000${to}`, epoch);
+				push(runId, { at: Date.now(), type: "AGENT_CONTINUED", agentId: to, data: { epoch, from, by: "operator", messageSeq: seq } });
+				return { seq, note: `${to} was idle: this message is its next turn (it continues the same thread on a fresh machine)`, continued: true };
+			}
 			return { seq, note: null };
+		},
+		archive: async (runId, by) => {
+			if (!runs.some((r) => r.id === runId)) return { ok: false, status: 404, code: "not_found", message: `run ${runId} not found` };
+			if (archived.has(runId)) return { ok: true, changed: false };
+			const live = (seed.agents?.[runId] ?? []).filter((a) => !["done", "failed", "cancelled", "handed-off"].includes(a.status));
+			if (live.length) return { ok: false, status: 409, code: "conflict", message: `${live.length === 1 ? `agent ${live[0]!.id} is` : `${live.length} agents are`} still working: stop the run before archiving it` };
+			archived.add(runId);
+			push(runId, { at: Date.now(), type: "RUN_ARCHIVED", agentId: null, data: { by } });
+			return { ok: true, changed: true };
+		},
+		restore: async (runId, by) => {
+			if (!runs.some((r) => r.id === runId)) return { ok: false, status: 404, code: "not_found", message: `run ${runId} not found` };
+			if (!archived.delete(runId)) return { ok: true, changed: false };
+			push(runId, { at: Date.now(), type: "RUN_RESTORED", agentId: null, data: { by } });
+			return { ok: true, changed: true };
 		},
 		// A seeded run without a title gets the daemon's, from its label, goal and agents as they are now. The list itself is
 		// returned (tests add and remove runs through it).
@@ -399,6 +458,8 @@ export function memorySource(seed: Partial<{
 			for (const r of runs) {
 				if (r.title === undefined) autoTitled.add(r);
 				if (autoTitled.has(r)) Object.assign(r, runTitle({ label: r.label, goal: r.goal, agents: seed.agents?.[r.id] }));
+				// Capability runs.archive: set only on an archived run.
+				if (archived.has(r.id)) (r as O<typeof Run>).archived = true; else delete (r as O<typeof Run>).archived;
 			}
 			return runs as O<typeof Run>[];
 		},
@@ -407,13 +468,13 @@ export function memorySource(seed: Partial<{
 		events: async (r, after) => (events[r] ?? []).filter((e) => e.seq > after),
 		transcript: async () => [],
 		attachment: async (r, id) => { const a = seed.attachments?.[r]?.[id]; return a ? { attachment: { id, bytes: a.bytes.length, sha256: "0".repeat(64), mediaType: a.mime }, text: Buffer.from(a.bytes).toString(a.mime.startsWith("text/") ? "utf8" : "base64"), encoding: a.mime.startsWith("text/") ? "utf8" as const : "base64" as const } : null; },
-		thread: async (r, agentId, after, limit) => {
+		thread: async (r, agentId, after, limit, internal) => {
 			if (!seed.agents?.[r]?.some((a) => a.id === agentId)) return null;
-			return (seed.items?.[r] ?? []).filter((i) => i.agentId === agentId && i.seq > after).sort((a, b) => a.seq - b.seq).slice(0, limit);
+			return (seed.items?.[r] ?? []).filter((i) => i.agentId === agentId && i.seq > after && (internal || !i.internal)).sort((a, b) => a.seq - b.seq).slice(0, limit);
 		},
-		threadBefore: async (r, agentId, before, limit) => {
+		threadBefore: async (r, agentId, before, limit, internal) => {
 			if (!seed.agents?.[r]?.some((a) => a.id === agentId)) return null;
-			return (seed.items?.[r] ?? []).filter((i) => i.agentId === agentId && (before === null || i.order < before)).sort((a, b) => b.order - a.order).slice(0, limit);
+			return (seed.items?.[r] ?? []).filter((i) => i.agentId === agentId && (before === null || i.order < before) && (internal || !i.internal)).sort((a, b) => b.order - a.order).slice(0, limit);
 		},
 		threadAfter: async (r, after, limit) => (seed.items?.[r] ?? []).filter((i) => i.seq > after).sort((a, b) => a.seq - b.seq).slice(0, limit),
 		threadHead: async (r) => Math.max(0, ...(seed.items?.[r] ?? []).map((i) => i.seq)),

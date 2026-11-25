@@ -62,6 +62,8 @@ public struct SnapshotRun: Codable, Sendable, Hashable {
   public var sandbox: String?
   /// The run's goal branch and where it stands (`runs.goal_branch`); nil for a run without one and from older daemons.
   public var goalBranch: GoalBranchSummary?
+  /// Capability runs.archive: true on an archived run (read-only until restored); absent otherwise.
+  public var archived: Bool? = nil
 }
 public struct SnapshotAgent: Codable, Sendable, Hashable {
   public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String
@@ -86,7 +88,13 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// Its title (`agents.title`; agent-written, untrusted) and where it comes from; older daemons send neither.
   public var title: String?
   public var titleSource: String?
+  /// Capability agents.idle: a message woke this idle agent into its current attempt (when, by whom, how the one
+  /// before had ended); absent for a first attempt and from older daemons.
+  public var continued: SnapshotContinued? = nil
+  /// Capability agents.ask: the question it asked and stopped on, while it is open (`Agent.asked`); absent otherwise.
+  public var asked: JSONValue? = nil
 }
+public struct SnapshotContinued: Codable, Sendable, Hashable { public var at: String?; public var by: String?; public var from: String? }
 public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var approvalId: String; public var kind: String; public var status: String; public var question: String
   public var requestedBy: RequestedBy?; public var subject: [String: JSONValue]?
@@ -96,7 +104,13 @@ public struct SnapshotApproval: Codable, Sendable, Hashable {
 }
 /// `Agent.activity`: `text` is a daemon-written plain line ("Reading 4 files"); `kind` is an icon hint.
 public struct SnapshotWorkspace: Codable, Sendable, Hashable { public var repo: String; public var path: String?; public var label: String }
-public struct SnapshotActivity: Codable, Sendable, Hashable { public var text: String; public var kind: String?; public var at: String? }
+public struct SnapshotActivity: Codable, Sendable, Hashable {
+  public var text: String; public var kind: String?; public var at: String?
+  /// Kind `setup` only (capability agents.setup): what the daemon is doing to get the agent ready.
+  public var setup: AgentSetup?
+  /// Kind `wait` only (capability agents.wake): what the agent waits for between turns, and since when.
+  public var wake: JSONValue?
+}
 struct SnapshotRunFrame: Codable { var run: SnapshotRun }
 struct SnapshotAgentsFrame: Codable { var agents: [SnapshotAgent] }
 struct SnapshotApprovalsFrame: Codable { var approvals: [SnapshotApproval] }

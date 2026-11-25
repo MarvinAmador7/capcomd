@@ -19,8 +19,10 @@ import { env as envVar } from "../../utils/env";
 
 export const DESCRIPTOR = {
   name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
-  caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
-  settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
+  // hibernate memory: a parked VM is hibernated (its memory written to disk and restored on wake, billed for disk only;
+  // never `pause`, which keeps it in memory and bills like running).
+  caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true, hibernate: "memory" },
+  settings: ["idleLifetime", "parkedRetention"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
 } as const satisfies SandboxDescriptor;
 
 export const manifest = {

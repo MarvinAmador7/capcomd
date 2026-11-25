@@ -8,6 +8,9 @@ public struct PendingSteer: Sendable, Hashable, Identifiable {
   public var skills: [String]
   public var state: State
   var key: String
+  /// The model and effort it carries for the agent's next turn (sent only where the daemon takes them).
+  public var model: String? = nil
+  public var effort: String? = nil
 }
 
 /// Capabilities the thread input checks before offering a feature.
@@ -52,6 +55,16 @@ public enum Capability {
   public static let runsGoalBranch = "runs.goal_branch"
   /// `GET …/agents/{agentId}/thread/tail`: a thread's newest items first, and the pages above them on demand.
   public static let agentsThreadTail = "agents.thread_tail"
+  /// An agent is idle, not done (ADR-026 §1): a message to an agent whose turn ended continues it (`Agent.continued`,
+  /// agent.continued); its composer reads "<name> is idle. Send to continue."
+  public static let agentsIdle = "agents.idle"
+  /// `POST …/messages` takes `model` and `effort`: what the agent's next turns run with.
+  public static let agentsMessagesModel = "agents.messages.model"
+  /// `POST /v1/runs/{runId}/archive` and `/restore`; `Run.archived`: an archived run's composer gives way to Restore.
+  public static let runsArchive = "runs.archive"
+  /// Thread items carry `internal` for an agent's bookkeeping (ADR-026 §7), left out unless asked: the agent's menu
+  /// offers Show Bookkeeping.
+  public static let agentsThreadInternal = "agents.thread_internal"
 }
 
 extension CapcomdStore {
@@ -71,14 +84,24 @@ extension CapcomdStore {
     var list = outbox[agentId] ?? []
     let entry: PendingSteer
     if let id, let i = list.firstIndex(where: { $0.id == id }) { list[i].state = .sending; entry = list[i] }
-    else { entry = PendingSteer(id: UUID().uuidString, body: body, skills: skills, state: .sending, key: makeKey()); list.append(entry) }
+    else {
+      let next = capabilities.contains(Capability.agentsMessagesModel) ? nextTurn[agentId] : nil
+      entry = PendingSteer(id: UUID().uuidString, body: body, skills: skills, state: .sending, key: makeKey(), model: next?.model, effort: next?.effort)
+      list.append(entry)
+    }
     outbox[agentId] = list; changed()
     let state: PendingSteer.State
     do {
-      let sent = try await messenger.send(runId: runId, agentId: agentId, body: entry.body,
-                                          skills: capabilities.contains(Capability.steerSkills) ? entry.skills : [], idempotencyKey: entry.key)
+      let skills = capabilities.contains(Capability.steerSkills) ? entry.skills : []
+      let sent = entry.model == nil && entry.effort == nil
+        ? try await messenger.send(runId: runId, agentId: agentId, body: entry.body, skills: skills, idempotencyKey: entry.key)
+        : try await messenger.send(runId: runId, agentId: agentId, body: entry.body, skills: skills, model: entry.model, effort: entry.effort, idempotencyKey: entry.key)
       state = .sent(seq: sent.seq)
-    } catch let e as MessageRefused { state = .failed(e.message) }
+    } catch let e as MessageRefused {
+      // The run was archived meanwhile: its composer gives way to Restore (the message wasn't sent).
+      if e.code == "archived" { setArchived(runId: runId, true); state = .failed("This run is archived. Restore it to continue.") }
+      else { state = .failed(e.message) }
+    }
     catch is Unauthorized { unauthorized = true; state = .failed("capcomd rejected the token") }
     catch DetailUnavailable.unsupported { state = .failed("This capcomd can't send messages from here yet") }
     catch { state = .failed("Couldn't reach capcomd") }

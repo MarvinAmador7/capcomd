@@ -27,16 +27,15 @@ public final class CapcomdStore {
   /// Agents whose thread is being read, and those to read again once that read ends (StoreThreadItems.swift).
   var threadReads: Set<String> = []
   var threadRereads: Set<String> = []
+  /// Agents whose thread shows their bookkeeping (items marked `internal`: waits, polls, CLI system events), by request.
+  public internal(set) var bookkeepingShown: Set<String> = []
   /// Agents whose page above the shown thread (`agents.thread_tail`) is on its way.
   public internal(set) var threadLoadingEarlier: Set<String> = []
   public internal(set) var media: [MediaKey: Fetched<Data>] = [:]
-  /// Who follows which run's live thread items: the panel's open thread ("panel") and the desktop reel ("reel") each
-  /// hold at most one run. Those runs' lifecycle feeds carry `thread=1`; it covers every agent of the run.
+  /// Who follows which run's live thread items, by holder (the desktop reel, "reel"; a bench fixture, "fixture:RUN"):
+  /// each holds at most one run. Those runs' lifecycle feeds carry `thread=1`; it covers every agent of the run.
   var threadHolders: [String: String] = [:]
   public var threadStreamRuns: Set<String> { Set(threadHolders.values) }
-  /// The panel's open thread: its run, and the agent shown.
-  public var threadStreamRun: String? { threadHolders[Self.panelHolder] }
-  public internal(set) var openThreadAgent: String?
   public let prefs: UIPreferences
   /// Something changed (the menu bar's whole-model refresh).
   public var onChange: (@MainActor () -> Void)?
@@ -50,10 +49,6 @@ public final class CapcomdStore {
   // Run detail (drill-down): fetched over REST while a run is open; see StoreDetail.swift.
   public internal(set) var traces: [String: Fetched<[TraceSpan]>] = [:]
   public internal(set) var files: [String: Fetched<RunFiles>] = [:]
-  /// Log tail per agent (newest last, at most `logTail` lines), the transcript cursor, and whether the route works.
-  public internal(set) var logs: [String: [LogLine]] = [:]
-  public internal(set) var logUnavailable: [String: DetailUnavailable] = [:]
-  var logCursor: [String: Int] = [:]
   public internal(set) var controlState: [String: ControlState] = [:]
   /// Pause / resume of one agent (and its subtree), keyed by agent id; settles on agent.paused / agent.resumed.
   public internal(set) var agentControlState: [String: ControlState] = [:]
@@ -63,6 +58,8 @@ public final class CapcomdStore {
   public internal(set) var startRefusedField: String?
   /// Steers typed in a thread, per agent, until confirmed (StoreThread.swift).
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
+  /// The model and effort picked for an agent's next turn (AgentComposer.swift), sent with its next message.
+  public internal(set) var nextTurn: [String: NextTurn] = [:]
   public internal(set) var capabilities: Set<String> = []
   public internal(set) var skills: Fetched<[SkillInfo]>?
   /// The daemon feed can't connect (the daemon is down or restarting); it keeps retrying.
@@ -124,6 +121,11 @@ public final class CapcomdStore {
   /// Renaming agents (`agents.title`; AgentTitle.swift): a rename on its way or why the last one failed, per agent.
   let titler: AgentTitling?
   public internal(set) var titleActions: [String: TitleAction] = [:]
+  /// Restoring archived runs (capability runs.archive; AgentLife.swift): Restore on its way, or why it failed, per run.
+  public internal(set) var restoreStates: [String: RestoreState] = [:]
+  var archiver: RunArchiving? { controls as? RunArchiving }
+  /// Marks a run archived or restored from outside the event feed (a Restore that went through, an archived refusal).
+  func setArchived(runId: String, _ archived: Bool) { runs[runId]?.archived = archived }
   var pendingTitleKeys: [String: String] = [:]
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
@@ -133,6 +135,8 @@ public final class CapcomdStore {
   /// Events at or below the last snapshot's seq are already folded into it.
   var floor: [String: Int] = [:]
   var approvalSeq: [String: Int] = [:]
+  /// Questions answered from their card whose agent.answered hasn't come yet (capability agents.ask; Asked.swift).
+  var answering: Set<String> = []
   var keyCounter = 0
   let makeKey: () -> String
 
@@ -187,11 +191,12 @@ public final class CapcomdStore {
     return String(h, radix: 36)
   }
   /// Undecided approvals in request order.
+  /// A question asked of an agent isn't one (`needsPerson`): its card shows in the asker's column (questionCard).
   public var pendingApprovals: [PendingApproval] {
-    approvals.values.sorted { (approvalSeq[$0.id] ?? 0, $0.id) < (approvalSeq[$1.id] ?? 0, $1.id) }
+    approvals.values.filter(\.needsPerson).sorted { (approvalSeq[$0.id] ?? 0, $0.id) < (approvalSeq[$1.id] ?? 0, $1.id) }
   }
   /// The one allowed number: the menu bar badge.
-  public var badgeCount: Int { approvals.values.filter { if case .decided = $0.decision { return false }; return true }.count }
+  public var badgeCount: Int { approvals.values.filter { if case .decided = $0.decision { return false }; return $0.needsPerson }.count }
   public func approvals(forRun id: String) -> [PendingApproval] { pendingApprovals.filter { $0.runId == id } }
   /// Activity rows. An agent's row reads as its activity line ("Read 4 files", "Writing parquet shards to R2") with the
   /// activity's icon when the daemon reports one; otherwise its task's first line, else its profile.
@@ -219,7 +224,7 @@ public final class CapcomdStore {
   /// Outline tree for a run, orchestrator first. Approvals bubble to ancestors.
   public func agentTree(runId: String) -> [AgentNode] {
     guard let run = runs[runId] else { return [] }
-    let waiting = Set(approvals.values.compactMap { $0.runId == runId || $0.runId == nil ? $0.agentId : nil })
+    let waiting = Set(approvals.values.compactMap { ($0.runId == runId || $0.runId == nil) && $0.needsPerson ? $0.agentId : nil })
     let byParent = Dictionary(grouping: run.agents.values) { a -> String in
       if let p = a.parent, run.agents[p] != nil { return p }; return ""
     }
@@ -232,6 +237,7 @@ public final class CapcomdStore {
         var node = AgentNode(id: a.id, name: a.displayName, title: a.titleText, suffix: suffixes[a.id], kind: a.kind, status: a.status, activity: a.activity, depth: depth,
                              waiting: w, descendantWaiting: children.contains { $0.waiting || $0.descendantWaiting }, children: children)
         node.repo = a.repo
+        node.asked = a.asked != nil
         return node
       }
     }
@@ -368,6 +374,7 @@ public final class CapcomdStore {
       run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
       run.goalBranch = r.goalBranch ?? run.goalBranch
+      run.archived = r.archived ?? false
       runs[r.id] = run
     }
     let agentRuns = Set(b.agents.map(\.runId)).union(b.steps.compactMap { $0.runId ?? ($0.scope.hasPrefix("run-") ? $0.scope : nil) })
@@ -387,12 +394,14 @@ public final class CapcomdStore {
                      task: a.task.map(UntrustedText.init), key: old?.key, repo: a.workspace?.label ?? old?.repo, spawnedAtMs: old?.spawnedAtMs ?? created ?? i, activity: a.activity?.text)
       ag.createdAtMs = created
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
-      ag.activityKind = a.activity?.kind
+      ag.activityKind = a.activity?.kind; ag.setup = a.activity?.setup; ag.wake = AgentWake(activity: a.activity?.wake)
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
       ag.provider = Provider(wire: a.provider) ?? old?.provider; ag.model = a.model ?? old?.model
       ag.activityAtMs = epochMs(iso: a.activity?.at) ?? old?.activityAtMs
       ag.read(result: a.result)
       ag.title = a.title.map(UntrustedText.init) ?? old?.title; ag.titleSource = a.titleSource ?? old?.titleSource
+      ag.continuedAtMs = epochMs(iso: a.continued?.at) ?? old?.continuedAtMs
+      ag.asked = AskedQuestion(a.asked)
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
     }
@@ -412,6 +421,12 @@ public final class CapcomdStore {
   func updateAgent(_ runId: String, _ agentId: String, _ f: (inout Agent) -> Void) {
     guard runs[runId]?.agents[agentId] != nil else { return }
     f(&runs[runId]!.agents[agentId]!)
+  }
+
+  /// Changes one approval (Asked.swift: who a question is asked of): `approvals` is set here only.
+  func updateApproval(_ id: String, _ f: (inout PendingApproval) -> Void) {
+    guard approvals[id] != nil else { return }
+    f(&approvals[id]!)
   }
 
   /// Changes one run's goal branch (GoalBranch.swift): `runs` is set here only.
@@ -491,6 +506,23 @@ public final class CapcomdStore {
       if let runId, let agentId, d["result"]?["limit"]?.string == "quota", runs[runId]?.agents[agentId]?.resetAtMs == nil, let u = d["until"]?.int {
         runs[runId]?.agents[agentId]?.resetAtMs = u
       }
+    case "agent.continued":
+      // Capability agents.idle: a message woke this idle agent into its next attempt: it runs again (waking while it
+      // is set up), its last outcome no longer its state.
+      setStatus(runId, agentId, .running, e)
+      if let runId, let agentId {
+        runs[runId]?.agents[agentId]?.continuedAtMs = e.epochMs; runs[runId]?.agents[agentId]?.setupMarks = []
+        runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil
+      }
+    case "agent.model_changed":
+      // Capability agents.messages.model: the model its next turns run with; shown once it applies.
+      if let runId, let agentId, d["applied"]?.bool == true, let m = d["model"]?.string { runs[runId]?.agents[agentId]?.model = m }
+    case "run.archived", "run.restored":
+      guard let runId else { return }
+      runs[runId]?.archived = e.type == "run.archived"
+    case "agent.asked", "agent.answered", "agent.question_passed", "agent.question_withdrawn":
+      // Capability agents.ask: the question an agent asked and stopped on (Asked.swift).
+      applyAsk(e, runId: runId, agentId: agentId)
     case "agent.resumed", "agent.started":
       setStatus(runId, agentId, .running, e)
       if let runId, let agentId { runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil }
@@ -511,9 +543,23 @@ public final class CapcomdStore {
       guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string
       runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
+      runs[runId]?.agents[agentId]?.setup = AgentSetup(d["activity"]?["setup"])
+      if let ph = runs[runId]?.agents[agentId]?.setup?.phase, d["activity"]?["kind"]?.string == "setup", runs[runId]?.agents[agentId]?.setupMarks.last?.phase != ph {
+        runs[runId]?.agents[agentId]?.setupMarks.append(SetupMark(phase: ph, atMs: epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs))
+      }
+      runs[runId]?.agents[agentId]?.wake = AgentWake(activity: d["activity"]?["wake"])
       runs[runId]?.agents[agentId]?.activityAtMs = epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
       mark(.run(runId), .agent(agentId), .thread(agentId))   // live, once a second per agent: narrowed
+    case "agent.wake_armed":
+      // Capability agents.wake: its turn ended with a wake armed: it waits between turns (still running).
+      guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
+      runs[runId]?.agents[agentId]?.wake = AgentWake(armed: d, at: e.epochMs)
+      mark(.run(runId), .agent(agentId), .thread(agentId))
+    case "agent.woken", "agent.wake_cancelled":
+      guard let runId, let agentId, let w = runs[runId]?.agents[agentId]?.wake, w.id == d["wakeId"]?.string else { return }
+      runs[runId]?.agents[agentId]?.wake = nil
+      mark(.run(runId), .agent(agentId), .thread(agentId))
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
       let st: StepStatus = e.type == "verify.started" ? .running : e.type == "verify.passed" ? .done : .failed
@@ -605,11 +651,13 @@ public final class CapcomdStore {
       run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
       run.goalBranch = r.goalBranch ?? run.goalBranch
+      run.archived = r.archived ?? false
       runs[r.id] = run
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
       if var old = runs[a.runId]?.agents[a.id] {
-        old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text; old.activityKind = a.activity?.kind
+        old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text; old.activityKind = a.activity?.kind; old.setup = a.activity?.setup
+        old.wake = AgentWake(activity: a.activity?.wake)
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
         old.provider = Provider(wire: a.provider) ?? old.provider; old.model = a.model ?? old.model
@@ -617,16 +665,20 @@ public final class CapcomdStore {
         old.createdAtMs = epochMs(iso: a.createdAt) ?? old.createdAtMs
         old.read(result: a.result)
         if let t = a.title { old.title = UntrustedText(t); old.titleSource = a.titleSource }
+        old.continuedAtMs = epochMs(iso: a.continued?.at) ?? old.continuedAtMs
+        old.asked = AskedQuestion(a.asked)
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
                        task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: epochMs(iso: a.createdAt) ?? i, activity: a.activity?.text)
         ag.createdAtMs = epochMs(iso: a.createdAt)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
-        ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
+        ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind; ag.setup = a.activity?.setup; ag.wake = AgentWake(activity: a.activity?.wake)
         ag.provider = Provider(wire: a.provider); ag.model = a.model
         ag.activityAtMs = epochMs(iso: a.activity?.at); ag.read(result: a.result)
         ag.title = a.title.map(UntrustedText.init); ag.titleSource = a.titleSource
+        ag.continuedAtMs = epochMs(iso: a.continued?.at)
+        ag.asked = AskedQuestion(a.asked)
         runs[a.runId]?.agents[a.id] = ag
       }
     }
@@ -641,6 +693,7 @@ public final class CapcomdStore {
   func setStatus(_ runId: String?, _ agentId: String?, _ s: AgentStatus, _ e: Envelope) {
     guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
     runs[runId]?.agents[agentId]?.status = s; runs[runId]?.agents[agentId]?.updatedAtMs = e.epochMs
+    if s != .running { runs[runId]?.agents[agentId]?.wake = nil }   // only a running agent waits between turns
     settleAgentControl(agentId: agentId, status: s)
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == "agent:\(agentId)" }) {
       runs[runId]?.steps[i].status = Self.stepStatus(s); runs[runId]?.steps[i].epochMs = e.epochMs

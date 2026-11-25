@@ -113,6 +113,49 @@ describe("POST /v1/sandboxes/{name}/resources/{id}/actions/delete", () => {
 		expect(daemon[1].seq).toBeGreaterThan(daemon[0].seq);
 	});
 
+	test("capability agents.park: a parked machine is listed parked (its agent, when it is deleted); Delete deletes only the machine", async () => {
+		const PARKED = "relay-9a8b7c6d5e4f3a2b";
+		const deleteAt = Date.parse("2026-11-20T09:00:00.000Z");
+		const PLANNER: MachineOwner = { sandbox: "boxd", vmId: "m_9", name: PARKED, runId: "run-8kq2", agentId: "agt-50", role: "planner", task: taskLine("Plan the release"), workerState: "parked", createdAt: null, deleteAt, descendants: 0 };
+		const machines = [...rows(), { id: "m_9", name: PARKED, state: "hibernated" }];
+		const asked: Array<[string, string]> = [];
+		const { src, post, get, audit, state } = setup({
+			machines: { boxd: machines }, owners: [WORKER, CHECKS, PLANNER], recorded: machines.map((r) => ({ sandbox: "boxd", name: r.name })),
+			surface: { deleteParked: async (name: any, id: string) => { asked.push([name, id]); return true; } },
+		});
+		expect(CAPABILITY_NAMES).toContain("agents.park");
+		const page = await get("/v1/sandboxes/boxd/resources");
+		expect(ResourcePage.parse(page)).toBeTruthy();
+		expect(page.resources.find((r: any) => r.id === PARKED)).toMatchObject({
+			state: "parked", deleteAfter: "2026-11-20T09:00:00.000Z", actions: ["delete"], destructive: true,
+			owner: { kind: "agent", runId: "run-8kq2", agentId: "agt-50", role: "planner" },
+			confirm: "Delete planner's parked machine? Its conversation is kept: a message to it starts on a fresh machine, a little slower.",
+		});
+		const r = await post("boxd", PARKED);
+		expect(r).toMatchObject({ status: 200, body: { changed: true, resource: { id: PARKED, state: "stopping" } } });
+		// The machine only: no agent cancelled, no provider call from here (its worker destroys it).
+		expect(asked).toEqual([["boxd", PARKED]]);
+		expect(src.destroyed).toEqual([]);
+		expect(((await get("/v1/events?scope=run-8kq2")) as any[]).filter((e) => e.type === "agent.cancelled")).toEqual([]);
+		expect(audit()).toEqual([
+			{ type: "sandbox.resource_action", data: { sandbox: "boxd", resourceId: PARKED, action: "delete", owner: { kind: "agent", runId: "run-8kq2", agentId: "agt-50", role: "planner" }, clientId: steerer.client.id, parked: true } },
+			{ type: "sandbox.resource_deleted", data: { sandbox: "boxd", resourceId: PARKED, cause: "action" } },
+		]);
+		expect(state.daemonEvents()[0]!.text).toBe(`Cloud: Delete on machine ${PARKED}: the parked machine of planner agt-50 of run-8kq2, which stays idle.`);
+		for (const e of (await get("/v1/events?scope=daemon")) as any[]) expect((EventData as any)[e.type].parse(e.data)).toBeTruthy();
+	});
+
+	test("a parked machine woken meanwhile isn't deleted: 409", async () => {
+		const PARKED = "relay-9a8b7c6d5e4f3a2c";
+		const PLANNER: MachineOwner = { sandbox: "boxd", vmId: "m_9", name: PARKED, runId: "run-8kq2", agentId: "agt-50", role: "planner", task: null, workerState: "parked", createdAt: null, deleteAt: Date.now() + 3600_000 };
+		const machines = [...rows(), { id: "m_9", name: PARKED, state: "hibernated" }];
+		const { post, audit } = setup({ machines: { boxd: machines }, owners: [WORKER, CHECKS, PLANNER], recorded: machines.map((r) => ({ sandbox: "boxd", name: r.name })), surface: { deleteParked: async () => false } });
+		const r = await post("boxd", PARKED);
+		expect(r.status).toBe(409);
+		expect(r.body.message).toContain("isn't parked any more");
+		expect(audit()).toEqual([]);
+	});
+
 	test("an orphan: the provider deletes it by its provider id; the list no longer has it", async () => {
 		const { src, post, get, audit } = setup();
 		expect((await get("/v1/sandboxes/boxd/resources")).resources.map((r: any) => r.id)).toContain(ORPHAN);

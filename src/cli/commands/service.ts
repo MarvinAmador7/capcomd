@@ -4,7 +4,7 @@
 // It starts in the home directory, so only the user config applies (sandbox, the keychain's boxd key);
 // repository settings come from each run (recorded at `run new`).
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { capcomdHome } from "../../utils/home";
@@ -102,8 +102,41 @@ WantedBy=default.target
 const sh = (cmd: string, args: string[]) => { const r = spawnSync(cmd, args, { encoding: "utf8" }); return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() }; };
 const uid = () => String(process.getuid?.() ?? "");
 
-async function engineUp(port: number): Promise<boolean> {
+export async function engineUp(port: number): Promise<boolean> {
   try { const r = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1500) }); return r.status > 0; } catch { return false; }
+}
+
+/** The installed service's definition (its path, and the port its `serve --port N` names), or null when none is. */
+export function installedService(platform: NodeJS.Platform = process.platform, home = homedir()): { path: string; port: number } | null {
+  const path = servicePath(platform, home);
+  if (!path || !existsSync(path)) return null;
+  let body = "";
+  try { body = readFileSync(path, "utf8"); } catch {}
+  const m = /--port(?:<\/string>\s*<string>|\s+)(\d+)/.exec(body);
+  return { path, port: m ? parseInt(m[1]!, 10) : 6420 };
+}
+
+/** Whether the service manager has the service loaded (launchd) or active (systemd). */
+export function serviceLoaded(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" ? sh("launchctl", ["print", `gui/${uid()}/${LABEL}`]).code === 0 : sh("systemctl", ["--user", "is-active", "--quiet", UNIT]).code === 0;
+}
+
+/** The command that restarts the service's engine (what `restartService` runs). */
+export function restartArgv(platform: NodeJS.Platform = process.platform): string[] {
+  return platform === "darwin" ? ["launchctl", "kickstart", "-k", `gui/${uid()}/${LABEL}`] : ["systemctl", "--user", "restart", UNIT];
+}
+
+/** Restart the service's engine now: launchd kills and starts it again (`kickstart -k`), systemd restarts the unit. */
+export function restartService(platform: NodeJS.Platform = process.platform): { code: number; out: string } {
+  const [cmd, ...args] = restartArgv(platform);
+  return sh(cmd!, args);
+}
+
+/** Wait up to `tries` × 500 ms for the engine on `port` to answer. */
+export async function waitForEngine(port: number, tries = 40): Promise<boolean> {
+  let up = false;
+  for (let i = 0; i < tries && !(up = await engineUp(port)); i++) await new Promise((r) => setTimeout(r, 500));
+  return up;
 }
 
 export async function serviceInstall(o: { port?: number; dryRun?: boolean; atLogin?: boolean } = {}) {
@@ -130,8 +163,7 @@ export async function serviceInstall(o: { port?: number; dryRun?: boolean; atLog
       if (r.code !== 0) throw new RelayError("config", `systemctl ${args.join(" ")} failed: ${r.out.slice(-300)}`, "A systemd user session is needed (on a server: `loginctl enable-linger $USER`).");
     }
   }
-  let up = false;
-  for (let i = 0; i < 40 && !(up = await engineUp(spec.port)); i++) await new Promise((r) => setTimeout(r, 500));
+  const up = await waitForEngine(spec.port);
   return { installed: true, atLogin, path: f.path, port: spec.port, running: up, log: spec.logFile };
 }
 
@@ -149,6 +181,6 @@ export async function serviceStatus(o: { port?: number } = {}) {
   const spec = serviceSpec(o);
   const f = serviceFile(spec);
   const installed = existsSync(f.path);
-  const loaded = installed && (spec.platform === "darwin" ? sh("launchctl", ["print", `gui/${uid()}/${LABEL}`]).code === 0 : sh("systemctl", ["--user", "is-active", "--quiet", UNIT]).code === 0);
+  const loaded = installed && serviceLoaded(spec.platform);
   return { installed, loaded, running: await engineUp(spec.port), port: spec.port, path: f.path, log: spec.logFile };
 }

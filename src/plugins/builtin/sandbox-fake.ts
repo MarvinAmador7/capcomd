@@ -10,7 +10,7 @@ import { builtinSandbox, classifySandboxError, type NativeSandbox } from "../../
 import { VERSION } from "../../utils/self";
 import { BOXD_AUTH_REASON } from "./sandbox-boxd";
 
-const hostCaps = { isolation: "host", snapshots: false, hostBoundSecrets: false, egressAllowlist: false, interactive: false, idleLifetime: "none", shell: false } as const;
+const hostCaps = { isolation: "host", snapshots: false, hostBoundSecrets: false, egressAllowlist: false, interactive: false, idleLifetime: "none", shell: false, hibernate: "none" } as const;
 
 export const FAKE_DESCRIPTOR = {
   name: "fake", descriptorVersion: 1, label: "Fake", kind: "local", vendor: "in-memory", title: "Fake · in-memory", mark: "fake", listed: false,
@@ -30,6 +30,9 @@ export function classifyFakeError(e: unknown): ErrorClass {
 }
 
 const faultFile = (env: Record<string, string | undefined>) => (env.CAPCOMD_FAKE_OUTAGE_FILE ? { faultFile: env.CAPCOMD_FAKE_OUTAGE_FILE } : {});
+/** CAPCOMD_FAKE_HIBERNATE=1: the fake parks machines (ADR-026 §6), as boxd and Docker do. Off by default: the fakes'
+ *  descriptors say `hibernate: "none"`, and an agent's machine is destroyed when it ends, as the tests expect. */
+const parks = (env: Record<string, string | undefined>) => (env.CAPCOMD_FAKE_HIBERNATE === "1" ? { hibernate: true } : {});
 
 function fakePlugin(o: { name: "sandbox-fake" | "sandbox-fake-host"; descriptor: SandboxDescriptor; description: string; native: NativeSandbox }) {
   const manifest = {
@@ -49,12 +52,12 @@ function fakePlugin(o: { name: "sandbox-fake" | "sandbox-fake-host"; descriptor:
 const fake = fakePlugin({
   name: "sandbox-fake", descriptor: FAKE_DESCRIPTOR,
   description: "The in-memory test sandbox: nothing runs, task commits are made locally (tests, the setup demo). Never shown to clients.",
-  native: { create: (env) => new FakeProvider({ ...(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" as const } : {}), ...faultFile(env) }) },
+  native: { create: (env) => new FakeProvider({ ...(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" as const } : {}), ...faultFile(env), ...parks(env) }) },
 });
 const fakeHost = fakePlugin({
   name: "sandbox-fake-host", descriptor: FAKE_HOST_DESCRIPTOR,
   description: "The host test sandbox: commands run on this machine (agent adapter tests with fake agent CLIs). Never shown to clients.",
-  native: { create: (env) => new FakeProvider({ hostExec: true, ...faultFile(env) }) },
+  native: { create: (env) => new FakeProvider({ hostExec: true, ...faultFile(env), ...parks(env) }) },
 });
 
 /** The in-memory fake runs no commands: the conformance suite's exec cases don't apply to it (§14.2). */

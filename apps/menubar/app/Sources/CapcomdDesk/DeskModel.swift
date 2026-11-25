@@ -28,6 +28,8 @@ package final class AgentSlice {
   package private(set) var bot: BotTraits? { didSet { Mutations.record("AgentSlice.bot", id: id) } }
   /// The approval this agent waits on, if any.
   package private(set) var approval: PendingApproval? { didSet { Mutations.record("AgentSlice.approval", id: id) } }
+  /// The question it asked and stopped on (capability agents.ask), as its card: asked of you or of an agent.
+  package private(set) var question: QuestionCardModel? { didSet { Mutations.record("AgentSlice.question", id: id) } }
   /// Whether the column shows its thread (DeskModel's warm set); a cold column is its header and box only.
   package private(set) var warm = false { didSet { Mutations.record("AgentSlice.warm", id: id) } }
   /// Its column is on screen (the tab is bracketed) / focused. Kept per agent so a scroll or a focus change re-renders
@@ -43,8 +45,22 @@ package final class AgentSlice {
   package private(set) var renameFailure: String? { didSet { Mutations.record("AgentSlice.renameFailure", id: id) } }
   /// The usage-limit pause its run is in, when its column shows it as an ask (the Needs you reel).
   package private(set) var limit: NeedsLimit? { didSet { Mutations.record("AgentSlice.limit", id: id) } }
+  /// Getting it ready or waking it (capability agents.setup), while it has reported no step of its own: the compact
+  /// line at its thread's foot (ThreadTail).
+  package private(set) var setupLine: SetupLineModel? { didSet { Mutations.record("AgentSlice.setupLine", id: id) } }
+  /// Its last setup, done: "Set up in 1:15 · 4 steps" above the first thing its turn did. Made from the setup's trail
+  /// (the agent lifecycle's `CapcomdStore.setupTrail`); nil without one.
+  package private(set) var setupRecord: SetupRecord? { didSet { Mutations.record("AgentSlice.setupRecord", id: id) } }
+  /// Its pane composer: placeholder, working, archived, the model chip (`CapcomdStore.composerState`).
+  package private(set) var composer: PaneComposerState? { didSet { Mutations.record("AgentSlice.composer", id: id) } }
+  /// Its composer's model menu is open.
+  package private(set) var modelMenuOpen = false { didSet { Mutations.record("AgentSlice.modelMenuOpen", id: id) } }
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
+  func set(composer c: PaneComposerState?) { if composer != c { composer = c } }
+  func set(modelMenuOpen o: Bool) { if modelMenuOpen != o { modelMenuOpen = o } }
   func set(limit l: NeedsLimit?) { if limit != l { limit = l } }
+  func set(setupLine l: SetupLineModel?) { if setupLine != l { setupLine = l } }
+  func set(setupRecord r: SetupRecord?) { if setupRecord != r { setupRecord = r } }
   func set(renaming r: RenamePlace?) { if renaming != r { renaming = r } }
   func set(renameFailure f: String?) { if renameFailure != f { renameFailure = f } }
   func set(goal g: GoalCard?) { if goal != g { goal = g } }
@@ -54,12 +70,16 @@ package final class AgentSlice {
   func set(_ h: ColumnHeader) { if header != h { header = h } }
   func set(bot b: BotTraits?) { if bot != b { bot = b } }
   func set(approval a: PendingApproval?) { if approval != a { approval = a } }
+  func set(question q: QuestionCardModel?) { if question != q { question = q } }
 }
 
 /// One agent's thread as its column shows it.
 @Observable @MainActor
 package final class ThreadSlice {
   package private(set) var entries: [ThreadEntry] = [] { didSet { Mutations.record("ThreadSlice.entries") } }
+  /// The entries as the thread draws them (`ThreadRow.rows`: calls in a row folded, thinking merged), made once per
+  /// change of the entries, not per body.
+  package private(set) var rows: [ThreadRow] = [] { didSet { Mutations.record("ThreadSlice.rows") } }
   package private(set) var pending: [PendingSteer] = [] { didSet { Mutations.record("ThreadSlice.pending") } }
   package private(set) var unavailable: DetailUnavailable? { didSet { Mutations.record("ThreadSlice.unavailable") } }
   @ObservationIgnored let agentId: String
@@ -71,7 +91,7 @@ package final class ThreadSlice {
   package private(set) var loadingEarlier = false { didSet { Mutations.record("ThreadSlice.loadingEarlier") } }
   init(agentId: String) { self.agentId = agentId }
   func set(entries e: [ThreadEntry], pending p: [PendingSteer], unavailable u: DetailUnavailable?, top t: Int? = nil, loadingEarlier l: Bool = false) {
-    if entries != e { entries = e; Self.trace?(agentId, e) }
+    if entries != e { rows = ThreadRow.rows(e); entries = e; Self.trace?(agentId, e) }
     if pending != p { pending = p }
     if unavailable != u { unavailable = u }
     if top != t { top = t }
@@ -347,6 +367,9 @@ package final class DeskModel {
       for h in cols where all || keys.contains(.agent(h.agentId)) {
         let s = agents[h.agentId] ?? added[h.agentId] ?? { let n = AgentSlice(h); added[h.agentId] = n; return n }()
         s.set(h)
+        setUp(s, runId: runId, h)
+        s.set(composer: store.paneComposer(runId: runId, agentId: h.agentId, name: h.name))
+        s.set(question: store.questionCard(runId: runId, agentId: h.agentId))
         if let bots { s.set(bot: bots[h.agentId]) }
         if let asks { s.set(approval: asks[h.agentId]) }
       }
@@ -588,6 +611,63 @@ package final class DeskModel {
     Task { await store.steer(runId: runId, agentId: agentId, body: body) }
   }
 
+  /// A message from the pane composer, with the skills attached to it (capability steer.skills).
+  package func steer(agentId: String, body: String, skills: [String]) {
+    guard let runId = runId(of: agentId) else { return }
+    Task { await store.steer(runId: runId, agentId: agentId, body: body, skills: skills) }
+  }
+
+  /// Stop, from the composer while the agent works: it is paused (its work committed and pushed; Resume continues it).
+  package func stopAgent(agentId: String) {
+    guard let runId = runId(of: agentId) else { return }
+    Task { await store.controlAgent(runId: runId, agentId: agentId, .pause) }
+  }
+
+  /// The pane composer's model menu: open or close it (one at a time).
+  package func toggleAgentModelMenu(_ agentId: String) {
+    let open = !(agents[agentId]?.modelMenuOpen ?? false)
+    for (id, a) in agents { a.set(modelMenuOpen: open && id == agentId) }
+  }
+  package func closeAgentModelMenu(_ agentId: String) { agents[agentId]?.set(modelMenuOpen: false) }
+
+  /// Its compact setup line (the trail, "Waking" after the 1 s delay) while it gets ready, and once a first start's
+  /// setup is done its record. The record's time is frozen when its line is seen to end; read later, it runs to the
+  /// last phase's start.
+  private func setUp(_ s: AgentSlice, runId: String, _ h: ColumnHeader) {
+    let a = store.runs[runId]?.agents[h.agentId]
+    let trail = store.setupTrail(runId: runId, agentId: h.agentId)
+    let lastAt = a?.setupMarks.last?.atMs
+    let steps = trail?.steps.map { t in
+      SetupLineModel.Step(line: t.line, state: t.state == .done ? .done : t.state == .now ? .now : .next, ms: t.ms, atMs: t.state == .now ? lastAt : nil)
+    } ?? []
+    let line = store.preparing(runId: runId, agentId: h.agentId, name: h.name)
+      .map { SetupLineModel.of($0, name: h.name, waking: a?.continuedAtMs != nil, steps: steps, showsAtMs: a?.wakingShowsAtMs) }
+    let wasSettingUp = s.setupLine != nil
+    s.set(setupLine: line)
+    // A wake's record goes above its turn's first row, which the thread knows: only a first start's is made here.
+    guard line == nil, a?.continuedAtMs == nil, let trail, let first = a?.setupMarks.first?.atMs, !trail.steps.contains(where: { $0.state == .now }) else {
+      if line != nil || a?.continuedAtMs != nil { s.set(setupRecord: nil) }
+      return
+    }
+    if s.setupRecord != nil { return }
+    let done = steps.filter { $0.state == .done }
+    let record = wasSettingUp ? SetupRecord(elapsedMs: trail.elapsedMs, steps: done)
+      : SetupRecord(elapsedMs: max(0, (lastAt ?? first) - first), steps: done.enumerated().map { i, st in i == done.count - 1 ? .init(line: st.line, state: .done) : st })
+    s.set(setupRecord: record)
+  }
+
+  /// Restore, from an archived run's composer (offered where `PaneComposerState.canRestore`): its agents take messages
+  /// again.
+  package func restoreRun(agentId: String) {
+    guard let runId = runId(of: agentId) else { return }
+    Task { await store.restoreRun(runId: runId) }
+  }
+
+  /// The model or effort for the agent's next turn (sent with its next message, where the daemon takes it).
+  package func pickNextTurn(agentId: String, model: String? = nil, effort: String?? = nil) {
+    store.setNextTurn(agentId: agentId, model: model.map { .some($0) }, effort: effort)
+  }
+
   package func retrySteer(agentId: String, _ p: PendingSteer) {
     guard let runId = runId(of: agentId) else { return }
     Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) }
@@ -597,6 +677,13 @@ package final class DeskModel {
   package func decide(_ approvalId: String, _ d: ApprovalDecision) {
     if let a = store.approvals[approvalId], let id = store.waitingAgent(a) { needs.answered(agentId: id) }
     Task { _ = await store.decide(approvalId, d) }
+  }
+
+  /// Answer a question from its card (capability agents.ask): the option's words go to the asker as its answer.
+  package func answer(_ card: QuestionCardModel, with text: String) {
+    guard let runId = agents[card.askerId]?.header.runId else { return }
+    needs.answered(agentId: card.askerId)
+    Task { await store.answerQuestion(runId: runId, agentId: card.askerId, approvalId: card.approvalId, answer: text) }
   }
 }
 

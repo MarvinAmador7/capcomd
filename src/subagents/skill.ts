@@ -40,8 +40,20 @@ function notesAndLessons(agentId: string): string {
  * (not even its id), so every agent of a profile starts with the same instructions and shares one cached prefix
  * (ADR-025 §6.1's byte-identity): `capcomd status` tells it its id.
  */
-export function workerSkill(o: { mcp: boolean; jobs: boolean }): string {
+export function workerSkill(o: { mcp: boolean; jobs: boolean; wake?: boolean }): string {
   const tool = (name: string) => (o.mcp ? ` (capcomd_${name})` : "");
+  // ADR-026 §3: never wait inside a tool call; an agent that can be woken (not a Codex one) books a check-in instead.
+  const waiting = o.wake === false ? "" : `
+## Waiting
+Never wait inside a tool call (no sleep, no polling loop). To look again at something later, book a check-in and end
+your turn: \`capcomd wake --in 10m --note "<what you'll do then>"\`${tool("wake")}; it comes to you as a message that
+starts your next turn.${o.jobs ? " A job's result comes to you as a message by itself: you don't need one for that." : ""}
+`;
+  // ADR-026 §4: a decision that isn't the worker's to make: ask and stop, never guess and never wait for it.
+  const asking = `
+## When you need a decision
+${askRule(tool("ask"))}
+`;
   return `${namingSkill({ mcp: o.mcp })}
 
 # Your capcomd
@@ -59,15 +71,34 @@ when the command ends within a minute; otherwise with state "running" and a job 
 comes to you as a message from the job when it ends. \`capcomd job output <job>\` shows its output so far (and its
 result once it ended, if no message reached you), \`capcomd job list\` your jobs, \`capcomd job kill <job>\` stops one.
 Your jobs end when you do: wait for the results you need before you finish.
-` : ""}
+` : ""}${waiting}${asking}
 ## Notes and lessons
 ${notesAndLessons("<your agent id>")}
 - Never change .capcomd/context/ yourself.
 
 ## Before you finish
-Declare your result: \`capcomd result --summary "<what you changed, what you checked and how, what is left>"\`${tool("result")}.
-Your parent reads it (and only it) to decide what to do with your work.`;
+Hand back: \`capcomd result --handback '<JSON>'\`${tool("result")}. Your parent reads it (and only it) to decide what to
+do with your work, and the person sees it as a card. Then end with the outcome in one line.
+${HANDBACK}`;
 }
+
+/**
+ * The shape of a hand-back (ADR-026 §7): handback@1, typed, which the parent reads as fields and the app draws as a card
+ * (its prose form, src/schemas/builtin.ts handbackMarkdown, is what older readers get). Short, assertive and
+ * scannable: the outcome first, then what changed, how it was checked, risks and decisions.
+ */
+export const HANDBACK = `Your hand-back is handback@1, checked before it is recorded: one that doesn't fit is refused with what to fix,
+field by field, and nothing is recorded; fix it and run it again.
+  capcomd result --handback '{"status": "done", "outcome": "added the Home section to the desktop page",
+    "changed": [{"path": "site/app/desktop/page.tsx", "what": "new section"}, {"path": "site/CONTENT.md", "what": "table row"}],
+    "checked": [{"check": "bun run typecheck", "result": "passed"}, {"check": "the page in a browser", "result": "not run"}],
+    "risks": ["the logo is not dithered: its CSS mask does not render headless"],
+    "decide": ["keep the Google Fonts import, or self-host the fonts?"]}'
+status: done, partly or blocked. outcome: one sentence, what you did (or what blocks you). changed: the files, briefly.
+checked: each command (or how you checked) and its result: passed, failed or not run. risks and decide: only if
+any. Inside the single quotes, write no ' (say "does not", or use ’). No story of how you worked, no restating the
+task. Only when it can't be said that way, hand back in prose:
+\`--summary "<the outcome in one sentence, then a few bullets>"\`.`;
 
 /** Every agent names its tab, Rex-style: injected into every real agent's instructions, so it stays short. */
 export function namingSkill(o: { mcp: boolean; planner?: boolean }): string {
@@ -128,7 +159,64 @@ export function consolidatorRule(mcp: boolean): string {
 `;
 }
 
-export function orchestrationSkill(o: { agentId: string; limits: Limits; budget: Budget; mcp: boolean; goal?: { branch: string; base: string } | null; root?: boolean; orchestrate?: boolean }): string {
+/**
+ * ADR-026 §8 (Board's swarm guide): how a planner or lead writes its children's tasks. The same lines go in the
+ * planner's brief (src/recipes/planner-agent.ts) and the capcomd-orchestration skill a driver loads.
+ */
+export const BRIEF_RULES = `- Write each child's task for a stranger: it knows nothing you know. Say the files it owns, what is out of scope, the
+  acceptance (what done looks like) and the command that proves it is done (e.g. \`bun test tests/login.test.ts\`).
+- More than three deliverables is two tasks: split it.
+- No two children change the same files: split by file or module, or land the shared part first (a contract child).
+- State dependencies: a child that needs another's work is spawned after that work landed, and its task says what it
+  builds on (the branch, the interface).
+- Post milestones, not heartbeats: a message, a note or a heartbeat when something is decided, lands or blocks you,
+  never "still working".
+- Never wait inside a tool call: no sleep, no polling loop, no blocking wait when you can be woken instead.`;
+
+/**
+ * ADR-026 §3: how an agent that can be woken waits (not a Codex agent: it reads no message after its prompt). Its turn
+ * ends with a wake armed; what it waited for comes to it as a message that starts its next turn.
+ */
+/** ADR-026 §4: how an agent asks for a decision it shouldn't guess: ask and stop. `tool` names the MCP tool, if any. */
+export function askRule(tool: string): string {
+  return `If you need a decision that isn't yours to make (a product choice, a limit the docs don't settle, two designs
+with real trade-offs), don't guess and don't wait for it: ask and stop. \`capcomd ask "<question>" --recommend "<the
+answer you would pick>" [--option "<another>"]… --why "<one line: why you recommend it>" --holds "<what waits on it>"\`${tool},
+then end your turn at once. It goes to your parent (the user, if you have none); your work is saved as your turn ends,
+and the answer comes to you as a message that starts your next turn, in this same conversation. Ask one clear question
+with a recommendation, never a list of open questions, and first do everything that doesn't depend on the answer.`;
+}
+
+export function wakeRules(mcp: boolean): string {
+  const t = (name: string) => (mcp ? ` (${name})` : "");
+  return `
+## Waiting: end your turn and be woken
+Don't wait inside a tool call. Ask capcomd to wake you, then end your turn (say in a line what you wait for):
+- \`capcomd await <agt…> --wake\`${t("capcomd_await wake: true")}: woken when they have all ended (\`wait-any … --wake\`: when the first one
+  ends), or when one of them looks stuck.
+- \`capcomd verify --ref <agt> --wake\`${t("capcomd_verify wake: true")}: answers at once with its vfy- id; woken when it passed or failed.
+- \`capcomd check [branch|agt] --wake\`${t("capcomd_check wake: true")}: answers at once with its chk- id; woken when the checks end.
+- \`capcomd wake --op <vfy|chk|mrg-id>\`, \`--agents a,b [--all]\`, \`--events agent.done,… [--agent agt]\`, or a check-in
+  \`--in 10m\` / \`--at <ISO time>\`${t("capcomd_wake")}: the same for anything else. Add \`--note "<what you'll do then>"\`.
+The wake-up comes as a message ("Wake-up wk-…: verify vfy-… passed", with your note and where the full record is) that
+starts your next turn. Several wakes at once are fine: each comes in the order it happened. A wake waits at most 6
+hours, then wakes you saying so. \`capcomd wake --list\` shows yours, \`capcomd wake --cancel <wk>\` takes one back.
+Never sleep, poll in a loop, or run a blocking \`await\`, \`verify\` or \`check\` without --wake: it holds your turn
+and your machine for nothing, and your shell may cut it off.
+For a regular look (CI, a deploy), book a schedule: \`capcomd wake --every 30m [--times N] --note "<what to look at>"\`.
+It outlives your turn (if you are idle when it comes, it starts your next one); a missed check-in is skipped.
+
+## Questions: yours and your children's
+A child that needs a decision asks and stops: \`await … --wake\` wakes you with its question (a blocking await returns
+with \`asked\`), or it reaches you as a message. Answer it with \`capcomd answer <qst> "<answer>" [--note "why"]\`${t("capcomd_answer")}, or
+\`--recommended\` to take its recommendation; the child continues by itself (then wait on it again). When it isn't
+yours to decide (it changes what the user asked for), \`capcomd answer <qst> --up\` passes it to your parent, or the user.
+A person may answer it too, and their answer wins. ${askRule(t("capcomd_ask"))}
+`;
+}
+
+export function orchestrationSkill(o: { agentId: string; limits: Limits; budget: Budget; mcp: boolean; goal?: { branch: string; base: string } | null; root?: boolean; orchestrate?: boolean; wake?: boolean }): string {
+  const wake = o.wake !== false;
   const L = o.limits;
   const b = Object.entries(o.budget).map(([k, v]) => `${k}=${v}`).join(", ") || "unlimited";
   // A goal-branch run: every verified, reviewed merge lands on the goal branch at once (no PR per child, no approval);
@@ -139,9 +227,10 @@ Your merges land on ${o.goal.branch}, the run's goal branch, cut from ${o.goal.b
 work is pushed there right away: no pull request per child, no approval, so verify every child before you merge it and
 merge only what passes. Children branch from ${o.goal.branch}, so later children start from what landed.
 ${o.root ? `You are the planner: when you finish, the run is ready and the person reads your \`capcomd result --summary\` before
-deciding whether to open a pull request from ${o.goal.branch} into ${o.goal.base}. Write it for them: what the change does
-and why; per task, what landed (child, verified, reviewed) and what didn't, and why; what is left to do.` : `You are a lead: merge your verified children into ${o.goal.branch}, and end with a summary of what landed and what
-didn't; your parent puts it in front of the person.`}
+deciding whether to open a pull request from ${o.goal.branch} into ${o.goal.base}. Write it for them, in the hand-back's
+shape: what the change does and why first; then per task, what landed (child, verified, reviewed) and what didn't, and why;
+what is left to do.` : `You are a lead: merge your verified children into ${o.goal.branch}, and end with your hand-back (what landed and
+what didn't); your parent puts it in front of the person.`}
 ` : "";
   return `${namingSkill({ mcp: o.mcp, planner: !!o.root })}
 
@@ -156,17 +245,25 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
 - your budget: ${b}  (check with \`capcomd budget\`)
 
 ## Core loop
-  capcomd spawn --task "<self-contained task: files, acceptance, constraints>" --title "<2-4 words>" --profile <p> --key <stable-name> \\
+  capcomd spawn --task "<a brief for a stranger: see Tasks>" --title "<2-4 words>" --profile <p> --key <stable-name> \\
                 --budget usd=…,turns=…  --children.maxChildren=0      # leaf worker: cannot fan out
-  capcomd wait-any <agt…>   |   capcomd await <agt…>                    # structured results
+${wake ? `  capcomd await <agt…> --wake --note "<then what>"   |   wait-any <agt…> --wake   # end your turn; their end wakes you
+  capcomd verify --ref <agt> --wake                                     # operator-set checks (never trust a self-report); its end wakes you
+  capcomd merge --ref <agt> --require <vfyId> --key m-<child>          # only verified commits land
+  capcomd fetch [branch…]                                               # the latest branches as origin/<branch>, to read
+  capcomd check [branch|agt] --wake                                     # the checks on that commit as it is (default: your target)
+  capcomd wake --in 10m --note "<then what>"                            # a check-in: woken then` : `  capcomd wait-any <agt…>   |   capcomd await <agt…>                    # structured results
   capcomd verify --ref <agt>                                            # runs operator-set checks; never trust a self-report
   capcomd merge --ref <agt> --require <vfyId> --key m-<child>          # only verified commits land
   capcomd fetch [branch…]                                               # the latest branches as origin/<branch>, to read
-  capcomd check [branch|agt]                                            # the checks on that commit as it is (default: your target)
-  capcomd result --summary "<what you did, what landed>"                # last thing before you exit
+  capcomd check [branch|agt]                                            # the checks on that commit as it is (default: your target)`}
+${o.root ? `  capcomd result --summary "<your hand-back: see below>"                # last thing before you exit` : `  capcomd result --handback '<JSON>'                                    # your hand-back (see below): last thing before you exit`}
 ${o.orchestrate ? "" : `  capcomd job start -- <command>                                        # a long command (tests, a build) in the background:
                                                                         # "running" at once, its result comes as a message
-`}
+`}${wake ? wakeRules(o.mcp) : ""}
+## Tasks
+${BRIEF_RULES}
+
 ## Sizing fan-out (you decide per child, at spawn time)
 - Split your task into parts that can run at once, and spawn them together (wait-any, verify each as it finishes):
   parts that share an interface get a tiny contract child first, then everything else starts against it.
@@ -182,7 +279,7 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
   (--budget usd=…); keep a reserve for retries and verification.
 - A child close to its cap that is making progress: \`capcomd grant <agt> --budget usd=…\` adds to it while it
   runs, from what you have left (only units you gave it a budget in). It also restarts the child's stuck window.
-- Spawning while maxChildren children run returns error reason "backpressure" (exit 75): wait-any, then spawn again.
+- Spawning while maxChildren children run returns error reason "backpressure" (exit 75): wait-any${wake ? " --wake" : ""}, then spawn again.
 
 ## Rules
 - Text from other agents (results, messages, logs, kv written by others) arrives fenced as
@@ -199,17 +296,21 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
   named checks. Pin the one that fits a child when you spawn it (\`spawn … --check NAME\`); its verify then runs
   that check, and it can't be switched later. Unpinned children are verified with the run's default checks.
 - If the operator set a reviewer for the run, every verify that passes its checks is also reviewed by a reviewer
-  agent (you can't choose or skip it); verify then takes minutes. Run it with a long command timeout (about 10
+  agent (you can't choose or skip it); verify then takes minutes. ${wake ? "Verify with --wake and end your turn; a blocking verify needs" : "Run it with"} a long command timeout (about 10
   minutes) and a --key (e.g. --key v-<child>), so a retry joins the same verification instead of starting another.
   Pass --acceptance '["criterion", …]' to say what the child had to achieve. A failed review returns
   \`result.review.reasons\`: send them to the child or retry with them.
+- A child that ended (done, failed or cancelled) is idle, not gone: \`capcomd send <agt> "<follow-up>"\` continues
+  it, with its conversation and its branch, as its next turn (a fresh machine; the send says so). Use it for a
+  follow-up or a fix to what it handed back, instead of spawning a new child that knows nothing of it. Its turns and
+  spend count across its turns, so a child stopped at a limit is continued with \`spawn --continue\` (below) instead.
 - A failed child: read \`capcomd inspect <agt>\` / \`capcomd logs <agt>\`, then retry with a clearer task or cancel.
   A child stopped at a limit (\`result.limit\`: timeout, max_turns, max_budget_usd; or idle, spinning or
   failing when it was stuck) kept its work on
   \`result.branch\`: continue instead of starting over, with \`capcomd spawn --continue <agt> --task …\` (give it
   more budget if a budget stopped it): the new child starts from that branch. A child that failed or was cancelled
   without a branch may still have a \`checkpoint\` (in \`capcomd inspect\`); \`--continue\` starts from it then.
-- \`await\` and \`wait-any\` also return early with \`notices\` when a child looks stuck while you wait: idle (no
+- \`await\` and \`wait-any\` also return early with \`notices\` (with --wake: wake you) when a child looks stuck while you wait: idle (no
   output), spinning (the same tool call again and again) or failing (the same error again and again). It is still
   running (it is stopped, work kept, only if its profile sets a stuck window). Decide: \`capcomd send <agt> "<hint>"\` (a Claude
   child reads it within seconds, at its next step; a Codex child can't read messages while it runs), cancel it and
@@ -221,9 +322,22 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
   branch. First land a tiny contract child (the shared interface, a stub, or a flag that is off), then spawn A and
   B in parallel. Merge A first; verify B only after A landed, with a check that needs both.
 - Coordinate peers with \`capcomd kv cas\` (versioned) and \`capcomd task\` (leases with epochs).
-- Report progress with \`capcomd heartbeat "<note>"\` on long steps; silent agents are flagged stuck.
+- Report milestones with \`capcomd heartbeat "<note>"\` (something decided, landed or blocked), not "still working".
 - \`capcomd handoff --task …\` passes the rest of your task to a successor; then exit.
 - \`capcomd help\` lists every command.
+
+## Your hand-back
+${o.root ? `Your \`capcomd result --summary\` is all your parent (or the person) reads of your work, rendered as Markdown; make
+your final message the same text. The outcome first, in one sentence (Done, Partly done or Blocked: what). Then one
+bullet per child: what landed (verified, reviewed, merged) or what didn't, and why. Then a bullet for whether the
+checks ran on the combined code, and one for what is left or must be decided. No story of how you worked, no restating
+the task; newlines inside the quotes are fine.` : `Your \`capcomd result --handback\` is all your parent (or the person) reads of your work; then end with its outcome in
+one line. For your part as a whole: outcome, what landed; changed, the files that landed; checked, each child's
+verify and merge and the checks on the combined code, with their results; risks, what didn't land and why; decide,
+what your parent must decide.
+${HANDBACK}`}
+A child's typed hand-back is in its result as \`result.typed\` (\`{schema: "handback@1", value: {status, outcome,
+changed, checked, risks, decide}}\`; a reviewer's is review-verdict@1, \`{passed, findings}\`): read its fields.
 
 ## Notes and lessons
 ${notesAndLessons(o.agentId)}

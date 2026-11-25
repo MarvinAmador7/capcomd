@@ -20,13 +20,13 @@ import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies, providerForAgent, providerNamed } from "../dependencies";
 import { agentIdleLifetime, withSandbox } from "../providers/run-sandbox";
-import { reportMachineDeleted } from "../providers/machine-audit";
-import { forgetMachine, machineNameFor, recordAgentMachine } from "../providers/machines";
+import { reportMachineDeleted, type DeleteCause } from "../providers/machine-audit";
+import { forgetMachine, machineNameFor, recordAgentMachine, recordParked } from "../providers/machines";
 import { sandboxCaps, sandboxName } from "../providers/registry";
 import { slotsFor } from "../providers/capacity";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
-import { runAgent, stoppedAt } from "../agents/runner";
-import { activityReporter } from "../agents/activity";
+import { runAgent, SessionMissingError, stoppedAt } from "../agents/runner";
+import { activityReporter, setupReporter } from "../agents/activity";
 import { noteStep } from "../jobs/service";
 import { itemWriter } from "../agents/thread-store";
 import { heartbeatEveryMs } from "../subagents/results";
@@ -37,7 +37,7 @@ import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord, type ProfileMachine } from "../profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { env as envVar } from "../utils/env";
-import type { SandboxProvider } from "../providers/sandbox";
+import type { SandboxProvider, VmId } from "../providers/sandbox";
 import type { MergeConfig } from "../merge/config";
 import { admitStart, agentVmIdemKey, agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
 
@@ -61,8 +61,11 @@ async function renewWorkerLease(db: RawAccess, workerId: string, until: number):
   await db.execute(WORKER_LEASE_SQL);
   await db.execute("INSERT INTO worker_lease (worker_id, until) VALUES (?, ?) ON CONFLICT(worker_id) DO UPDATE SET until = MAX(worker_lease.until, excluded.until)", workerId, until);
 }
-/** When the worker's VM is due to be reaped: its lifetime after creation, or after its last renewal if later. */
+/** When the worker's VM is due to be reaped: its lifetime after creation, or after its last renewal if later; a parked
+ *  one's (ADR-026 §6) when its retention runs out. */
 async function workerDeadline(db: RawAccess, workerId: string, ctx: Record<string, unknown>): Promise<number> {
+  const parked = ctx.parked as { deleteAt?: unknown } | undefined;
+  if (parked && Number.isFinite(Number(parked.deleteAt))) return Number(parked.deleteAt);
   const made = Number(ctx.createdAt ?? 0) + Number(ctx.ttlMs ?? 3_600_000);
   try {
     await db.execute(WORKER_LEASE_SQL);
@@ -205,7 +208,7 @@ function recordWorkerVm(c: any, o: { idemKey: string; sandbox: string | null | u
 // daemon's audit (sandbox.resource_deleted): its agent ended (run_ended), or its idle lifetime ran out.
 // A destroy the provider didn't answer (an outage) doesn't fail the drain: the worker stays "draining" and its own alarm
 // (`retryDrain`) tries again with backoff until the machine is gone; the machines ledger keeps its record meanwhile.
-async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "idle_lifetime" = "run_ended", retry = 0): Promise<{ destroyed: boolean; retrying?: boolean }> {
+async function drainWorkerImpl(c: any, workerId: string, cause: Exclude<DeleteCause, "action"> = "run_ended", retry = 0): Promise<{ destroyed: boolean; retrying?: boolean }> {
       const workerLife = await getLifecycle(c.db, workerId);
       if (!workerLife) return { destroyed: false };
 
@@ -285,8 +288,81 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
       return { destroyed: true };
 }
 
+/** One line in a spawned agent's log (its `capcomd logs`), best effort. */
+function agentLog(c: { client: () => any }, runId: string | undefined, agentId: string, line: string): void {
+  if (!runId || !agentId.startsWith("agt-")) return;
+  Promise.resolve().then(() => c.client().scope.getOrCreate([runId]).appendLog({ agentId, stream: "agent", lines: [line] })).catch(() => {});
+}
+
+/**
+ * ADR-026 §6: park this worker's machine when its agent's turn ended (a planner or lead; the caller decides): its delete
+ * deadline moved to the retention (boxd's setDeleteAfter, which fires while it is hibernated; Docker's ledger, which the
+ * sweep enforces), then hibernated (boxd `hibernate`, never `pause`; `docker stop`), which also stops boxd's keepalive.
+ * The worker is `parked` and the machines ledger says so, with the machine's key, for the agent's next attempt to wake
+ * (src/agents/continue.ts `parkedMachine`). Its own alarm deletes the machine when the retention runs out. A parked
+ * machine holds no memory slot. Never throws: `parked: false` (with why) leaves the machine to the caller to destroy.
+ */
+async function parkWorkerImpl(c: any, p: { workerId: string; retentionSeconds: number; runId?: string }): Promise<{ parked: boolean; deleteAt?: number; reason?: string }> {
+  const life = await getLifecycle(c.db, p.workerId);
+  if (!life) return { parked: false, reason: "no worker" };
+  const ctx: WorkerContext & { idemKey?: string; sandbox?: string } = JSON.parse(life.context);
+  if (life.state === "parked") return { parked: true, ...(ctx.parked ? { deleteAt: ctx.parked.deleteAt } : {}) };
+  const at = Date.now();
+  const deleteAt = at + Math.max(1, Math.floor(p.retentionSeconds)) * 1000;
+  const event = { type: "PARK" as const, at, deleteAt };
+  const snap = workerMachine.resolveState({ value: life.state, context: ctx });
+  if (!snap.can(event)) return { parked: false, reason: `its worker is ${life.state}` };
+  if (!ctx.vmId || !ctx.idemKey) return { parked: false, reason: "it has no machine" };
+  const provider = providerNamed(ctx.sandbox);
+  if (typeof provider.hibernate !== "function" || typeof provider.wake !== "function") return { parked: false, reason: "its place doesn't park machines" };
+  try {
+    await provider.extendTtl?.(ctx.vmId, Math.max(1, Math.floor(p.retentionSeconds)));
+    await provider.hibernate(ctx.vmId);
+  } catch (e) {
+    return { parked: false, reason: redactShapes(String((e as Error)?.message ?? e)).slice(0, 300) };
+  }
+  const [next] = transition(workerMachine, snap, event);
+  await c.db.transaction(async (tx: RawAccess) => {
+    await transitionLifecycle(tx, p.workerId, "worker", next.value as string, next.context, event, `worker-${p.workerId}-park-${at}`);
+  }, { name: "parkWorker" });
+  let place: string | undefined = ctx.sandbox;
+  if (!place) try { place = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX */ }
+  const key: string[] = Array.isArray(c?.key) ? c.key.map(String) : [];
+  const runId = p.runId ?? key[0];
+  if (runId) recordParked({ idemKey: ctx.idemKey, sandbox: place, runId, agentId: p.workerId, workerKey: key, ttlSeconds: p.retentionSeconds, parked: { at, deleteAt, vmId: ctx.vmId, idemKey: ctx.idemKey } });
+  // Parked holds no memory slot (Docker counts running containers; this one is stopped).
+  slotsFor(place)?.release(machineNameFor(ctx.idemKey));
+  await c.schedule.at(deleteAt, "reapIfExpired", { workerId: p.workerId });
+  return { parked: true, deleteAt };
+}
+
+/**
+ * ADR-026 §5 path 2, in the agent's next attempt's worker (`params.parked`, before it provisions): the parked machine
+ * is handed over by the worker that parked it (which then owns nothing: `released`) and woken. Returns its key, or null
+ * (it was gone, or wouldn't wake: one line in the agent's log, the machine deleted, and the attempt gets a fresh one:
+ * path 3, its saved session restored).
+ */
+async function takeParked(c: any, o: { workerId: string; runId: string; provider: SandboxProvider; sandbox: string | null; parked: { idemKey: string; vmId: string; workerKey: string[] } }): Promise<{ idemKey: string; vmId: string } | null> {
+  const name = machineNameFor(o.parked.idemKey);
+  const took = await c.client().worker.getOrCreate(o.parked.workerKey).handOver({ workerId: o.workerId, to: (c.key ?? []).join("/") }).catch(() => null) as { vmId: string; idemKey: string; sandbox: string | null } | null;
+  if (!took) { agentLog(c, o.runId, o.workerId, `[capcomd] its parked machine ${name} was gone: a fresh one, its conversation restored`); return null; }
+  const samePlace = (took.sandbox ?? null) === (o.sandbox ?? null) || !took.sandbox || !o.sandbox;
+  try {
+    if (!samePlace) throw new Error(`it is on ${took.sandbox}, this attempt runs on ${o.sandbox}`);
+    await o.provider.wake!(took.vmId);
+    return { idemKey: took.idemKey, vmId: took.vmId };
+  } catch (e) {
+    agentLog(c, o.runId, o.workerId, `[capcomd] its parked machine ${name} couldn't be woken (${redactShapes(String((e as Error)?.message ?? e)).slice(0, 200)}): a fresh one, its conversation restored`);
+    await providerNamed(took.sandbox).destroy(took.vmId).catch(() => {});
+    forgetMachine(name);
+    return null;
+  }
+}
+
 export type PushBranchParams = {
   workerId: string; taskId: string; epoch: number; branch: string; runId?: string; parentAgentId?: string | null; target?: string; rework?: boolean; resumed?: boolean;
+  /** ADR-026 §1: a message woke this idle agent into this attempt: it continues its conversation (§5). */
+  continued?: boolean;
   /** Legacy runs have no scope actor and use the daemon settings. */
   scopeBacked?: false;
   /** `spawn --continue`: the stopped agent whose work this branch starts from. */
@@ -317,6 +393,30 @@ export type PushBranchParams = {
   /** What its profile pinned for its machine (as provisionWorker got it): the same sandbox, environment and size. */
   machine?: ProfileMachine;
 };
+
+/**
+ * ADR-026 §5: what a continued attempt's runner is given: the scope's record of the agent (its messages after its
+ * cursor, its thread, its last hand-back), its saved session to restore in its machine, and the fallback's thread line.
+ */
+function continueHooks(scope: any, o: { runId: string; agentId: string; provider: SandboxProvider; machineId: VmId; fromThread?: boolean; parked?: boolean; onLog?: (lines: string[]) => void }): import("../agents/continue").ContinueHooks {
+  return {
+    load: async () => (await scope.continuation({ agentId: o.agentId })) ?? null,
+    // `fromThread`: its saved session was restored but its CLI couldn't find it (SessionMissingError): path 4 straight away.
+    // `parked` (§5 path 2): its woken machine still has the session file: nothing restored, unless it isn't there.
+    restore: async ({ home, cwd }) => {
+      if (o.fromThread) return null;
+      const S = await import("../sessions");
+      const at = { runId: o.runId, agentId: o.agentId, provider: o.provider, machineId: o.machineId, home, cwd, ...(o.onLog ? { onLog: o.onLog } : {}) };
+      return (o.parked ? await S.parkedSession(at) : null) ?? S.restoreSession(at);
+    },
+    ...(o.parked ? { parked: true } : {}),
+    pickedUpFromThread: async () => {
+      const { PICKED_UP_TEXT } = await import("../agents/continue");
+      const a = await scope.getAgent({ agentId: o.agentId }).catch(() => null);
+      await scope.threadNote({ agentId: o.agentId, id: `itm-${o.agentId}-picked-up-e${a?.epoch ?? 0}`, text: PICKED_UP_TEXT });
+    },
+  };
+}
 
 /**
  * The agent's run and push (provision is done): the pushBranch action, and (ADR-022) the worker's own workflow, which
@@ -352,6 +452,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   const { provider, sandbox } = await providerForAgent(scopeRunId, own ?? (workerContext as { sandbox?: string }).sandbox ?? null);
   const runSource = withSandbox(process.env, sandbox);
   const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
+  // ADR-026 §5 path 2: this attempt's machine is the agent's parked one, woken (its checkout and session are there).
+  const woke = !!(workerContext as WorkerContext).woke && !!params.continued;
   // The run's idle machine lifetime: the VM's delete deadline, renewed while the agent runs.
   const lifeSeconds = await agentIdleLifetime(scopeRunId, own, sandbox);
 
@@ -396,6 +498,11 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(scopeRunId);
   const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine, cfg?.remote);
   recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
+  // Getting it ready is its activity (kind setup) until its CLI's first event: its machine, its workspace (the
+  // repository's copy as it goes), its CLI. A spawned agent's only (its row is where the activity lives).
+  const prep = isRealAgent(setup.kind) && params.runId && workerId.startsWith("agt-")
+    ? (() => { const s = (c as any).client().scope.getOrCreate([params.runId]); return setupReporter((a) => s.setActivity({ agentId: workerId, activity: a })); })() : null;
+  prep?.report({ phase: "machine" });
   const { id: vmId } = await provider.ensure({
     idemKey: vmKey,
     isolated: true,
@@ -419,6 +526,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   let limit: string | undefined; // stopped at a limit: the branch holds the work so far
   let resetAt: number | undefined; // limit "quota": when the provider said the usage limit resets (ms epoch)
   let orchestrateWrites: import("../agents/runner").OrchestrateWrites | undefined; // §16.1: an orchestrate agent wrote files (it fails)
+  let sleptMs = 0; // ADR-026: time its CLI slept between turns (a wake pending): not wall time
   let adopted = false;
   const agent = setup.kind;
   // Takeover: a push that reached the remote before its holder died is adopted, not redone.
@@ -429,7 +537,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   const pushStarted = Date.now();
   const fakeDelay = Number(process.env.CAPCOMD_FAKE_PUSH_DELAY_MS ?? 0);
   if (adopted) {
-    // nothing to run: the branch is already on the remote
+    // nothing to run: the branch is already on the remote (and nothing was set up: no setup line stays behind)
+    if (prep) { prep.stop(); await (c as any).client().scope.getOrCreate([params.runId]).setActivity({ agentId: workerId, activity: null }).catch(() => {}); }
   } else if (isRealAgent(agent)) {
     // Real worker: the agent edits the repo in the VM, commits with trailers, pushes the task branch.
     if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
@@ -455,9 +564,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     // Its thread (harness.v1 thread items), written in order; flushed before the agent is reported finished. Agents
     // that may spawn get one too: the spool pump forwards only their capcomd calls, not their own events.
     const items = scope ? itemWriter(scope, workerId) : null;
-    const res = await runAgent(adapter, provider, vmId, {
+    const attempt = (fromThread: boolean) => runAgent(adapter, provider, vmId, {
       runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
-      goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}),
+      goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.continued ? { continued: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}),
       // A consolidator works as a reporting agent does (a read-only checkout of the target; nothing kept or pushed), with its own prompt.
       ...(params.report || params.consolidate ? { report: true } : {}), ...(params.consolidate ? { consolidate: params.consolidate } : {}),
       ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
@@ -469,6 +578,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       // agent (boxd) the same from its project's template, when it booted from one (the runner reads its marker).
       warmTemplate: sandboxCaps(runSource).isolation === "container" ? true : sandboxCaps(runSource).isolation === "vm" ? "vm" : false,
       ...(templates ? { onWorkspace: templates.onWorkspace } : {}),
+      // ADR-026 §5: a continued attempt picks up its conversation: its saved session (path 3), else its thread (path 4).
+      ...(params.continued && scope ? { continuation: continueHooks(scope, { runId, agentId: workerId, provider, machineId: vmId, fromThread, ...(woke ? { parked: true } : {}), onLog: (lines) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } }) } : {}),
+      ...(woke ? { parked: true } : {}),
       heartbeatMs: beatEvery,
       vmTtlSeconds: lifeSeconds,
       onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
@@ -487,8 +599,25 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
         raised = n?.kind ?? null;
         if (n || only) scope?.notice({ agentId: workerId, notice: n, ...(only ? { only } : {}) }).catch(() => {});
       },
-      ...(activity ? { onEvent: activity.event } : {}),
+      // Its first event ends its setup: its own activity takes over.
+      ...(activity ? { onEvent: (ev: import("../agents/types").AgentEvent) => { prep?.stop(); activity.event(ev); } } : {}),
+      ...(prep ? { onSetup: prep.report } : {}),
       ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
+      // ADR-026 §3: its mailbox, pushed (the scope's messagesChanged), with the durable delivery cursor.
+      ...(scope ? { messages: {
+        pull: async (after: number) => (await scope.pullMessages({ agentId: workerId, after })) as { seq: number; from: string; body: string; skills?: AttachedSkill[]; nextTurn?: boolean }[],
+        delivered: (seq: number) => { scope.messagesDelivered({ agentId: workerId, seq }).catch(() => {}); },
+        subscribe: (onChange: () => void) => {
+          try {
+            const conn: any = scope.connect();
+            conn.on("messagesChanged", (d: { to?: unknown }) => { if (!Array.isArray(d?.to) || d.to.includes(workerId)) onChange(); });
+            // A (re)connect may have missed a push: look once.
+            conn.onOpen?.(onChange);
+            conn.onError?.(() => {});
+            return () => { try { void conn.dispose?.(); } catch { /* gone */ } };
+          } catch { return () => {}; } // no push: the runner's slow look delivers
+        },
+      } } : {}),
       // Every agent's tool calls, refusals and words; one with the in-VM capcomd also gets a `[capcomd] <op> → …` line per
       // capcomd call from its spool pump (driver.ts).
       ...(scope ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
@@ -517,7 +646,11 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
       // Read from the agent row isCancelled just fetched (the runner asks right after it), so no extra actor call per poll.
       ...(scope ? { isPaused: async () => pauseAsked } : {}),
-    }).finally(async () => { if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
+    });
+    const res = await attempt(false)
+      // ADR-026 §5 path 4: the session it was to continue wasn't there for its CLI after all: a fresh one from its thread.
+      .catch((e) => { if (e instanceof SessionMissingError && params.continued && scope) return attempt(true); throw e; })
+      .finally(async () => { prep?.stop(); if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
     sha = res.sha;
     costUsd = res.costUsd;
     turns = res.turns;
@@ -527,6 +660,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     limit = res.limit;
     resetAt = res.resetAt;
     orchestrateWrites = res.orchestrateWrites;
+    sleptMs = res.sleptMs ?? 0;
     // The `capcomd run` recipe has no stopped state: its task fails, with the work kept on the branch.
     if (limit && !workerId.startsWith("agt-")) throw new UserError(`agent ${stoppedAt(limit)}; its work so far is on ${branch}`, { code: "limit", metadata: { kind: "limit" } });
   } else if (params.review || params.report || params.consolidate) {
@@ -549,7 +683,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   }
 
   killpoint("push.after.before_event");
-  const wallSeconds = Math.round((Date.now() - pushStarted) / 100) / 10;
+  const wallSeconds = Math.max(0, Math.round((Date.now() - pushStarted - sleptMs) / 100) / 10);
 
   await c.db.transaction(async (tx: RawAccess) => {
     await transitionLifecycle(
@@ -618,6 +752,9 @@ export const workerActor = actor({
         agentSpec?: Record<string, unknown> | null;
         /** What its profile pinned for its machine (ADR-024 `sandbox.*`): every agent's, a scripted one's too. */
         machine?: ProfileMachine;
+        /** ADR-026 §5 path 2: the agent's parked machine (src/agents/continue.ts `parkedMachine`), to wake and use
+         *  instead of making one: its key, its id, and the worker that parked it. */
+        parked?: { idemKey: string; vmId: string; workerKey: string[] };
       }
     ) {
       const { workerId, runId, epoch } = params;
@@ -639,10 +776,13 @@ export const workerActor = actor({
       const repo = (await (await import("../merge/run-config")).mergeConfigFor(scopeRunId))?.remote;
       const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine, repo);
 
+      // ADR-026 §5 path 2: the agent's parked machine, woken, is this attempt's (its key carried over, not one derived
+      // from the epoch); else (none, gone, or it wouldn't wake) a fresh one.
+      const woken = !existing && params.parked ? await takeParked(c, { workerId, runId, provider, sandbox, parked: params.parked }) : null;
       const idemKey =
         existing && JSON.parse(existing.context as string).idemKey
           ? (JSON.parse(existing.context as string).idemKey as string)
-          : agentVmIdemKey(runId, workerId, epoch);
+          : woken?.idemKey ?? agentVmIdemKey(runId, workerId, epoch);
 
       if (!existing) {
         const [snapshot] = initialTransition(workerMachine, {
@@ -651,6 +791,7 @@ export const workerActor = actor({
           ttlMs: lifeSeconds * 1000,
           idemKey,
           ...(sandbox ? { sandbox } : {}),
+          ...(woken ? { woke: true } : {}),
         } as any);
 
         await c.db.transaction(async (tx: RawAccess) => {
@@ -666,6 +807,7 @@ export const workerActor = actor({
         }, { name: "provisionWorker" });
       }
 
+      let madeVm: string | undefined;
       try {
         recordWorkerVm(c, { idemKey, sandbox, runId, workerId, ttlSeconds: lifeSeconds });
         killpoint("vm.create.after_request.before_record");
@@ -684,6 +826,7 @@ export const workerActor = actor({
           },
         });
 
+        madeVm = vmId;
         await provider.waitReady(vmId, 90_000);
 
         // TTL sweep: the actor reaps its own sandbox at createdAt+ttl even if no client ever returns.
@@ -734,6 +877,7 @@ export const workerActor = actor({
         const event = {
           type: "VM_FAILED" as const,
           error: error instanceof Error ? error.message : String(error),
+          ...(madeVm ? { vmId: madeVm } : {}),
         };
 
         const [newSnapshot] = transition(workerMachine, workerSnapshot, event);
@@ -855,8 +999,41 @@ export const workerActor = actor({
       return drainWorkerImpl(c, params.workerId);
     },
 
+    /** ADR-026 §6: park the machine instead of destroying it (see parkWorkerImpl); `parked: false` when it couldn't. */
+    async parkWorker(c, params: { workerId: string; retentionSeconds: number; runId?: string }) {
+      return parkWorkerImpl(c, params);
+    },
+
+    /**
+     * ADR-026 §5 path 2: the agent's next attempt takes this worker's parked machine. This worker owns it no more
+     * (`released`: its alarm and any delete leave the machine alone). null when it isn't parked (deleted meanwhile).
+     */
+    async handOver(c, params: { workerId: string; to: string }) {
+      const life = await getLifecycle(c.db, params.workerId);
+      if (!life || life.state !== "parked") return null;
+      const ctx: WorkerContext & { idemKey?: string; sandbox?: string } = JSON.parse(life.context);
+      if (!ctx.vmId || !ctx.idemKey) return null;
+      const event = { type: "HANDED_OVER" as const, to: params.to };
+      const [next] = transition(workerMachine, workerMachine.resolveState({ value: life.state, context: ctx }), event);
+      await c.db.transaction(async (tx: RawAccess) => {
+        await transitionLifecycle(tx, params.workerId, "worker", next.value as string, next.context, event, `worker-${params.workerId}-handover-${params.to}`);
+      }, { name: "handOver" });
+      return { vmId: ctx.vmId, idemKey: ctx.idemKey, sandbox: ctx.sandbox ?? null };
+    },
+
+    /**
+     * ADR-026 §6: delete this worker's parked machine (its retention ran out, its place had too many parked, its run was
+     * archived, its agent cancelled, the user's Delete). Nothing when it isn't parked (woken, or already deleted).
+     */
+    async dropParked(c, params: { workerId: string; cause: Exclude<DeleteCause, "action"> }) {
+      const life = await getLifecycle(c.db, params.workerId);
+      if (!life || life.state !== "parked") return { dropped: false, state: life?.state ?? null };
+      const r = await drainWorkerImpl(c, params.workerId, params.cause);
+      return { dropped: r.destroyed, ...(r.retrying ? { retrying: true } : {}), state: "draining" };
+    },
+
     /** The worker's own alarm: a drain whose destroy the provider didn't answer, tried again (see drainWorkerImpl). */
-    async retryDrain(c, params: { workerId: string; cause?: "run_ended" | "idle_lifetime"; retry: number }) {
+    async retryDrain(c, params: { workerId: string; cause?: Exclude<DeleteCause, "action">; retry: number }) {
       const life = await getLifecycle(c.db, params.workerId);
       if (!life || life.state !== "draining") return { destroyed: life?.state === "destroyed" };
       return drainWorkerImpl(c, params.workerId, params.cause ?? "run_ended", params.retry);
@@ -868,22 +1045,22 @@ export const workerActor = actor({
      */
     async reap(c, params: { workerId: string; terminal?: boolean; now?: number }) {
       const life = await getLifecycle(c.db, params.workerId);
-      if (!life || life.state === "destroyed") return { reaped: false, state: life?.state ?? null };
+      if (!life || life.state === "destroyed" || life.state === "released") return { reaped: false, state: life?.state ?? null };
       const ctx = JSON.parse(life.context as string);
       const expired = (params.now ?? Date.now()) >= await workerDeadline(c.db, params.workerId, ctx);
       if (!params.terminal && !expired) return { reaped: false, state: life.state };
-      await drainWorkerImpl(c, params.workerId, params.terminal ? "run_ended" : "idle_lifetime");
+      await drainWorkerImpl(c, params.workerId, params.terminal ? "run_ended" : life.state === "parked" ? "retention" : "idle_lifetime");
       return { reaped: true, reason: params.terminal ? "terminal" : "ttl" };
     },
 
     async reapIfExpired(c, params: { workerId: string }) {
       const life = await getLifecycle(c.db, params.workerId);
-      if (!life || life.state === "destroyed") return { reaped: false };
+      if (!life || life.state === "destroyed" || life.state === "released") return { reaped: false };
       const ctx = JSON.parse(life.context as string);
       const deadline = await workerDeadline(c.db, params.workerId, ctx);
-      // Renewed while its agent ran: look again at the new deadline.
+      // Renewed while its agent ran (or parked since: its retention): look again at the new deadline.
       if (Date.now() < deadline) { await c.schedule.at(deadline, "reapIfExpired", { workerId: params.workerId }); return { reaped: false }; }
-      await drainWorkerImpl(c, params.workerId, "idle_lifetime");
+      await drainWorkerImpl(c, params.workerId, life.state === "parked" ? "retention" : "idle_lifetime");
       return { reaped: true, reason: "ttl" };
     },
 

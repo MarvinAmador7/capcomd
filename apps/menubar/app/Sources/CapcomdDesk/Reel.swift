@@ -951,9 +951,11 @@ struct Column: View {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
         } else {
-          Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+          ColdTail(agentId: agentId)
         }
-        if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
+        // A question (agents.ask): its card, then the box, whose message is its answer.
+        if let q = a.question { QuestionCard(card: q, focused: focused); ColumnComposer(agentId: agentId, name: a.header.name) }
+        else if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
         else if let l = a.limit { LimitBar(limit: l, focused: focused) }
         else if let g = a.goal, g.docks || g.outcome != nil { GoalDock(card: g) }
         else { ColumnComposer(agentId: agentId, name: a.header.name) }
@@ -1008,7 +1010,8 @@ struct ColumnHead: View {
         .help("Reviewed work lands on \(g.branch), cut from \(g.base)")
         .accessibilityElement(children: .combine).accessibilityLabel("Goal branch \(g.branch), from \(g.base)")
       } else if let r = h.repo { Text(verbatim: r).font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary).lineLimit(1) }
-      if h.status == .running, let start = h.startedAtMs {
+      if h.status == .running, let start = h.waitSinceMs ?? h.startedAtMs {
+        // Waiting: how long it has waited; else how long it has worked.
         Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
           .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
       }
@@ -1020,6 +1023,10 @@ struct ColumnHead: View {
   }
   static func state(_ h: ColumnHeader, asks: Bool) -> String {
     if asks { return "waiting on you" }
+    // Between turns, a wake armed (agents.wake): what it waits for, not "working" on a tool call.
+    if h.status == .running, let w = h.waitLine { return w }
+    // ADR-026 §1: idle, not done (a message continues it); waking after a second; an archived run says so.
+    if let word = h.life.word { return word }
     switch h.status {
     case .running: return "working"; case .pending: return "queued"; case .done: return "done"
     case .failed: return "failed"; case .paused: return "paused"; case .cancelled: return "stopped"
@@ -1033,6 +1040,7 @@ struct ColumnHead: View {
 struct ColumnThread: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.deskPane) private var inPane
+  @Environment(\.needsReel) private var inNeeds
   /// The pane it is in (nil in the reel): a split's thread has narrower sides; an expanded one is a centred 800 pt
   /// reading column with diffs, code and logs 1060 pt.
   @Environment(\.paneState) private var pane
@@ -1045,8 +1053,10 @@ struct ColumnThread: View {
   let thread: ThreadSlice
   var body: some View {
     DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
-    let entries = thread.entries
+    // The rows as drawn: calls in a row folded into one line, thinking merged (ThreadRow.rows, made once per change).
+    let entries = thread.rows
     rows?.entries = entries
+    let setupRecord = model.agent(agentId, inNeeds: inNeeds)?.setupRecord
     let expanded = inPane && pane?.expanded == true, split = inPane && pane?.split == true
     var inset = inPane ? (expanded ? PaneMetrics.expandedBody : split ? PaneMetrics.splitBody : Theme.Desk.paneBodyPadding) : Theme.Desk.bodyPadding
     // In the pane, the thread's foot (its bottom margin) is a row of the stack, so it can be scrolled to (below) with the
@@ -1065,7 +1075,10 @@ struct ColumnThread: View {
             .onAppear(perform: loadEarlier)
             .onTapGesture(perform: loadEarlier)
         }
+        // A first start's setup, done: its record heads the thread (a wake's goes above its turn's first row).
+        if let r = setupRecord, r.beforeRow == nil, thread.top == nil { SetupRecordRow(record: r) }
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
+          if let r = setupRecord, let b = r.beforeRow, b == e.id { SetupRecordRow(record: r) }
           EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane,
                    proseWidth: expanded ? PaneMetrics.reading : nil).equatable()
             .modifier(RowFrame(id: e.id, rows: rows))
@@ -1074,14 +1087,17 @@ struct ColumnThread: View {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
         }
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
+        // Getting ready, waking, or waiting between turns: where its next turn will begin.
+        ThreadTail(agentId: agentId, compact: !inPane)
         if let foot { Color.clear.frame(height: foot).id(Self.footId) }
       }
       .scrollTargetLayout(isEnabled: rows != nil)
-      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt). Expanded
-      // (RexExpanded `.xb`): prose in a centred 800 pt column, diffs, code and logs 1060 pt.
+      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt), centred in a
+      // wider pane, with its message box under it at the same width. Expanded (RexExpanded `.xb`): prose in a centred
+      // 800 pt column, diffs, code and logs 1060 pt.
       .frame(maxWidth: inPane ? (expanded ? PaneMetrics.wide : Theme.Desk.paneReading) : nil, alignment: .leading)
       .padding(inset)
-      .frame(maxWidth: .infinity, alignment: expanded ? .center : .leading)
+      .frame(maxWidth: .infinity, alignment: inPane ? .center : .leading)
       .coordinateSpace(.named(ThreadRows.space))
     }
     .modifier(ThreadAnchor(placesItself: foot != nil))
@@ -1112,17 +1128,35 @@ struct ColumnThread: View {
     DispatchQueue.main.async { proxy.scrollTo(Self.footId, anchor: .bottom) }
   }
 
-  static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
-    switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
+  static func bottomMargin(_ r: ThreadRow) -> CGFloat {
+    switch r {
+    case .entry(.item(let i, _)): ThreadItemRow.bottomMargin(i)
+    case .entry(.event): Theme.Content.proseBottom
+    case .tools, .thinking: Theme.Rows.bottom
+    }
   }
 
   private func loadEarlier() {
-    guard keep == nil, !thread.loadingEarlier, let first = thread.entries.first?.id else { return }
+    guard keep == nil, !thread.loadingEarlier, let first = thread.rows.first?.id else { return }
     keep = first
     Task {
       await model.loadEarlier(agentId: agentId)
-      if thread.entries.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
+      if thread.rows.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
     }
+  }
+}
+
+/// A cold reel column reads no thread: what it knows of its agent (getting ready, waking, waiting) it still shows, at
+/// its top.
+struct ColdTail: View {
+  let agentId: String
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ThreadTail(agentId: agentId, compact: true)
+      Spacer(minLength: 0)
+    }
+    .padding(Theme.Desk.bodyPadding)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 }
 
@@ -1169,7 +1203,7 @@ struct ColumnSteer: View {
 struct EntryRow: View, Equatable {
   let runId: String
   let agentId: String
-  let entry: ThreadEntry
+  let entry: ThreadRow
   let above: CGFloat
   /// In the opened pane (the bench tells its rows from the reel's by name).
   var inPane = false
@@ -1178,8 +1212,10 @@ struct EntryRow: View, Equatable {
   var body: some View {
     let _ = DeskProbe.body(inPane ? "PaneEntryRow" : "EntryRow", id: agentId)
     switch entry {
-    case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
-    case .event(let ev): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
+    case .entry(.item(let i, let next)): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
+    case .entry(.event(let ev)): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
+    case .tools(let run): ToolGroupRow(run: run, proseWidth: proseWidth)
+    case .thinking(let run): ThinkingRunRow(runId: runId, agentId: agentId, run: run).modifier(ProseColumn(proseWidth))
     }
   }
 }
@@ -1208,10 +1244,14 @@ struct ColumnComposer: View {
   let name: String
   @State private var draft = ""
   @FocusState private var focused: Bool
-  var body: some View {
-    DeskProbe.body(inPane ? "PaneComposer" : "ColumnComposer", id: agentId)
+  /// The opened pane has Home's composer card (PaneComposer); a reel column keeps its one-line box.
+  @ViewBuilder var body: some View {
+    if inPane { PaneComposer(agentId: agentId, name: name) } else { compact }
+  }
+  private var compact: some View {
+    DeskProbe.body("ColumnComposer", id: agentId)
     return HStack(spacing: 8) {
-      TextField("Tell \(name)…", text: $draft, axis: .vertical)
+      TextField(model.agent(agentId)?.question != nil ? "Answer \(name)…" : "Tell \(name)…", text: $draft, axis: .vertical)
         .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
         .focused($focused)
         .onSubmit(send)
@@ -1230,7 +1270,8 @@ struct ColumnComposer: View {
     .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 8)
     .frame(minHeight: Theme.Desk.composerHeight)
     .background(RoundedRectangle(cornerRadius: Theme.Desk.composerRadius, style: .continuous).fill(Theme.Desk.composerFill))
-    .frame(maxWidth: inPane && pane?.expanded == true ? PaneMetrics.reading : .infinity)
+    // In a pane the box keeps to the thread's column, centred under it: the reading column expanded, else the pane's.
+    .frame(maxWidth: inPane ? (pane?.expanded == true ? PaneMetrics.reading : Theme.Desk.paneReading) : .infinity)
     .padding([.horizontal, .bottom], inPane && pane?.expanded == true ? 20 : 12)
     .frame(maxWidth: .infinity)
     .modifier(SlotDraft(memory: memory, agentId: agentId, draft: $draft))

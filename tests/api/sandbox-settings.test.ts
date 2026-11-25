@@ -12,7 +12,7 @@ import { HarnessEvent } from "../../src/api/envelope";
 import { harnessApp } from "../../src/api/server";
 import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
-import { currentAgentMemory, currentIdleLifetime, fileSettingsStore, idleLifetimeFromEnv, memorySettingsStore, settingsPath, type SettingsStore } from "../../src/providers/settings";
+import { currentAgentMemory, currentIdleLifetime, currentParkedRetention, fileSettingsStore, idleLifetimeFromEnv, memorySettingsStore, settingsForRun, settingsPath, type SettingsStore } from "../../src/providers/settings";
 import { capcomd } from "../helpers/engine";
 import spec from "../../openapi/capcomd.json";
 
@@ -111,7 +111,7 @@ describe("PATCH /v1/sandboxes/{name}/settings", () => {
 			[{ values: { idleLifetime: "600" }, rev }, /10 minutes is under the 15-minute minimum/],
 			[{ values: { idleLifetime: "0" }, rev }, /under the 15-minute minimum/],
 			[{ values: { idleLifetime: true }, rev }, /send one of its choices' values as a string/],
-			[{ values: { egressDefault: "open" }, rev }, /^"egressDefault" isn't a setting of boxd \(its settings: idleLifetime\)$/],
+			[{ values: { egressDefault: "open" }, rev }, /^"egressDefault" isn't a setting of boxd \(its settings: idleLifetime, parkedRetention\)$/],
 			[{ values: { "<script>": "1" }, rev }, /^that isn't a setting of boxd/],
 			[{ values: { idleLifetime: "900" } }, /^body must be \{values: \{id: value\}, rev\}/],
 			[{ values: {}, rev }, /^values must name at least one setting$/],
@@ -169,7 +169,7 @@ describe("Memory per agent (agentMemory, Docker): presets, precedence, and the A
 		const { get } = withSlots();
 		const d = (await get("/v1/sandboxes/docker")).body;
 		expect(SandboxDetail.safeParse(d).success).toBe(true);
-		expect(d.descriptor.settings).toEqual(["idleLifetime", "agentMemory"]);
+		expect(d.descriptor.settings).toEqual(["idleLifetime", "agentMemory", "parkedRetention"]);
 		expect(field(d, "agentMemory")).toEqual({
 			id: "agentMemory", type: "choice", label: "Memory per agent", help: expect.stringContaining("Agents here share Docker's memory"),
 			value: "1024", display: "1 GB", default: "1024",
@@ -178,7 +178,7 @@ describe("Memory per agent (agentMemory, Docker): presets, precedence, and the A
 		});
 		expect(field(d, "agentSlots")).toMatchObject({ value: "8", display: "8 (8 GB ÷ 1 GB per agent)" });
 		const boxd = (await get("/v1/sandboxes/boxd")).body;
-		expect(boxd.settings.map((f: any) => f.id)).toEqual(["idleLifetime"]);
+		expect(boxd.settings.map((f: any) => f.id)).toEqual(["idleLifetime", "parkedRetention"]);
 	});
 
 	test("a change is stored, and the same answer's Agents at once row already uses it (no stale budget)", async () => {
@@ -197,7 +197,7 @@ describe("Memory per agent (agentMemory, Docker): presets, precedence, and the A
 		expect(field(four.body, "agentSlots")).toMatchObject({ value: "2", display: "2 (8 GB ÷ 4 GB per agent)" });
 		// Only the presets; and not on boxd.
 		expect((await patch("docker", { values: { agentMemory: "1536" }, rev: four.body.rev })).body.message).toBe("Memory per agent: use one of 512 (512 MB), 1024 (1 GB), 2048 (2 GB), 4096 (4 GB)");
-		expect((await patch("boxd", { values: { agentMemory: "512" }, rev: (await get("/v1/sandboxes/boxd")).body.rev })).body.message).toBe("\"agentMemory\" isn't a setting of boxd (its settings: idleLifetime)");
+		expect((await patch("boxd", { values: { agentMemory: "512" }, rev: (await get("/v1/sandboxes/boxd")).body.rev })).body.message).toBe("\"agentMemory\" isn't a setting of boxd (its settings: idleLifetime, parkedRetention)");
 	});
 
 	test("CAPCOMD_DOCKER_AGENT_MEMORY_MB wins over the user config: read-only, said so; a change is 422", async () => {
@@ -300,5 +300,45 @@ describe("audit: sandbox.settings_changed on the daemon scope", () => {
 		const again = harnessState(statePath);
 		expect(again.daemonEvents().map((e) => e.seq)).toEqual([2]);
 		expect(again.seqs([{ id: "run-b", createdAt: "2026-10-27T10:00:00.000Z" }]).get("run-b")).toBe(3);
+	});
+});
+
+describe("ADR-026 §6: how long parked machines are kept (capability agents.park)", () => {
+	const field = (d: any) => d.settings.find((f: any) => f.id === "parkedRetention");
+
+	test("boxd and docker offer 4 hours, 24 hours or 7 days, 24 hours by default; a change is stored for new runs", async () => {
+		const { get, patch, settings } = setup();
+		for (const place of ["boxd", "docker"]) {
+			const d = (await get(`/v1/sandboxes/${place}`)).body;
+			expect(SandboxDetail.safeParse(d).success).toBe(true);
+			expect(d.descriptor.caps.hibernate).toBe(place === "boxd" ? "memory" : "disk");
+			expect(field(d)).toEqual({
+				id: "parkedRetention", type: "choice", label: "Keep parked machines for", help: expect.stringContaining("When a planner or lead finishes its turn, its machine is parked"),
+				value: "86400", display: "24 hours", default: "86400",
+				choices: [{ value: "14400", label: "4 hours" }, { value: "86400", label: "24 hours" }, { value: "604800", label: "7 days" }],
+				source: "default", editable: true, appliesTo: "new_runs", needsRestart: false, state: null,
+			});
+		}
+		const rev = (await get("/v1/sandboxes/boxd")).body.rev;
+		const r = await patch("boxd", { values: { parkedRetention: "604800" }, rev });
+		expect(r.status).toBe(200);
+		expect(field(r.body)).toMatchObject({ value: "604800", display: "7 days", source: "config" });
+		expect(settings.read("boxd")).toEqual({ parkedRetention: 604800 });
+		// Only the presets.
+		expect((await patch("boxd", { values: { parkedRetention: "3600" }, rev: r.body.rev })).body.message).toBe("Keep parked machines for: use one of 14400 (4 hours), 86400 (24 hours), 604800 (7 days)");
+		// What `run new` records with a run: the retention with the idle lifetime.
+		expect(settingsForRun("boxd", { env: {}, store: settings })).toEqual({ idleLifetime: 3600, parkedRetention: 604800 });
+	});
+
+	test("CAPCOMD_PARKED_RETENTION_SECONDS wins (read-only, said so); then the user config; then 24 hours", async () => {
+		const store = memorySettingsStore({ docker: { parkedRetention: 14400 } });
+		expect(currentParkedRetention("docker", { env: {}, store })).toEqual({ seconds: 14400, source: "config" });
+		expect(currentParkedRetention("boxd", { env: {}, store })).toEqual({ seconds: 86400, source: "default" });
+		expect(currentParkedRetention("docker", { env: { CAPCOMD_PARKED_RETENTION_SECONDS: "5" }, store })).toEqual({ seconds: 5, source: "env" });
+		expect(currentParkedRetention("docker", { env: { CAPCOMD_PARKED_RETENTION_SECONDS: "nope" }, store })).toEqual({ seconds: 14400, source: "config" });
+		const { get, patch } = setup({ env: { CAPCOMD_PARKED_RETENTION_SECONDS: "7200" } });
+		const d = (await get("/v1/sandboxes/docker")).body;
+		expect(field(d)).toMatchObject({ value: "7200", display: "Set by CAPCOMD_PARKED_RETENTION_SECONDS in capcomd's environment", source: "env", editable: false });
+		expect((await patch("docker", { values: { parkedRetention: "14400" }, rev: d.rev })).body.message).toBe("Keep parked machines for is set by CAPCOMD_PARKED_RETENTION_SECONDS in capcomd's environment, so it can't be changed here");
 	});
 });

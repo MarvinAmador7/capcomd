@@ -1,5 +1,6 @@
-// ADR-020 §3: what every sandbox provider must do, run against each one that is available here. Docker runs when a
-// daemon answers (OrbStack, Docker Desktop, CI's Linux runners); boxd isn't run here (it needs an account).
+// ADR-020 §3: what every sandbox provider must do, run against each one that is available here. Docker runs only when
+// asked (CAPCOMD_TEST_DOCKER=1, as CI's Linux runners do) and a daemon answers (OrbStack, Docker Desktop): it boots real
+// containers, slow for a local `bun run test:fast`. boxd isn't run here (it needs an account).
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
@@ -9,7 +10,7 @@ import { SandboxNotFoundError } from "../../src/providers/boxd-errors";
 import type { SandboxProvider } from "../../src/providers/sandbox";
 
 const IMAGE = process.env.CAPCOMD_TEST_DOCKER_IMAGE ?? "debian:bookworm-slim";
-const dockerUp = (() => { try { return Bun.spawnSync([dockerBin(), "version", "--format", "{{.Server.Version}}"], { timeout: 15_000 }).exitCode === 0; } catch { return false; } })();
+const dockerUp = process.env.CAPCOMD_TEST_DOCKER === "1" && (() => { try { return Bun.spawnSync([dockerBin(), "version", "--format", "{{.Server.Version}}"], { timeout: 15_000 }).exitCode === 0; } catch { return false; } })();
 
 interface Subject { name: string; make: () => SandboxProvider & Record<string, any>; available: boolean; snapshots: boolean; interactive: boolean }
 const subjects: Subject[] = [
@@ -28,7 +29,8 @@ for (const s of subjects) {
       await p.waitReady(r.id, 120_000);
       return r.id;
     };
-    afterAll(async () => { for (const id of made) await p.destroy(id).catch(() => {}); });
+    // All at once, with time for each: one at a time under the 5 s default left containers behind on a slow daemon.
+    afterAll(async () => { await Promise.all(made.map((id) => p.destroy(id).catch(() => {}))); }, 120_000);
 
     test("ensure is idempotent by key; list finds it by prefix; destroy is idempotent", async () => {
       const a = await p.ensure(spec("idem"));
@@ -42,6 +44,23 @@ for (const s of subjects) {
       await p.destroy(a.id);
       expect((await p.list("capcomd-conf-")).map((v) => v.id)).not.toContain(a.id);
       await expect(p.exec(a.id, ["true"])).rejects.toBeInstanceOf(SandboxNotFoundError);
+    }, 180_000);
+
+    test("ADR-026 §6: hibernate parks it (files kept, nothing running); wake, or ensure with its key, brings it back", async () => {
+      if (!p.hibernate || !p.wake) return;
+      const id = await box("park");
+      expect((await p.exec(id, ["sh", "-c", "echo kept > /tmp/park.txt"])).code).toBe(0);
+      await p.hibernate(id);
+      expect((await p.list("capcomd-conf-")).find((v) => v.id === id)?.state).not.toBe("running");
+      await p.wake(id);
+      await p.waitReady(id, 120_000);
+      expect((await p.exec(id, ["cat", "/tmp/park.txt"])).stdout).toBe("kept\n");
+      await p.hibernate(id);
+      expect(await p.ensure(spec("park"))).toEqual({ id, created: false });
+      await p.waitReady(id, 120_000);
+      expect((await p.exec(id, ["cat", "/tmp/park.txt"])).stdout).toBe("kept\n");
+      await p.destroy(id);
+      await expect(p.wake(id)).rejects.toBeInstanceOf(SandboxNotFoundError);
     }, 180_000);
 
     test("exec: argv, exit code, stdout and stderr, env, cwd, and a timeout that kills the command", async () => {

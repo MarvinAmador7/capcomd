@@ -3,16 +3,17 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
+import { EVENTS_AGENTS_MAX, EVENTS_PAGE_MAX, EVENTS_TYPES_MAX, EVENTS_WAIT_MAX_S, STATE_TYPES } from "./events-wait";
 import { AgentProvider, AgentResult, DriverProvider, AgentTitleSource, HeldBy, LegacyEventData, PROFILE_SOURCE_TEXT, PROFILE_VERSION_TEXT, ProfileSource, ProfileVersion, UntrustedText } from "./legacy-events";
 import { RENAME_WINDOW_MS, RENAMES_MAX, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
-import { ACTIVITY_KINDS } from "../agents/activity";
+import { ACTIVITY_KINDS, SETUP_PHASES } from "../agents/activity";
 import { AgentWorkspace } from "./workspace";
 import { TITLE_MAX, TITLE_SOURCES } from "./run-title";
 import { SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
 import { isListedProvider, LISTED_PROVIDERS, PROVIDER_LABEL } from "../providers/registry";
-import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES } from "./sandboxes";
+import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES, PARKED_RETENTION_CHOICES } from "./sandboxes";
 import { PLUGIN_NAME_PATTERN } from "../../packages/plugin/src/manifest";
 import { PLUGIN_STATES } from "../../packages/plugin/src/host/host";
 import { HOOK_NAMES, type HookName } from "../../packages/plugin/src/hooks";
@@ -22,8 +23,8 @@ import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TA
 export { ThreadItem };
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
-export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
-export const ApprovalStatus = z.enum(["pending", "approved", "denied", "expired", "withdrawn"]);
+export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom", "question"]).describe("question: capability agents.ask, an agent asked and stopped until it is answered");
+export const ApprovalStatus = z.enum(["pending", "approved", "denied", "expired", "withdrawn", "answered"]).describe("answered: capability agents.ask, a question's answer was given");
 export const AgentStatus = z.enum(["pending", "running", "paused", "done", "failed", "cancelled", "handed-off"]);
 
 /** Stream/replay scope: the daemon, a project or a run. */
@@ -31,8 +32,8 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
-	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "invalid", "internal", "unavailable", "timeout"])
-		.describe("stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. timeout (504, capability plugins.routes): a plugin's route under /v1/x/ didn't answer within its deadline (30 s); invalid is also 413 there, a body over 1 MiB. Treat a code you don't know as a generic error"),
+	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "archived", "invalid", "internal", "unavailable", "timeout"])
+		.describe("archived (409, capability runs.archive): a message to an agent of an archived run; the message says so (\"… is archived · restore to continue\"): offer Restore (POST /v1/runs/{runId}/restore). stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a run to archive whose agents still work), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. timeout (504, capability plugins.routes): a plugin's route under /v1/x/ didn't answer within its deadline (30 s); invalid is also 413 there, a body over 1 MiB. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
 	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub. From PUT /v1/profiles/{name} (capability profiles.edit): the field id the value is about (limits.maxTurns), rev, or repo"),
@@ -58,6 +59,8 @@ export const Run = z.object({
 	createdAt: Timestamp.nullable(),
 	goalBranch: z.lazy(() => GoalBranchSummary).nullable().optional().describe("Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it"),
 	trigger: z.lazy(() => RunTrigger).nullable().optional().describe("Capability triggers. The external event this run was started from (plugin API §16.3: a source's trigger the intake acted on); null for a run someone started. Older daemons don't send it"),
+	archived: z.literal(true).optional().describe("Capability runs.archive. Set on an archived run only: read-only, its agents take no messages (409 `archived`) until it is restored (POST /v1/runs/{runId}/restore). Absent: not archived"),
+	archivedAt: Timestamp.optional().describe("Capability runs.archive. When it was archived; set with `archived` only"),
 });
 /** Run.trigger: where a run a trigger started came from, in its source's own terms. */
 export const RunTrigger = z.object({
@@ -74,7 +77,7 @@ export const GoalPullRequest = z.object({
 	url: z.string().nullable().describe("Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)"),
 });
 export const GoalBranchSummary = z.object({
-	branch: z.string().describe("The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"),
+	branch: z.string().describe("The goal branch, e.g. feat/multiply (ref-safe: letters, digits, . _ - /)"),
 	base: z.string().describe("The branch it was cut from, which the pull request goes into (e.g. dev)"),
 	state: GoalBranchState,
 	readyAt: Timestamp.nullable().describe("When the planner finished (run.goal_completed); null before"),
@@ -94,6 +97,22 @@ export const AgentActivity = z.object({
 	text: z.string().describe("Plain-language line, sentence case, no period, written by the daemon (trusted): progressive while the agent works (\"Reading 4 files\"), past tense once it stopped (\"Read 4 files\")"),
 	kind: z.string().describe(`Icon hint: ${ACTIVITY_KINDS.join(", ")}. More may be added: treat an unknown kind as tool`),
 	at: Timestamp.describe("When the activity last changed"),
+	setup: z.object({
+		phase: z.string().describe(`What the daemon is doing to get the agent ready: ${SETUP_PHASES.join(", ")} (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show \`text\` for a phase you don't know`),
+		bytes: z.number().int().nonnegative().nullable().describe("copy: bytes sent to the machine so far; null otherwise"),
+		totalBytes: z.number().int().nonnegative().nullable().describe("copy: the bytes it sends in all, when known; null otherwise"),
+	}).optional().describe("Capability agents.setup. Only with kind setup: the agent is being set up and its CLI hasn't reported a step yet (its thread is empty until it does). Replaced by the agent's own activity at its first step. Older daemons don't send it"),
+	wake: z.object({
+		id: z.string().describe("The wake (wk-…): agent.wake_armed armed it, agent.woken or agent.wake_cancelled ends it"),
+		kind: z.string().describe("op, agents, events or timer, as agent.wake_armed's. More may be added: show `text` for one you don't know"),
+		op: z.string().optional().describe("kind op: the verify, check or merge it waits on (vfy-…, chk-…, mrg-…)"),
+		opKind: z.string().optional().describe("kind op: verify, check or merge"),
+		agents: z.array(z.string()).optional().describe("kind agents: the agents it waits on"),
+		mode: z.string().optional().describe("kind agents: any or all"),
+		types: z.array(z.string()).optional().describe("kind events: the event types it waits for"),
+		armedAt: Timestamp.describe("When it started waiting: a client's elapsed clock (\"waiting for verify vfy-… · 4:12\") counts from here"),
+		at: Timestamp.nullable().describe("When it is woken at the latest: a timer's time, else its deadline"),
+	}).optional().describe("Capability agents.wake. Only with kind wait, while the agent waits between turns for what it armed a wake on (its turn ended; its status stays running): show it as waiting, not as a running tool call. Replaced by its own activity when it is woken. Older daemons don't send it"),
 });
 export const Agent = z.object({
 	id: z.string(),
@@ -117,6 +136,22 @@ export const Agent = z.object({
 	updatedAt: Timestamp.nullable(),
 	title: UntrustedText.nullable().optional().describe(`Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title. Its short name, for its tab, row or column header ("login redirect"): 1 to ${TITLE_WORDS_MAX} lowercase words, at most ${TITLE_MAX_CHARS} characters, one line. The user's (PUT …/title), else the latest the agent, its parent or the user's driving harness set, else the daemon's from the task's first words (titleSource derived); null only for an agent with no task text. Live: agent.titled. Older daemons don't send it: name the agent by its profile`),
 	titleSource: AgentTitleSource.nullable().optional(),
+	continued: z.object({
+		at: Timestamp.describe("When the message woke it"),
+		by: z.string().describe("Who sent it: operator, client:<id>, an agent id (its parent or an ancestor), or a wake (wake-wk-…)"),
+		from: z.enum(["done", "failed", "cancelled"]).describe("How its attempt before this one had ended"),
+	}).nullable().optional().describe("Capability agents.idle (ADR-026 §1). A message woke this idle agent into its current attempt (agent.continued); null when its current attempt is its first (or a resume). While its status is running and its activity is of kind setup, it is waking (a client shows \"Waking <name>…\" with the setup phase, including `restore`, after a second). Older daemons don't send it"),
+	asked: z.object({
+		questionId: z.string().describe("The question (qst-…)"),
+		approvalId: ApprovalId.describe("Its approval (kind question): answer it there, or with a message to the agent"),
+		question: UntrustedText,
+		recommend: UntrustedText.describe("The answer it recommends (options[0])"),
+		options: z.array(UntrustedText).describe("The answers it offers, the recommended one first"),
+		why: UntrustedText.nullable().describe("Why it recommends that answer; null when it gave no reason"),
+		holds: UntrustedText.nullable().describe("What waits on the answer; null when it didn't say"),
+		to: z.string().nullable().describe("Who it is asked of: an agent (its parent, or an ancestor it was passed up to), or null for the user"),
+		at: Timestamp.describe("When it asked"),
+	}).nullable().optional().describe("Capability agents.ask (ADR-026 §4). The question it asked and stopped on, until it is answered: it is **asked** (show it so wherever its status shows, as a quiet state when it is asked of an agent, as needing you when asked of the user). Its turn ended (its status is done once its attempt ended, which a client shows as asked, not idle), so it holds no machine; a message to it is its answer and continues it. null when it has no open question. Older daemons don't send it"),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
 export const Message = z.object({
@@ -139,6 +174,8 @@ export const TranscriptPage = z.object({
 	items: z.array(TranscriptItem),
 	next: z.number().int().nonnegative().nullable().describe("Pass as `after` for the next page; null at the end"),
 });
+/** Capability agents.thread_internal: a thread read that includes the agent's bookkeeping. */
+const InternalQuery = z.enum(["true", "1", "false", "0"]).optional().describe("Capability agents.thread_internal. `true` (or 1): include the agent's bookkeeping, the items marked `internal` (a wake armed, a check-in, a wait, a poll of its own state, a CLI system event). Default: left out (older daemons send them, unmarked)");
 /** GET …/thread: an agent's thread items (packages/agent-thread), by write cursor. */
 export const THREAD_PAGE_MAX = 500;
 export const ThreadPage = z.object({
@@ -159,6 +196,8 @@ export const THREAD_DOC = `An agent's thread: typed items with stable ids, each 
 Kinds: say, thinking (\`redacted\` when the CLI withheld it), tool (\`tool.summary\` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line). Render an unknown kind as a plain line of \`text\`.
 Every string in an item is agent-written plain text (x-untrusted): never HTML, never a link followed or media loaded without the user's click. Links carry the daemon's \`target\` (web: show \`host\`, and the full URL when \`mismatch\`; file, artifact, agent, run; none: plain text). Media: \`remote\` never loads by itself; \`attachment\` and \`inline\` come from GET /v1/runs/{runId}/attachments/{id}/content, \`workspace\` from GET /v1/runs/{runId}/agents/{agentId}/workspace?path=.
 Caps (block boundaries only): ${ITEM_MAX_BYTES} bytes of blocks and of \`text\` per item (whole trailing blocks dropped, \`truncated\` says how many); code blocks keep their first ${CODE_MAX_LINES} lines (\`truncatedLines\`); tables ${TABLE_MAX_ROWS} rows × ${TABLE_MAX_COLS} columns (\`truncatedRows\`/\`truncatedCols\`); a tool's \`diff\` its first ${DIFF_MAX_LINES} lines of ${DIFF_LINE_MAX_CHARS} characters at most (\`truncatedLines\`; \`added\`/\`removed\` count the whole change).
+Bookkeeping (capability agents.thread_internal): an agent's waits and polls (a wake armed or a check-in booked, a wait on other agents, a read of its own state, its inbox or the run's events) and its CLI's system events (a retried or fallen-back model request, a compacted conversation) are recorded with \`internal: true\` and left out of GET …/thread, …/thread/tail and \`?thread=1\` frames unless asked for with \`internal=true\` (\`internal=1\` on the stream); a client that asks shows them only on request.
+Typed hand-backs (capability agents.handback_typed): a handoff's \`child.handback\` is the child's handback@1 (status, outcome, changed, checked, risks, decide) when it gave one, and a reviewer's \`child.verdict.findings\` its review-verdict@1 findings; the blocks still say both in Markdown. GET /v1/schemas lists the schemas.
 Reserved for token streaming (not emitted yet): a say or thinking item may be \`open\` with its last block \`{t:"open", text}\` (the unfinished block as plain text) and \`rev\` rising as it grows. Live updates: \`?thread=1\` on a run stream (agent.thread_item_changed frames).`;
 
 /** Trace span (OpenTelemetry-shaped), from the run's trace file. */
@@ -205,6 +244,13 @@ export const RunFiles = z.object({
 export const FILES_DOC = `Files the run's agents changed, with lines added and removed: \`git diff --numstat\` of each agent's latest work (the commit it pushed, else its latest checkpoint) against where its branch left the run's target branch. One row per (agent, file), sorted by path; \`added\`/\`removed\` are null for binary files. Paths are agent-written (x-untrusted).
 \`agentId\` limits it to one agent; \`limit\` (default and max ${FILES_MAX}) caps the rows, and only the ${FILES_AGENTS_MAX} agents with the newest work are diffed: \`truncated\` says rows were left out, \`total\` counts the rows before the cut.
 Refetch when the run stream shows agent.checkpointed, agent.done, agent.failed, agent.paused or merge.succeeded with a seq above \`asOf\`. Work the daemon cannot read (no repository, a deleted branch) is a \`sources[].error\`, not an HTTP error.`;
+/** A registered payload schema (src/schemas): immutable once registered. */
+export const PayloadSchema = z.object({
+	id: z.string().describe("name@version, e.g. handback@1"),
+	name: z.string(), version: z.number().int().positive(),
+	description: z.string(),
+	schema: z.record(z.string(), z.unknown()).describe("The schema, in capcomd's bounded JSON Schema subset: type (object, string, number, integer, boolean, array), properties and required (an object is closed: other fields are refused), maxLength/minLength/enum, minimum/maximum, items/maxItems/minItems, description"),
+});
 export const Skill = z.object({
 	name: ProfileName,
 	description: z.string(),
@@ -227,6 +273,8 @@ export const Decision = z.looseObject({
 	decidedBy: z.looseObject({ clientId: z.string(), principal: z.string() }).nullable(),
 	decidedAt: Timestamp.nullable(),
 	reason: z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)." }).nullable(),
+	answer: UntrustedText.optional().describe("Capability agents.ask, a question's: the answer given (`reason` is then the answerer's note)"),
+	recommended: z.boolean().optional().describe("Capability agents.ask, a question's: whether the answer was the one the asker recommended"),
 });
 
 const RequestedBy = z.object({ agentId: z.string().nullable(), runId: z.string() }).describe("Who asked; ancestors of agentId may decide within their budget cap");
@@ -247,7 +295,14 @@ const ApprovalSubject = z.looseObject({
 	removed: z.number().int().nonnegative().optional().describe("merge: lines removed across all its files (binary files not counted)"),
 	askedBy: z.string().optional().describe("merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons"),
 	heldBy: HeldBy.optional().describe("merge: a plugin held it for this approval (merge.landing): the plugin and its reason, which the question repeats. Approving satisfies only this hold: a merge another plugin then holds asks again. Absent when only the target's protection asks, and on older daemons"),
-}).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
+	questionId: z.string().optional().describe("question: the question (qst-…), as agent.asked carries it"),
+	options: z.array(z.object({ label: UntrustedText, recommended: z.boolean() })).optional().describe("question: the answers it offers, the recommended one first (a client numbers them 1…n with keys, tags the recommended one, and adds its own \"Something else…\" for a free answer)"),
+	recommend: UntrustedText.optional().describe("question: the answer it recommends (options[0])"),
+	why: UntrustedText.nullable().optional().describe("question: why it recommends that answer (one or two lines; shown under the recommended option only); null when it gave no reason"),
+	holds: UntrustedText.nullable().optional().describe("question: what waits on the answer (\"Waiting on this\"); null when it didn't say"),
+	to: z.string().nullable().optional().describe("question: who it is asked of: an agent (its parent, or an ancestor it was passed up to) or null for the user. The user can answer it either way, and a person's answer wins"),
+	passedBy: z.array(z.string()).optional().describe("question: the agents that passed it up because they couldn't decide, in order"),
+}).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}, question {questionId, options, recommend, why, holds, to, passedBy}");
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */
 export const StreamFrames = {
@@ -269,6 +324,8 @@ export const ACTIVITY_DOC = `Agent activity: \`?activity=1\` on a run stream (wi
 They are ephemeral (\`durability: "ephemeral"\`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no \`id:\`, so they never move the Last-Event-ID cursor.
 Their envelope \`seq\` is the last durable seq at the time (not a cursor), \`entitySeq\` is 0 and \`id\` is unique per frame; the latest frame per agent wins.
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Capability agents.wake: while an agent waits between turns for what it armed a wake on (a verify, a check, a merge, its children, a time), its activity has kind \`wait\` and \`wake\` says what it waits for and since when (\`armedAt\`): a client shows "waiting for verify vfy-… · 4:12" rather than a running tool call. agent.woken (durable, on the lifecycle feed) says what woke it.
+Capability agents.setup: while an agent is being set up, before its CLI's first step (its thread is empty until then), its activity has kind \`setup\` and \`setup.phase\` says what the daemon is doing (starting its machine, preparing its workspace, copying the repository to it with \`bytes\` of \`totalBytes\`, installing and starting its CLI): a client shows that in the agent's empty thread. Its first step replaces it.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.`;
 
 export const THREAD_STREAM_DOC = `Live thread items: \`?thread=1\` on a run stream (with or without \`feed=lifecycle\`) adds \`agent.thread_item_changed\` frames, each carrying a full item as GET /v1/runs/{runId}/agents/{agentId}/thread serves it.
@@ -413,6 +470,7 @@ export const EventData = {
 			role: z.string().nullable(),
 		}).nullable().describe("Who used the machine when the action ran: the agent that was cancelled (ids and role only, never its task); null for a machine left behind"),
 		clientId: z.string().describe("The API client that acted (cli-…)"),
+		parked: z.boolean().optional().describe("Capability agents.park: the machine was parked, so only the machine was deleted and its agent (owner) stays idle; absent otherwise"),
 	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client's action on a machine (POST /v1/sandboxes/{name}/resources/{id}/actions/{action}) changed something. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Cloud: Delete on machine relay-…: cancelled worker agt-41 of run-8kq2.\"). A Delete is followed by sandbox.resource_deleted with cause action"),
 	"project.configured": z.looseObject({
 		path: z.string().describe("The checkout's root (absolute)"),
@@ -453,14 +511,18 @@ export const EventData = {
 	"sandbox.resource_deleted": z.looseObject({
 		sandbox: z.string().describe("The place (a listed provider's name)"),
 		resourceId: z.string().describe("The machine's id"),
-		cause: z.string().describe("Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"),
+		cause: z.string().describe("Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it; capability agents.park: a parked machine whose run was archived or whose agent was cancelled), retention (capability agents.park: a parked machine kept for its place's parkedRetention), parked_limit (capability agents.park: more than 10 parked at its place, the oldest deleted first). Treat an unknown cause as a deletion for a reason you don't know"),
 	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")"),
 	...TriggerEventData,
 	...PluginEventData,
 } as const;
 export type EventType = keyof typeof EventData;
 
-const DecideBody = z.object({ decision: z.enum(["approve", "deny"]), reason: UntrustedText.optional() });
+const DecideBody = z.object({
+	decision: z.enum(["approve", "deny", "answer"]).describe("approve or deny a merge (any kind but question). A question (capability agents.ask): answer with `answer`, or approve to take its recommendation; deny is 422"),
+	reason: UntrustedText.optional().describe("Why; for a question, the answerer's note (the asker reads it with the answer)"),
+	answer: UntrustedText.optional().describe("Capability agents.ask. decision answer: the question's answer, one of its options or any other text. 422 `invalid` (field answer) when missing"),
+});
 
 /** Capability ops.front_door (plugin API §6.1): how long a front door's operation is waited for before the answer says it
  *  still runs (202). Below the harness socket's idle timeout (60 s), so a call never outlives its connection. */
@@ -544,6 +606,8 @@ const SendBody = z.object({
 	body: z.string().min(1).describe(`Message text (UTF-8, at most ${MESSAGE_BODY_MAX_BYTES} bytes). Delivered to a running Claude agent at its next step; a Codex agent reads it only from its inbox (see note)`),
 	skills: z.array(z.string()).max(SKILLS_PER_MESSAGE_MAX).optional().describe(`Capability steer.skills. Names from GET /v1/skills (at most ${SKILLS_PER_MESSAGE_MAX}; a repeated name is sent once): the agent gets each skill's SKILL.md with the message. ` +
 		`An unknown name, or SKILL.md files over ${SKILL_MAX_BYTES} bytes together, is 422 \`invalid\` and sends nothing. The confirming message.sent echoes them as data.skills`),
+	model: z.string().min(1).max(100).nullable().optional().describe("Capability agents.messages.model. The model the agent's next turns run with: one of GET /v1/run-options drivers[].models for the agent's provider (422 `invalid`, field model, otherwise). An idle agent continues with it; a working one switches when its current turn ends (a running CLI can't switch model): it then continues as a new attempt with it. agent.model_changed and a `note` thread item record it; Agent.model shows it once it applies"),
+	effort: z.string().min(1).max(100).nullable().optional().describe("Capability agents.messages.model. The reasoning effort of its next turns: one of drivers[].efforts for its provider (422 `invalid`, field effort). As `model`"),
 });
 /** Result of POST /v1/runs/{runId}/agents/{agentId}/messages. */
 export const SentMessage = z.object({
@@ -551,7 +615,14 @@ export const SentMessage = z.object({
 	to: z.string().describe("The agent the message was sent to"),
 	from: z.string().describe("Sender as threads show it: operator"),
 	seq: z.number().int().positive().describe("Thread message seq. The confirming message.sent event carries the same value as data.seq (with data.to = the agent), as does Message.seq in GET /v1/runs/{runId}/messages and snapshot.threads"),
-	note: z.string().nullable().describe("When the agent won't read it right away (a Codex agent reads messages only from its inbox); null when it will"),
+	note: z.string().nullable().describe("When the agent won't read it right away (a Codex agent reads messages only from its inbox), or that it woke an idle agent; null when it will"),
+	continued: z.literal(true).optional().describe("Capability agents.idle. The agent was idle (its last attempt done, failed or cancelled): this message is the first turn of its next attempt, confirmed by agent.continued. Absent when it was working"),
+});
+/** Result of POST /v1/runs/{runId}/archive and /restore (capability runs.archive). */
+export const RunArchive = z.object({
+	runId: z.string(),
+	archived: z.boolean().describe("Whether the run is archived now"),
+	changed: z.boolean().describe("false: it already was (archive) or wasn't (restore)"),
 });
 
 const WRITE_DOC = "Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); " +
@@ -597,7 +668,40 @@ export const CAPABILITIES = {
 	"ops.front_door": "POST /v1/runs/{runId}/verifications, /merges and /merges/{mergeId}/decision: a kernel front door's verify, merge and approval of a merge (the CLI's and `capcomd mcp`'s), run in the daemon so every plugin's gate judges them (plugin API §6.1). Only the one-call tokens the CLI and `capcomd mcp` make for them (403 `forbidden` for any other token, a plugin's or an app's)",
 	"plugins.seam_stats": "GET /v1/plugins (and GET /v1/plugins/{name}) `stats.seams`: the daemon's calls to each seam a plugin provides (sandbox, agent, forge, context) since it started, and the failed ones by their error kind (plugin API §13.5)",
 	"logins.fx": "GET /v1/logins takes `provider` (claude, codex or fx): only that AI's logins; fx's (a Vercel or Grok plan login with `capcomd auth login fx`, or AI_GATEWAY_API_KEY) are listed only when asked for with `provider=fx`",
+	"agents.setup": "Agent.activity of kind setup, with `setup` (phase, bytes, totalBytes): while an agent is being set up (its machine starting, its workspace prepared, the repository copied to it, its CLI installed and started), before its first step, live on agent.activity_changed",
+	"agents.idle": "An agent is idle, not done (ADR-026 §1): an agent whose attempt ended (done, failed, cancelled) in a run that isn't archived takes messages; a message continues it as a new attempt on a fresh machine (POST …/messages answers `continued: true`; agent.continued on run streams and the lifecycle feed, cause continued, and run.started when the run had ended), continuing its conversation (its saved CLI session, or one rebuilt from its thread, with a `note` thread item saying so). Agent.continued says a message woke its current attempt; Agent.activity setup phase `restore` while its conversation is restored. A parent's await counts an idle child as ended; a woken child runs again. Its wall-time budget counts only while it works (asleep between turns or idle, it pauses); turns and spend count across attempts",
+	"agents.messages.model": "POST …/agents/{agentId}/messages takes `model` and `effort` (from GET /v1/run-options drivers[].models / efforts for the agent's provider): its next turns run with them, at once for an idle agent, after its current turn for a working one; agent.model_changed and a `note` thread item record it",
+	"runs.archive": "POST /v1/runs/{runId}/archive and /restore (the steer scope, an Idempotency-Key): an archived run is read-only, a message to its agents is 409 `archived` until it is restored; Run.archived; run.archived and run.restored on run streams and the lifecycle feed. Archiving is refused (409 conflict) while an agent of it works",
+	"agents.wake": "Waits between turns (ADR-026 §3): an agent ends its turn with a wake armed instead of waiting inside a tool call. agent.wake_armed, agent.woken and agent.wake_cancelled on run streams and the lifecycle feed (causes waiting, woken, wake_cancelled), and Agent.activity of kind wait with `wake` (what it waits for, since when) while it waits",
+	"agents.park": "Parked machines (ADR-026 §6): when a planner or lead (an orchestrate profile, or a root agent) ends its turn idle, its machine is parked (hibernated: boxd hibernate, Docker stop) instead of deleted, and a message to it wakes that machine and resumes its conversation there in a moment (Agent.activity setup shows no restore phase). A worker's machine is deleted when it ends, as before. Parked machines aren't shown with agents: GET /v1/sandboxes/{name}/resources lists them with state `parked`, their agent as owner and `deleteAfter` (when they are deleted), and Delete (capability sandboxes.actions) deletes only the machine (its agent stays idle; sandbox.resource_action `parked: true`). They are deleted when the place's `parkedRetention` setting (4 h, 24 h or 7 days; 24 h by default; recorded with each run) runs out, when more than 10 are parked at the place (the oldest first), when the run is archived or the agent cancelled. Descriptors' caps carry `hibernate` (memory, disk or none). A parked machine holds no memory slot",
+	"agents.thread_internal": "Thread items carry `internal: true` for an agent's bookkeeping (ADR-026 §7: a wake armed or a check-in booked, a wait on other agents, a poll of its own state, a CLI system event). GET …/thread and …/thread/tail leave them out unless asked for with `internal=true`, and `?thread=1` frames unless the stream asks with `internal=1`",
+	"agents.handback_typed": "Typed hand-backs (ADR-026 §7): GET /v1/schemas lists the registered payload schemas (handback@1, review-verdict@1; `name@version`, never changed once registered). An agent hands back with `capcomd result --handback JSON`, checked against handback@1 before it is recorded (a payload that doesn't fit is refused, field by field); a reviewer's verdict is recorded as review-verdict@1. Agent.result.typed is `{schema, value}`; a handoff thread item carries `child.handback` and `child.verdict.findings`",
+	"agents.ask": "Ask and stop (ADR-026 §4): an agent asks a question (`capcomd ask`, `capcomd_ask` in its VM) and its turn ends: Agent.asked carries the question while it is open, agent.asked / agent.answered / agent.question_passed / agent.question_withdrawn on run streams and the lifecycle feed (causes asked, answered, passed_up, withdrawn), and an approval of kind question (subject: questionId, options with the recommended one first, why, holds, to) for every open question. Answer it with POST /v1/approvals/{approvalId}/decision (decision answer with `answer`, or approve for its recommendation), or with a plain message to the agent (POST …/agents/{agentId}/messages): either continues its conversation. A person's answer replaces an agent's. Schedules (ADR-026 §3): agent.wake_armed `every`/`times` for a recurring check-in, agent.woken `slot`/`skipped`, agent.wake_cancelled reason `archived`; a check-in outlives the agent's turn and continues it when it is idle",
+	"events.wait": `GET /v1/events/wait, a filtered, cursor-resumable wait (ADR-026 §3): \`type\` and \`agent\` filter a scope's durable events, \`wait\` (seconds, at most ${EVENTS_WAIT_MAX_S}) holds the request until one matches; it answers an EventsPage (\`events\`, \`cursor\` to resume from, \`reached\`, \`timedOut\`). GET /v1/events is unchanged. A wait on agent.done, agent.failed, agent.cancelled, agent.paused or agent.asked of named agents already in that state answers at once with \`reached\``,
 } as const;
+/** Capability events.wait: GET /v1/events/wait's filters and wait, and the page it answers. */
+const ListParam = z.union([z.string(), z.array(z.string())]).optional();
+export const EventsQuery = z.object({
+	scope: Scope,
+	after: z.coerce.number().int().nonnegative().optional().describe("Resume cursor: events with a seq above it (default 0). Pass the previous answer's `cursor`"),
+	type: ListParam.describe(`Capability events.wait. Only events of these types (exact names, e.g. agent.done; a legacy name such as AGENT_DONE is taken as its dotted one): the parameter repeated (\`type=a&type=b\`) or a comma list, at most ${EVENTS_TYPES_MAX}. 422 \`invalid\` for a name that isn't an event type`),
+	agent: ListParam.describe(`Capability events.wait. Only events about these agents (the event's agentId or entity): repeated or a comma list, at most ${EVENTS_AGENTS_MAX}`),
+	wait: z.coerce.number().int().min(0).max(EVENTS_WAIT_MAX_S).optional().describe(`Capability events.wait. Seconds to hold the request while nothing after \`after\` matches (0 to ${EVENTS_WAIT_MAX_S}; default 0: answer at once): it answers as soon as a matching event is appended, or with none (timedOut) when the wait runs out`),
+});
+export const EventsReached = z.object({
+	agentId: z.string(),
+	type: z.string().describe(`The state-like event type asked for (${Object.keys(STATE_TYPES).join(", ")}) whose state the agent is in now`),
+	event: HarnessEvent.nullable().describe("The event that put it there, at or before the cursor (the latest of that type about the agent); null when the log doesn't have it"),
+});
+export const EventsPage = z.object({
+	events: z.array(HarnessEvent).describe(`The matching events after \`after\`, oldest first, at most ${EVENTS_PAGE_MAX}`),
+	cursor: z.number().int().nonnegative().describe("Pass as `after` next time: the highest seq the daemon looked at, matching or not (the last event's seq when the page is full), so the next call never rescans what didn't match and never skips what did"),
+	reached: z.array(EventsReached).describe("Before-or-after: with `agent` and a state-like type (agent.done, agent.failed, agent.cancelled, agent.paused, agent.asked), the named agents already in that state when no matching event came after the cursor (it happened before it). The answer comes at once, without waiting. Empty otherwise"),
+	timedOut: z.boolean().describe("The wait ran out with nothing matched (events and reached empty)"),
+});
+export const EVENTS_WAIT_DOC = `Capability events.wait. Durable events of one scope after \`after\`, filtered by \`type\` and \`agent\`, as an EventsPage {events, cursor, reached, timedOut}; \`wait\` holds the request (at most ${EVENTS_WAIT_MAX_S} s) until a matching event is appended. ` +
+	"Resume from `cursor`: it moves past the events that didn't match, and never past one that did. A wait on a state-like event (agent.done, agent.failed, agent.cancelled, agent.paused, agent.asked) of named agents already in that state answers at once with `reached` (Board's before-or-after rule). " +
+	"Run and daemon scopes: a project scope is 422 `invalid` (its stream has only run.created) and a run that doesn't exist 404 `not_found`.";
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
 	CAPABILITY_NAMES.map((k) => `\`${k}\`: ${CAPABILITIES[k]}`).join("; ") + ".";
@@ -621,7 +725,7 @@ export const CreateRunBody = z.object({
 	profile: ProfileName.max(63).optional().describe("Agent profile, as `capcomd run --profile`: the worker of the built-in recipe. Refused (422) when the run uses a planner agent, which picks its own workers."),
 	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target. With a goal branch (capability runs.goal_branch), the base: send `base` instead."),
 	base: BranchName.optional().describe("Capability runs.goal_branch. The origin branch the run's goal branch is cut from and its pull request goes into (`capcomd run --base`), as the user picked it in the setup screen (GET /v1/projects/branches). Omitted: `targetBranch`, else the project's target, else the remote's default branch; when none of those is known, 422 with `field` base: ask the user. Never a guessed main"),
-	goalBranch: z.union([BranchName, z.literal(false)]).optional().describe("Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (capcomd/<goal-slug>, never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"),
+	goalBranch: z.union([BranchName, z.literal(false)]).optional().describe("Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (named the way the repository names its branches, else `<type>/<slug>` such as feat/csv-export; never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"),
 	driver: DriverProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
 	model: z.string().min(1).max(100).regex(/^[A-Za-z0-9._:\/-]+$/, "model must be a model id").optional().describe("Capability runs.options.models. The model the run's planner (the driver) runs on (`capcomd run --planner-model`): one of that driver's `models[].id` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Passed to the agent CLI as a profile's model is (Claude Code `--model`, Codex `-m`). Omitted: the driver's `model` there (the planner profile's, else the CLI's default)."),
@@ -938,6 +1042,7 @@ export const SandboxCaps = z.object({
 	interactive: z.boolean().describe("A command with a terminal (interactive logins)"),
 	idleLifetime: z.string().describe("Who deletes a machine left behind: platform (the provider itself), sweep (capcomd, every 5 minutes), none. More may be added"),
 	shell: z.boolean().describe("A shell into a live machine (`capcomd sandbox shell`)"),
+	hibernate: z.string().optional().describe("Capability agents.park. What a parked machine keeps: memory (boxd's hibernate: memory written to disk, restored on wake), disk (Docker's stop: files, not processes) or none (it parks no machines). Absent: none. More may be added"),
 });
 export const SandboxDescriptor = z.object({
 	name: z.string().describe("What the API and CAPCOMD_SANDBOX call it"),
@@ -949,7 +1054,7 @@ export const SandboxDescriptor = z.object({
 	mark: z.string().describe("Id of a mark the app bundles (docker, boxd); fall back to the kind's glyph for an id you don't have. Never an image"),
 	listed: z.boolean().describe("Always true here (unlisted test providers are never served)"),
 	caps: SandboxCaps.describe("What it can do. Ignore caps you don't know"),
-	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime; agentMemory on a place with a memory cap, today docker). Ignore ids you don't know"),
+	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime; agentMemory on a place with a memory cap, today docker; parkedRetention on a place that parks machines, capability agents.park). Ignore ids you don't know"),
 	info: z.array(z.string()).describe("Info row ids its details show (logins, checkpoints; agentSlots on a place with a memory cap, today docker). Ignore ids you don't know"),
 	resourceKinds: z.array(z.string()).describe("Kinds of resource it lists (machine)"),
 	actions: z.array(z.string()).describe("Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"),
@@ -961,28 +1066,28 @@ export const SandboxSummary = SandboxDescriptor.extend({
 });
 export const Sandboxes = z.object({ sandboxes: z.array(SandboxSummary).describe("Every listed place, in order: today docker, then boxd") });
 export const SandboxField = z.object({
-	id: z.string().describe("Stable id: idleLifetime, agentMemory (settings); logins, checkpoints, agentSlots (info). More may be added"),
+	id: z.string().describe("Stable id: idleLifetime, agentMemory, parkedRetention (settings); logins, checkpoints, agentSlots (info). More may be added"),
 	type: z.string().describe("choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"),
 	label: z.string().describe("Row title (daemon-written)"),
 	help: z.string().nullable().describe("A footnote under the row (daemon-written, trusted); null when none"),
-	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime in seconds, agentMemory in MB; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)"),
+	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime and parkedRetention in seconds, agentMemory in MB; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)"),
 	display: z.string().describe("The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"),
 	default: z.string().nullable().describe("A setting's default value; null for info rows"),
-	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}; agentMemory: ${AGENT_MEMORY_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
+	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}; agentMemory: ${AGENT_MEMORY_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}; parkedRetention: ${PARKED_RETENTION_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
 	source: z.string().describe("Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"),
 	editable: z.boolean().describe("Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"),
-	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it (idleLifetime); new_agents: to agents that start after it, those waiting for a slot included (agentMemory); null for info rows. More may be added"),
+	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it (idleLifetime, parkedRetention); new_agents: to agents that start after it, those waiting for a slot included (agentMemory); null for info rows. More may be added"),
 	needsRestart: z.boolean().describe("A change needs the daemon restarted"),
 	state: z.string().nullable().describe("A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type"),
 });
 export const SandboxDetail = z.object({
 	descriptor: SandboxDescriptor,
-	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900. agentMemory: how much of Docker's memory each agent gets, in MB, which sets agentSlots; CAPCOMD_DOCKER_AGENT_MEMORY_MB wins)"),
+	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900. agentMemory: how much of Docker's memory each agent gets, in MB, which sets agentSlots; CAPCOMD_DOCKER_AGENT_MEMORY_MB wins. parkedRetention, capability agents.park: how long a parked planner's or lead's machine is kept, in seconds; CAPCOMD_PARKED_RETENTION_SECONDS wins)"),
 	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work), agentSlots (how many agents run at once here: Docker's memory over the agentMemory setting, 1 GB by default; more wait as pending and start as others finish)"),
 	rev: z.string().describe("Changes whenever a setting's value, source or editability does; PATCH …/settings sends it back (a stale one is 409 conflict)"),
 });
 export const SettingsBody = z.object({
-	values: z.record(z.string(), z.string()).describe("Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds; agentMemory: \"512\", \"1024\", \"2048\" or \"4096\", MB)"),
+	values: z.record(z.string(), z.string()).describe("Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds; agentMemory: \"512\", \"1024\", \"2048\" or \"4096\", MB; parkedRetention: \"14400\", \"86400\" or \"604800\", seconds)"),
 	rev: z.string().min(1).max(200).describe("The `rev` of the GET /v1/sandboxes/{name} the change was made from"),
 });
 export const SETTINGS_DOC = "Capability sandboxes.settings. Change a place's settings: the body names each setting by id with a value from its `choices`, and the `rev` it was read with. Needs the `configure` scope (403 `forbidden` without it: settings change what future runs do, like how long their machines and billing live). " +
@@ -1003,10 +1108,10 @@ export const ResourceOwner = z.object({
 export const SandboxResource = z.object({
 	id: z.string().describe("The machine's name at the provider: capcomd's prefix (relay-) and letters, digits, `.`, `_`, `-` (at most 128). Stable for the machine's life"),
 	kind: z.string().describe("machine. More may be added"),
-	state: z.string().describe("starting, running, orphaned (this capcomd made it, by its machines ledger, and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer, or who uses it can't be told); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"),
+	state: z.string().describe("starting, running, parked (capability agents.park: an idle planner's or lead's machine, hibernated for a message to wake; its owner is that agent, `deleteAfter` when it is deleted, and its only action delete, which deletes the machine and leaves the agent idle), orphaned (this capcomd made it, by its machines ledger, and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer, or who uses it can't be told); asleep is reserved. Treat an unknown state as unknown"),
 	owner: ResourceOwner.nullable().describe("Who uses it, from capcomd's own records (never from provider labels): an agent (its worker), or one of capcomd's own jobs (a ledger capcomd writes when it makes the machine); null when orphaned or unknown"),
 	createdAt: Timestamp.nullable().describe("When it was created; null when unknown"),
-	deleteAfter: Timestamp.nullable().describe("When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes"),
+	deleteAfter: Timestamp.nullable().describe("When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes. A parked machine's (capability agents.park): when its retention runs out"),
 	actions: z.array(z.string()).describe("Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`); delete (capability sandboxes.actions: POST …/resources/{id}/actions/delete; an agent's machine while it isn't starting or stopping, and one left behind). Machines of capcomd's own jobs have none. Ignore actions you don't know"),
 	destructive: z.boolean().optional().describe("Capability sandboxes.actions. An action here can't be undone (delete): ask first, with `confirm`, and a destructive button. Absent from older daemons: false"),
 	confirm: z.string().nullable().optional().describe("Capability sandboxes.actions. The question to ask before deleting it, written by the daemon: for an agent's machine it names the agent and says its work since the last checkpoint is lost (\"Delete worker's machine? This stops the worker on “Add an abs(a) function…”. Work since its last checkpoint is lost.\"); for one left behind, \"Delete this machine? No agent is using it.\" The quoted task is the agent's (untrusted): show it as plain text. null without a destructive action"),
@@ -1158,7 +1263,7 @@ export const ProjectBranches = z.object({
 	branches: z.array(z.string()).describe("The repository's branches, sorted (at most 500): the base menu"),
 	projectTarget: z.string().nullable().describe("The project's configured target branch (`capcomd setup project`), when it has one"),
 	suggestedBase: z.string().nullable().describe("What to preselect: `base` when given, else the project's target, else defaultBranch; null when none is known: the user must pick one (never a guessed main)"),
-	suggestedGoalBranch: z.string().nullable().describe("With `goal`: capcomd/<goal-slug> (lowercase, hyphens, at most 40 characters of slug), with -2, -3… when the repository has that branch already; null without `goal`"),
+	suggestedGoalBranch: z.string().nullable().describe("With `goal`: a name for the goal's branch in the repository's own convention, learned from its branches (its type prefixes and their spelling, such as feature/ or bugfix/, or one prefix most branches share, such as a person's marvin/), else the common `<type>/<slug>` (feat/csv-export, fix/login-crash; the type from the goal's words). The slug: a few of the goal's meaningful words, lowercase ASCII with hyphens, at most 40 characters; a ticket id in the goal (ABC-123) leads it. -2, -3… when the repository has that branch already. Instant: no model call. null without `goal`"),
 	goalBranchProblem: z.string().nullable().describe("With `goalBranch`: why it can't be used (daemon-written, trusted: not a branch name, the base itself, protected, or already on the remote), shown under the field; null when it can"),
 	baseProblem: z.string().nullable().describe("With `base`: why it can't be used (not a branch name, or not one of `branches` when they were read from the remote); null when it can"),
 });
@@ -1355,6 +1460,15 @@ export const contract = {
 				"Confirmed by agent.cancelled per agent and run.cancelled. " +
 				`409 \`conflict\` when the run has already ended (a run with no agent running is cancelled, not refused). ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunControl),
+		archive: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/archive", inputStructure: "detailed",
+			description: "Capability runs.archive. Archive the run (no body): read-only until restored; a message to its agents is 409 `archived`. Confirmed by run.archived. " +
+				`409 \`conflict\` while an agent of it is pending, running or paused (stop the run first). ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunArchive),
+		restore: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/restore", inputStructure: "detailed",
+			description: `Capability runs.archive. Restore an archived run (no body): its agents take messages again (each is idle, as it was). Confirmed by run.restored. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunArchive),
 	},
 	agents: {
 		tree: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents" }).input(z.object({ runId: z.string() })).output(z.array(Agent)),
@@ -1364,18 +1478,18 @@ export const contract = {
 		}).input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(TRANSCRIPT_PAGE_MAX).optional() }))
 			.output(TranscriptPage),
 		thread: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/thread", description: `The agent's thread items (format ${THREAD_FORMAT}), paged by write cursor: \`after\` is the highest seq you have, \`limit\` at most ${THREAD_PAGE_MAX}. See "Agent threads" in docs/harness-contract.md.` })
-			.input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional() }))
+			.input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional(), internal: InternalQuery }))
 			.output(ThreadPage),
 		threadTail: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/thread/tail", description: `Capability agents.thread_tail. The agent's newest thread items by position (\`order\`): \`before\` (from a previous page) for the items above, \`limit\` at most ${THREAD_PAGE_MAX}. \`cursor\` is where GET …/thread (\`after\`) and live frames take over. See "Agent threads" in docs/harness-contract.md.` })
-			.input(z.object({ runId: z.string(), agentId: z.string(), before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional() }))
+			.input(z.object({ runId: z.string(), agentId: z.string(), before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional(), internal: InternalQuery }))
 			.output(ThreadTail),
 		workspace: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/workspace", description: "A file of the agent's latest work, raw bytes (workspace media). See \"Agent threads\" in docs/harness-contract.md." })
 			.input(z.object({ runId: z.string(), agentId: z.string(), path: z.string().min(1).max(1024) })).output(z.string().describe("The file's bytes")),
 		send: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/messages", inputStructure: "detailed",
 			description: "Steer: send the agent a message from the operator (`capcomd send <runId> <agt> <text>`). Returns the thread `seq`; the message.sent event on the run stream " +
-				"with the same `data.seq` (and `data.to` = agentId) confirms it, so a client can match its optimistic bubble. 409 `conflict` when the agent has ended (nothing would read it). " +
-				`422 \`invalid\` when \`body\` is empty or over ${MESSAGE_BODY_MAX_BYTES} bytes, or a skill is unknown or too many. The same key with other \`skills\` is another request (409 \`idempotency_conflict\`). ${WRITE_DOC}`,
+				"with the same `data.seq` (and `data.to` = agentId) confirms it, so a client can match its optimistic bubble. Capability agents.idle: an agent whose attempt ended (idle) takes it too, as the first turn of its next attempt (`continued: true`, agent.continued); 409 `archived` when the run is archived (capability runs.archive). " +
+				`422 \`invalid\` when \`body\` is empty or over ${MESSAGE_BODY_MAX_BYTES} bytes, or a skill is unknown or too many, or \`model\`/\`effort\` isn't one its provider offers (\`field\`). The same key with other \`skills\` is another request (409 \`idempotency_conflict\`). ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders, body: SendBody })).output(SentMessage),
 		pause: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/pause", inputStructure: "detailed",
@@ -1470,11 +1584,18 @@ export const contract = {
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),
 	},
+	schemas: {
+		list: oc.route({ method: "GET", path: "/v1/schemas", description: "Capability agents.handback_typed. The registered payload schemas (ADR-026 §7), by id." }).output(z.object({ schemas: z.array(PayloadSchema) })),
+	},
 	events: {
 		replay: oc
 			.route({ method: "GET", path: "/v1/events", description: "Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream." })
 			.input(z.object({ scope: Scope, after: z.coerce.number().int().nonnegative().optional() }))
 			.output(z.array(HarnessEvent)),
+		wait: oc
+			.route({ method: "GET", path: "/v1/events/wait", description: EVENTS_WAIT_DOC })
+			.input(EventsQuery)
+			.output(EventsPage),
 		stream: oc
 			.route({ method: "GET", path: "/v1/streams/{scope}/events", inputStructure: "detailed", description: STREAM_DOC })
 			.input(z.object({ params: z.object({ scope: Scope }), query: z.object({ feed: z.enum(["lifecycle"]).optional().describe("Run scopes: lifecycle events only"), activity: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.activity_changed frames (at most one per agent per second)"), thread: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.thread_item_changed frames (at most four per item per second)") }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
@@ -1485,7 +1606,8 @@ export const contract = {
 			.route({
 				method: "POST", path: "/v1/approvals/{approvalId}/decision", inputStructure: "detailed",
 				description: "No prior read needed. `Idempotency-Key` is scoped to the calling client. Same key + same body: 200 with the first result (replay). " +
-					"Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when).",
+					"Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when). " +
+					"Capability agents.ask: a question (kind question) is answered: decision answer with `answer` (and `reason`, the answerer's note), or approve to take its recommendation; the answer is a message to the asker, which continues its conversation, and the decision's status is `answered`. A question an agent already answered can still be answered here, and this answer replaces the agent's (a person's answer wins); one a person answered is 409 `already_decided`.",
 			})
 			.input(z.object({ params: z.object({ approvalId: ApprovalId }), headers: IdempotencyHeaders, body: DecideBody }))
 			.output(Decision),

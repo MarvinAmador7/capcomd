@@ -2,7 +2,7 @@
 // planner (1 task) → a worker on an fx profile runs the bridge, which runs a scripted fake fx (an ACP peer) in a host-exec
 // FakeProvider → commit with trailers + push → verifier runs tests → real git merge.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../helpers/test-engine";
@@ -79,7 +79,8 @@ test("capcomd run --profile fxw (fx profile, apikey): the bridge runs fx, the wo
 
   // How the bridge ran fx: its ACP server, the profile's model and effort, full access (the VM is the boundary), the
   // key in its environment, and the in-VM capcomd as an MCP server with an absolute command.
-  const W = join(env.CAPCOMD_AGENT_WORKDIR!, "task-1-e1");
+  // Its work dir: `<agentId>` (the same every attempt, ADR-026 §2), found by what fx wrote there.
+  const W = readdirSync(env.CAPCOMD_AGENT_WORKDIR!).map((d) => join(env.CAPCOMD_AGENT_WORKDIR!, d)).find((d) => existsSync(join(d, "fx-seen.json")))!;
   const seen = JSON.parse(readFileSync(join(W, "fx-seen.json"), "utf8"));
   expect(seen.argv.slice(0, 3)).toEqual(["acp", "--model", "anthropic/claude-sonnet-5"]);
   expect(seen.env).toMatchObject({ FX_PERMISSION_MODE: "full-access", FX_PROVIDER: "gateway", FX_EFFORT: "high", FX_MAX_AGENT_STEPS: "10", FX_AUTO_UPGRADE: "0" });

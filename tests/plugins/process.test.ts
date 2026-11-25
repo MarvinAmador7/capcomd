@@ -143,10 +143,10 @@ describe("the out-of-process runtime", () => {
   }, 30_000);
 
   test("past its deadline a gate call is denied (timeout), and the late answer is 409", async () => {
-    const b = await boot({ hooks: { "merge.landing": { timeoutMs: 1500 } }, control: { "merge.landing": "slow", slowMs: 2500 } });
+    const b = await boot({ hooks: { "merge.landing": { timeoutMs: 400 } }, control: { "merge.landing": "slow", slowMs: 1200 } });
     const t0 = Date.now();
     expect(await b.host.hooks.fire("merge.landing", "veto", merge, OPERATOR)).toMatchObject({ decision: "deny", failure: "timeout" });
-    expect(Date.now() - t0).toBeLessThan(2400);
+    expect(Date.now() - t0).toBeLessThan(1100);
     await until(() => frames(b).some((f) => f.answerRefused));
     expect(frames(b).find((f) => f.answerRefused).error).toMatch(/^409/);
   }, 30_000);

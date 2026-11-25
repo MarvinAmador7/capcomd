@@ -26,12 +26,16 @@ delete process.env.RELAY_RPC_KEY_FILE;
 // No endpoint means the default, a developer's daemon on :6420: a test that forgets its own engine gets a closed port
 // instead (the discard port; nothing listens there) and fails as "engine unreachable". And nothing starts an engine for
 // it there: `capcomd mcp` starts one when nothing answers (src/core/engine-start.ts), detached, outliving the test. The
-// test of that autostart (tests/core/engine-start.test.ts) turns it back on for itself.
+// test of that autostart (tests/scenarios/engine-live.test.ts) turns it back on for itself.
 process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9";
 process.env.CAPCOMD_NO_ENGINE_AUTOSTART = "1";
 // Nor ask the developer's own GitHub CLI (it reads its login from the keychain): the forges ask gh only through
 // CAPCOMD_GH_CLI, so a test that needs gh names its fake there. The live GitHub test (CAPCOMD_GH_LIVE=1) keeps the real one.
 if (process.env.CAPCOMD_GH_LIVE !== "1") process.env.CAPCOMD_GH_CLI ??= "/nonexistent/capcomd-test-gh";
+// The agent workflow's watch (src/actors/agent-workflow.ts WATCH_MS, 60 s by default) bounds how long an agent whose
+// run was lost with its engine host waits after a restart: 20 s here, still past the 10 s step wake (STEP_WAKE_MS) so a
+// test can tell the watch's alarm from a step's. A test that needs another sets its own.
+process.env.CAPCOMD_AGENT_WORKFLOW_POLL_MS ??= "20000";
 
 // The guard, here and in every bun process a test starts (BUN_OPTIONS: bun reads it as command-line flags).
 const log = join(scratch, "guard-violations.log");

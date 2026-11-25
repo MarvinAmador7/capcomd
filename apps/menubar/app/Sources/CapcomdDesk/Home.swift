@@ -58,8 +58,10 @@ struct HomeView: View {
           ZStack(alignment: .topLeading) {
             Color.clear.contentShape(Rectangle()).onTapGesture { model.closeModelMenu() }
               .accessibilityHidden(true)
+            // Under the chip, its trailing edge on the chip's: the chip sits by Start, as on the menu bar.
             ModelMenuView(revision: np.revision)
-              .offset(x: r.minX, y: r.maxY + Theme.Desk.Home.menuGap)
+              .alignmentGuide(.leading) { d in d[.trailing] - r.maxX }
+              .alignmentGuide(.top) { _ in -(r.maxY + Theme.Desk.Home.menuGap) }
           }
         }
       }
@@ -103,9 +105,9 @@ struct HomeMark: View {
 
 // MARK: the composer
 
-/// The new-project composer with Home's lift: the folder and branch chips, the goal (15 pt), then + , Local / Cloud, the
-/// model button, the mic and Start. A folder that isn't set up swaps the tool row for its next steps (the menu bar's
-/// inline setup). The goal is the field's own state, handed to the model as it changes (the branch suggestion).
+/// The new-project composer with Home's lift: the folder and branch chips, the goal (15 pt), then the menu bar
+/// composer's tool row (+ , Local / Cloud, the model chip, the mic and Start). A folder that isn't set up swaps the tool
+/// row for its next steps (the menu bar's inline setup). The goal is the field's own state, handed to the model as it changes (the branch suggestion).
 struct HomeComposer: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -124,10 +126,10 @@ struct HomeComposer: View {
     return VStack(alignment: .leading, spacing: Theme.Desk.Home.cardGap) {
       HStack(spacing: 4) {
         FolderChip(revision: np.revision)
-        if branches { BaseChip(form: form) }
+        if branches { BaseChip(form: form); GoalBranchName(form: form) }
         Spacer(minLength: 0)
       }
-      if branches { GoalBranchName(form: form); BranchLines(form: form) }
+      if branches { BranchLines(form: form) }
       TextField("", text: $goal, axis: .vertical)
         .textFieldStyle(.plain).font(Theme.Desk.Home.goalFont).tracking(Theme.Desk.Home.goalTracking).foregroundStyle(Theme.Desk.text)
         .lineLimit(2...8).lineSpacing(4)
@@ -202,15 +204,22 @@ struct HomeComposer: View {
     return nil
   }
 
+  /// The menu bar composer's tool row (CapcomdUI/ComposerToolRow.swift), on the window's model: + , where it runs, the
+  /// model chip by Start (it opens the model menu), the mic, Start.
   private func toolRow(busy: Bool) -> some View {
-    HStack(spacing: 6) {
-      AddMenu(revision: np.revision)
-      PlaceSwitch(revision: np.revision)
-      ModelButton(np: np)
+    let s = model.store
+    return HStack(spacing: Theme.Composer2.chipGap) {
+      ComposerAddMenu(label: "Add a project folder") {
+        Button("Choose Project Folder…") { model.chooseProjectFolder() }
+        if s.prefs.startRepo != nil { Button("Use the Default Project") { model.useDefaultProject() } }
+      }
+      ComposerPlaceSwitch(places: s.runOptions.sandboxes, current: s.startSandbox?.name) { s.setDefaultPlace($0); model.newProjectChanged() }
       Spacer(minLength: 0)
+      ModelButton(np: np)
       if busy { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
-      MicButton { focused = true }
-      StartButton(ready: model.newProjectCanStart) { submit() }
+      ComposerMicButton { focused = true }.disabled(busy)
+      SendCircle(ready: model.newProjectCanStart, stop: false, label: "Start the project") { submit() }
+        .help("Start (Return)")
     }
     .frame(height: Theme.Desk.Home.toolRow)
   }
@@ -225,42 +234,6 @@ struct HomeComposer: View {
   }
 }
 
-/// The mic: focuses the goal and starts macOS dictation into it (Edit › Start Dictation), until the app has voice input
-/// of its own.
-struct MicButton: View {
-  let focus: () -> Void
-  var body: some View {
-    Button {
-      focus()
-      DispatchQueue.main.async { NSApp.sendAction(Selector(("startDictation:")), to: nil, from: nil) }
-    } label: {
-      Image(systemName: "mic").font(.system(size: 13.5, weight: .regular)).foregroundStyle(Theme.Desk.secondary)
-        .frame(width: Theme.Desk.Home.go, height: Theme.Desk.Home.go).contentShape(Circle())
-    }
-    .buttonStyle(PressableStyle())
-    .help("Dictate")
-    .accessibilityLabel("Dictate the goal")
-  }
-}
-
-/// Start: the white round arrow; dim while there's nothing to start.
-struct StartButton: View {
-  let ready: Bool
-  let action: () -> Void
-  var body: some View {
-    Button(action: action) {
-      Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Desk.Home.goArrow)
-        .frame(width: Theme.Desk.Home.go, height: Theme.Desk.Home.go)
-        .background(Circle().fill(Theme.Desk.Home.goFill))
-        .contentShape(Circle())
-    }
-    .buttonStyle(PressableStyle())
-    .disabled(!ready).opacity(ready ? 1 : 0.3)
-    .help("Start (Return)")
-    .accessibilityLabel("Start the project")
-  }
-}
-
 // MARK: the model button and its menu
 
 struct ModelButtonBounds: PreferenceKey {
@@ -268,51 +241,30 @@ struct ModelButtonBounds: PreferenceKey {
   static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
 }
 
-/// The planner's model with its effort as bars: opens the model menu. With no harness that can run here it stays a
-/// menu, dimmed, whose sections say why.
+/// The model chip (the menu bar's driver chip: the harness's mark, the planner's model, the effort's bars): opens the
+/// model menu. With no harness that can run here it stays a menu, dimmed, whose sections say why. A daemon that offers
+/// no drivers: no chip.
 struct ModelButton: View {
   @Environment(DeskModel.self) private var model
   let np: NewProjectModel
-  @State private var hovering = false
   var body: some View {
     _ = np.revision
     let m = model.store.modelMenu
     let open = np.modelMenuOpen
-    return Button { model.toggleModelMenu() } label: {
-      HStack(spacing: 6) {
-        Text(verbatim: m.chip).font(Theme.Desk.Home.drvFont).lineLimit(1)
-        if let bars = m.bars { EffortBarsMark(lit: bars) }
-        Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
-      }
-      .foregroundStyle(open || hovering ? Theme.Desk.text : m.enabled ? Theme.Desk.secondary : Theme.Desk.tertiary)
-      .padding(.horizontal, 8).frame(height: Theme.Desk.Home.drvHeight)
-      .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(open || hovering ? Theme.Desk.Home.drvHover : .clear))
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(PressableStyle())
-    .onHover { hovering = $0 }
-    .fixedSize()
-    .anchorPreference(key: ModelButtonBounds.self, value: .bounds) { $0 }
-    .help(m.label)
-    .accessibilityLabel(m.label)
-    .accessibilityHint("Opens the planner's models and effort")
-    .accessibilityAddTraits(open ? .isSelected : [])
-  }
-}
-
-/// Three rising bars (the prototype's 12 × 10 glyph): `lit` of them in the text colour, the rest faint.
-struct EffortBarsMark: View {
-  let lit: Int
-  var body: some View {
-    Canvas { ctx, _ in
-      let bars: [(x: CGFloat, y: CGFloat, h: CGFloat)] = [(0.5, 6, 3.5), (4.3, 3.5, 6), (8.1, 1, 8.5)]
-      for (i, b) in bars.enumerated() {
-        let p = Path(roundedRect: CGRect(x: b.x, y: b.y, width: 2.4, height: b.h), cornerRadius: 0.5)
-        ctx.fill(p, with: i < lit ? .foreground : .color(Theme.Desk.Home.barOff))
+    return Group {
+      if !m.sections.isEmpty {
+        Button { model.toggleModelMenu() } label: {
+          DriverChipLabel(provider: Provider(wire: m.provider), text: m.chip, effort: m.effortIndex.map { ($0, m.efforts.count) }, available: m.enabled)
+        }
+        .buttonStyle(PressableStyle())
+        .fixedSize()
+        .anchorPreference(key: ModelButtonBounds.self, value: .bounds) { $0 }
+        .help(m.label)
+        .accessibilityLabel(m.label)
+        .accessibilityHint("Opens the planner's models and effort")
+        .accessibilityAddTraits(open ? .isSelected : [])
       }
     }
-    .frame(width: 12, height: 10)
-    .accessibilityHidden(true)
   }
 }
 
@@ -413,7 +365,7 @@ struct ModelMenuView: View {
   }
 }
 
-/// The menu's Effort segmented control (and the composer's Local / Cloud look): Auto, then the driver's levels.
+/// The menu's Effort segmented control: Auto, then the driver's levels.
 struct EffortSegments: View {
   let levels: [String?]
   let picked: String?

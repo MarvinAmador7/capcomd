@@ -45,11 +45,13 @@ const applyMs = (bytes: number) => Math.max(600_000, Math.ceil(bytes / 1024 ** 2
 
 type Report = (bytes: number, o?: { done?: boolean; line?: string }) => void;
 /** A phase's reporter: to `onProgress` and as a `git.progress` event on the transfer's span, throttled (see above). */
-function reporter(phase: TransferProgress["phase"], total: number | null, span: SimpleSpan | undefined, onProgress: OnTransferProgress | undefined): Report {
+function reporter(phase: TransferProgress["phase"], total: number | null, span: SimpleSpan | undefined, onProgress: OnTransferProgress | undefined, onTick?: OnTransferProgress): Report {
   const t0 = Date.now();
   let last = t0, said = false;
   return (bytes, o = {}) => {
     const now = Date.now();
+    // Every report, unthrottled (a chunk, a git progress line): the agent's setup activity throttles its own writes.
+    if (onTick) { try { onTick({ phase, bytes, total, ms: now - t0, done: !!o.done, ...(o.line ? { line: o.line } : {}) }); } catch { /* best effort */ } }
     if (o.done ? !said && now - t0 < PROGRESS_EVERY_MS() : now - last < PROGRESS_EVERY_MS()) return;
     last = now;
     said = true;
@@ -80,6 +82,7 @@ export function progressLine(what: string, p: TransferProgress): string {
 async function uploadFile(s: SandboxGit, file: string, to: string, report: Report): Promise<number> {
   const size = statSync(file).size;
   const chunk = CHUNK();
+  report(0);   // it starts (the log hears it only once it takes a while)
   if (size <= chunk) {
     await s.upload(to, readFileSync(file));
     report(size, { done: true });
@@ -262,6 +265,8 @@ export interface SendRequest {
   timeoutMs?: number;
   /** Hears a long fetch and upload as they go (TransferProgress). */
   onProgress?: OnTransferProgress;
+  /** Hears every report of the fetch and upload, unthrottled: each chunk sent, each git progress line. */
+  onTick?: OnTransferProgress;
 }
 export interface SendResult { heads: Record<string, string>; ref?: string; bytes: number }
 
@@ -305,7 +310,7 @@ async function send(h: HostRemote, s: SandboxGit, dir: string, req: SendRequest,
   const files: string[] = [];
   let got: Awaited<ReturnType<typeof fetchedMirror>> | null = null;
   try {
-    got = await fetchedMirror(h, req.branches, { ...(req.ref ? { ref: req.ref } : {}), tmpRef, ...(req.timeoutMs ? { timeoutMs: req.timeoutMs } : {}), report: reporter("fetch", null, span, req.onProgress) });
+    got = await fetchedMirror(h, req.branches, { ...(req.ref ? { ref: req.ref } : {}), tmpRef, ...(req.timeoutMs ? { timeoutMs: req.timeoutMs } : {}), report: reporter("fetch", null, span, req.onProgress, req.onTick) });
     const m = got.m;
     const want = [...new Set([...Object.values(got.heads), ...(got.ref ? [got.ref] : [])])];
     const known = new Set(await mirrorHas(m, theirShas));
@@ -338,7 +343,7 @@ async function send(h: HostRemote, s: SandboxGit, dir: string, req: SendRequest,
 ${fetch}printf '%s\\n' ${lines.map(sq).join(" ")} | git update-ref --stdin${checkout}; rc=$?
 [ -z ${sq(file ?? "")} ] || git for-each-ref --format='delete %(refname)' ${sq(`refs/capcomd/in/${id}/`)} | git update-ref --stdin; rm -f ${sq(into)}; exit $rc`, applyMs(bytes));
     };
-    const upload = (file: string) => uploadFile(s, file, into, reporter("upload", statSync(file).size, span, req.onProgress));
+    const upload = (file: string) => uploadFile(s, file, into, reporter("upload", statSync(file).size, span, req.onProgress, req.onTick));
     let file = missing.length ? await bundleTo([...known]) : null;
     if (file) bytes = await upload(file);
     let r = await apply(file, bytes);

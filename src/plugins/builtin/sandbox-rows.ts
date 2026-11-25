@@ -9,8 +9,9 @@ import type { PluginContext, UiDescriptor, UiRowValue } from "../../../packages/
 import type { SandboxDescriptor } from "../../../packages/plugin/src/seams";
 import { env as envVar } from "../../utils/env";
 import {
-  AGENT_MEMORY_DEFAULT_MB, AGENT_MEMORY_ENV, AGENT_MEMORY_PRESETS, currentAgentMemory, currentIdleLifetime, fileSettingsStore, IDLE_LIFETIME_DEFAULT, IDLE_LIFETIME_ENV,
-  IDLE_LIFETIME_PRESETS, memorySettingsStore, settingsPath, type AgentMemory, type IdleLifetime, type SettingsStore,
+  AGENT_MEMORY_DEFAULT_MB, AGENT_MEMORY_ENV, AGENT_MEMORY_PRESETS, currentAgentMemory, currentIdleLifetime, currentParkedRetention, fileSettingsStore, IDLE_LIFETIME_DEFAULT, IDLE_LIFETIME_ENV,
+  IDLE_LIFETIME_PRESETS, memorySettingsStore, PARKED_MAX_DEFAULT, PARKED_RETENTION_DEFAULT, PARKED_RETENTION_ENV, PARKED_RETENTION_PRESETS, settingsPath, type AgentMemory, type IdleLifetime,
+  type ParkedRetention, type SettingsStore,
 } from "../../providers/settings";
 
 type Env = Record<string, string | undefined>;
@@ -43,9 +44,10 @@ export type LoginLike = { provider: "claude" | "codex"; sandbox: string; loggedI
 /** What the Agents at once row reads of Docker: its memory (null while unknown). */
 export type SlotsLike = { memTotal: number | null };
 
-/** "15 minutes", "1 hour", "90 seconds". */
+/** "15 minutes", "1 hour", "90 seconds", "7 days" (a whole number of days past a day: 24 hours stays hours). */
 export function durationLabel(seconds: number): string {
   const unit = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  if (seconds > 86_400 && seconds % 86_400 === 0) return unit(seconds / 86_400, "day");
   if (seconds > 0 && seconds % 3600 === 0) return unit(seconds / 3600, "hour");
   if (seconds > 0 && seconds % 60 === 0) return unit(seconds / 60, "minute");
   return unit(seconds, "second");
@@ -70,6 +72,25 @@ export function idleLifetimeField(d: Pick<SandboxDescriptor, "caps">, life: Idle
     value: String(life.seconds), display: env ? `Set by ${IDLE_LIFETIME_ENV} in capcomd's environment` : durationLabel(life.seconds),
     default: String(IDLE_LIFETIME_DEFAULT), choices: IDLE_LIFETIME_CHOICES.map((c) => ({ ...c })),
     source: life.source, editable: !env && writable, appliesTo: "new_runs", needsRestart: false, state: null,
+  };
+}
+
+/** The parked machine retention presets (ADR-026 §6, decided 2026-11-19): 4 hours, 24 hours, 7 days. */
+export const PARKED_RETENTION_CHOICES: ReadonlyArray<{ value: string; label: string }> = PARKED_RETENTION_PRESETS.map((n) => ({ value: String(n), label: durationLabel(n) }));
+
+/**
+ * How long a parked machine is kept (ADR-026 §6): a planner's or lead's machine is parked when its turn ends, so a
+ * message wakes it in a moment; it is deleted this long after, or sooner when more than 10 are parked here (the oldest
+ * first). An environment variable wins and makes it read-only. Recorded with each run, as the idle lifetime is.
+ */
+export function parkedRetentionField(r: ParkedRetention, writable = true): Field {
+  const env = r.source === "env";
+  return {
+    id: "parkedRetention", type: "choice", label: "Keep parked machines for",
+    help: `When a planner or lead finishes its turn, its machine is parked so a message wakes it in a moment. A parked machine costs a little for its disk, and is deleted after this (or sooner, past ${PARKED_MAX_DEFAULT} parked here, the oldest first). Its conversation is kept either way.`,
+    value: String(r.seconds), display: env ? `Set by ${PARKED_RETENTION_ENV} in capcomd's environment` : durationLabel(r.seconds),
+    default: String(PARKED_RETENTION_DEFAULT), choices: PARKED_RETENTION_CHOICES.map((c) => ({ ...c })),
+    source: r.source, editable: !env && writable, appliesTo: "new_runs", needsRestart: false, state: null,
   };
 }
 
@@ -189,15 +210,18 @@ const ROWS: Record<string, Row> = {
   idleLifetime: { kind: "settings", build: (_n, d, f) => idleLifetimeField(d, f.idleLifetime, f.writable) },
   // Memory per agent as it is now (read from the store each time): the setting and the Agents at once row agree.
   agentMemory: { kind: "settings", build: (n, _d, f) => agentMemoryField(memoryOf(n, f), f.writable) },
+  parkedRetention: { kind: "settings", build: (n, _d, f) => parkedRetentionField(currentParkedRetention(n, { env: f.env, store: f.store }), f.writable) },
   logins: { kind: "info", build: (n, d, f) => loginsRow(n, f.logins, d.caps.hostBoundSecrets) },
   checkpoints: { kind: "info", build: (_n, _d, f) => checkpointsField(f.env) },
   agentSlots: { kind: "info", build: (n, _d, f) => agentSlotsField({ memTotal: f.slots?.memTotal ?? null, memory: memoryOf(n, f) }) },
 };
 
-/** The rows a place's descriptor lists, in its order: a place whose machines nobody deletes has no idle lifetime. */
+/** The rows a place's descriptor lists, in its order: a place whose machines nobody deletes has no idle lifetime, and
+ *  one that parks none no retention. */
 function listedRows(d: SandboxDescriptor): Array<{ id: string; row: Row }> {
   return [...d.settings, ...d.info]
     .filter((id) => id !== "idleLifetime" || d.caps.idleLifetime !== "none")
+    .filter((id) => id !== "parkedRetention" || (d.caps.hibernate ?? "none") !== "none")
     .flatMap((id) => (ROWS[id] ? [{ id, row: ROWS[id]! }] : []));
 }
 

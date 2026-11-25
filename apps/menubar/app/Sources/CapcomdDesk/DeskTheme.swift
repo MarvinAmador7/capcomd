@@ -74,17 +74,13 @@ extension Theme {
       static let goalFont = Font.system(size: 15), goalTracking: CGFloat = -0.005 * 15
       static let chipFont = Font.system(size: 11.5)
       static let segmentOn = hex(0x3A3A3F)
+      // The tool row's height (its pieces are the menu bar composer's: Theme.Composer2). Then the model menu.
       static let toolRow: CGFloat = 32
-      // The model button and its menu.
-      static let drvHeight: CGFloat = 28, drvFont = Font.system(size: 12), drvHover = Color.white.opacity(0.07)
-      static let barOff = Color.white.opacity(0.18)
       static let menuFill = hex(0x1F1F23), menuRing = Color.white.opacity(0.14), menuRadius: CGFloat = 10, menuPadding: CGFloat = 5
       static let menuWidth: CGFloat = 260, menuGap: CGFloat = 6
       static let menuHeader = Font.system(size: 11, weight: .semibold), menuItem = Font.system(size: 12.5), menuNote = Font.system(size: 11.5)
       static let itemHeight: CGFloat = 28, itemRadius: CGFloat = 6, itemHighlight = hex(0x0A84FF, 0.9)
       static let separator = Color.white.opacity(0.10)
-      // Start and the mic.
-      static let go: CGFloat = 30, goFill = hex(0xF2F2F7), goArrow = hex(0x1D1D1F)
       // Running.
       static let runningTop: CGFloat = 56, runningGap: CGFloat = 8
       static let runHeight: CGFloat = 48, runRadius: CGFloat = 11, runHover = hex(0x18181C), runRing = Color.white.opacity(0.09)

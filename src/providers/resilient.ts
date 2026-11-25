@@ -92,8 +92,9 @@ export function rawProvider<P extends SandboxProvider>(p: P): P { return ((p as 
 /** Repeatable calls: tried again for the whole window. */
 const LONG = new Set(["ensure", "waitReady", "upload", "download", "setEgress", "suspend", "resume"]);
 /** Repeatable calls whose callers have their own retry: tried again for a short while only. (`list` isn't retried: its
- *  callers, the resources route above all, bound it to a few seconds and ask again soon.) */
-const SHORT = new Set(["destroy", "extendTtl"]);
+ *  callers, the resources route above all, bound it to a few seconds and ask again soon.) A parked machine that won't
+ *  wake soon is given up for a fresh one (ADR-026 §5), and one that won't park is destroyed instead. */
+const SHORT = new Set(["destroy", "extendTtl", "hibernate", "wake"]);
 
 /** `p`, riding out transient failures (see the top of this file). Idempotent: a wrapped provider is returned as is. */
 export function resilientProvider<P extends SandboxProvider>(p: P, o: { name?: string } = {}): P {

@@ -2,14 +2,15 @@
 // ADR-019 §1, §3: the in-VM supervisor. It runs next to the agent CLI (run.sh starts it when the VM has node), and
 // reports up through an outbox the engine drains: heartbeats while it is alive, and checkpoints of the workspace.
 // Dependency-free, like vm-cli.mjs. Config (JSON file, argv[2]):
-//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree?, treeShare?, jobs? }
+//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree?, treeShare?, jobs?, wakes? }
 // With `reportTree`, each heartbeat carries the workspace's tree hash (for "no change in the workspace", ADR-019 §2).
 // `reportTree: "progress"` (the agent's files changing as its progress, plugin API §16.4) carries a fingerprint of the
 // workspace instead (workPrint: nothing is written to the repository), and skips heartbeats in a checkout where taking
 // it is slow, so it takes at most a `treeShare`th (default 20th) of the time.
 // With `jobs` (the agent's background jobs' directory, plugin API §16.2), each heartbeat says how many run, and the
 // agent's input stays open while one runs or one ended whose result message hasn't reached it yet: the CLI is still
-// there to read the result when it comes, and the agent keeps its slot.
+// there to read the result when it comes, and the agent keeps its slot. With `wakes` (markers the in-VM capcomd leaves
+// for each wake it armed, ADR-026 §3) the same, while a wake's message hasn't reached it.
 // It never pushes: the agent must not hold push credentials, so the engine pushes the checkpoint ref it reports.
 // With `input` ({ prompt, inbox }), the agent CLI reads user messages on stdin (claude --input-format stream-json):
 // the supervisor sends the prompt, then each message the engine appends to `inbox`, and closes stdin once the agent
@@ -147,6 +148,31 @@ function jobs() {
   return out;
 }
 
+// ADR-026 §3: wakes the agent armed (in-VM `capcomd wake`, `verify --wake`…; markers in `cfg.wakes`) whose message
+// hasn't reached it yet. While one is pending, its input stays open after its turn (a warm wake): the wake-up message
+// (from `wake-<id>`) starts its next turn. One whose time is more than WAKE_WARM_MAX_MS away isn't kept warm (the cold
+// wake's job, ADR-026 phase 2: the CLI ends, and capcomd starts it again on the message).
+const WAKE_WARM_MAX_MS = Number(process.env.CAPCOMD_WAKE_WARM_MAX_MS || 2 * 3600_000);
+const WAKE_GRACE_MS = 60_000;
+const deliveredWakes = new Set();
+function pendingWakes() {
+  if (!cfg.wakes) return 0;
+  let n = 0, ids = [];
+  try { ids = readdirSync(cfg.wakes).filter((f) => /^wk-[A-Za-z0-9_-]+$/.test(f)); } catch { return 0; }
+  for (const id of ids) {
+    if (deliveredWakes.has(id)) continue;
+    let m = {};
+    try { m = JSON.parse(readFileSync(`${cfg.wakes}/${id}`, "utf8")) ?? {}; } catch { /* unreadable: kept warm a while */ }
+    const now = Date.now(), at = typeof m.at === "number" ? m.at : null, armedAt = typeof m.armedAt === "number" ? m.armedAt : now;
+    // Its time is past (its message is on its way, or was lost with capcomd): let go after a grace.
+    if (at !== null && now - at > WAKE_GRACE_MS) continue;
+    // A check-in far ahead, or an event that hasn't come within the warm window: the CLI may end (the cold wake's job).
+    if (m.kind === "timer" ? at !== null && at - now > WAKE_WARM_MAX_MS : now - armedAt > WAKE_WARM_MAX_MS) continue;
+    n++;
+  }
+  return n;
+}
+
 // The baseline, before the agent starts: an unchanged tree isn't a checkpoint.
 checkpoint("start");
 const child = spawn("/bin/sh", [cfg.script], { stdio: [cfg.input ? "pipe" : "inherit", "inherit", "inherit"] });
@@ -186,6 +212,7 @@ if (cfg.input) {
       say(m.text);
       sentAt = Date.now();
       if (typeof m.from === "string" && m.from.startsWith("job-")) deliveredJobs.add(m.from);
+      if (typeof m.from === "string" && m.from.startsWith("wake-wk-")) { const id = m.from.slice(5); deliveredWakes.add(id); try { unlinkSync(`${cfg.wakes}/${id}`); } catch {} }
       report("delivered", { seq: m.seq ?? null });
     }
     [lines, outRead] = tail(cfg.jsonl, outRead);
@@ -194,8 +221,11 @@ if (cfg.input) {
     // read is still in the pipe: the CLI reads it, answers, and then sees the end. Not while a job of its runs, or
     // the result of one is on its way: that message starts its next turn.
     if (resultAt && sentAt <= resultAt && Date.now() - resultAt >= 1000) {
-      const j = jobs();
-      if (!j.running && !j.waiting) { closed = true; try { child.stdin.end(); } catch {} }
+      // The engine asked for its input to end at the end of this turn (a message changed its model: ADR-026, its next
+      // attempt runs with it), whatever it waits on.
+      const ask = existsSync(`${cfg.dir}/input.close`);
+      const j = ask ? null : jobs();
+      if (ask || (!j.running && !j.waiting && !pendingWakes())) { closed = true; try { child.stdin.end(); } catch {} }
     }
   }, 500);
 }
@@ -203,7 +233,7 @@ if (cfg.input) {
 const beat = setInterval(() => {
   sample();
   const tree = heartbeatTree();
-  report("heartbeat", { events, lastEventAt, ...(tree ? { tree } : {}), ...(cfg.jobs ? { jobs: jobs().running } : {}) });
+  report("heartbeat", { events, lastEventAt, ...(tree ? { tree } : {}), ...(cfg.jobs ? { jobs: jobs().running } : {}), ...(cfg.wakes ? { wakes: pendingWakes() } : {}) });
   // The agent committed (claude and codex may): checkpoint the new HEAD now rather than at the next interval.
   try { const h = git(["rev-parse", "HEAD"]); if (lastHead && h !== lastHead) checkpoint("commit"); } catch {}
   // The engine asks for one (the file says why): the agent looks stuck (ADR-019 §2), so the work is safe before
