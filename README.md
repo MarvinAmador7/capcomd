@@ -125,7 +125,8 @@ curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.
 # or, with Bun: bun add -g capcomd
 ```
 
-`capcomd upgrade` updates it later.
+`capcomd update` updates it later, however you installed it, and restarts the engine if it runs as a
+background service (`capcomd upgrade` does the same).
 
 **The Mac app** (optional; macOS 14 or later): a window with each run's agents side by side and a menu bar item with
 approvals, in one app. It uses the CLI you installed above, however you installed it (install.sh, Homebrew, Bun or
@@ -182,7 +183,7 @@ Your agent reports back as agents finish and merges land. Merges into protected 
 runId, the latest run).
 
 Each [release](https://github.com/MarvinAmador7/capcomd/releases) has the binaries for macOS and Linux (arm64 and
-x64), the npm package and the Mac app (universal, signed ad hoc until it's notarized), each with its SHA-256 (the installer and `capcomd upgrade` check it); the npm package is
+x64), the npm package and the Mac app (universal, signed ad hoc until it's notarized), each with its SHA-256 (the installer and `capcomd update` check it); the npm package is
 published by CI with [provenance](https://docs.npmjs.com/generating-provenance-statements).
 
 ### Connecting your agent

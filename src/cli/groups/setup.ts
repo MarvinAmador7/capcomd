@@ -1,4 +1,4 @@
-// front-setup's commands (src/plugins/front/groups.ts): setting capcomd up, its service, upgrades, API clients, the
+// front-setup's commands (src/plugins/front/groups.ts): setting capcomd up, its service, updates, API clients, the
 // web UI. Moved as they were from src/cli/index.ts's `switch` (plugin API §17.2 step 8).
 import { EXIT } from "../../core/errors";
 import { ui } from "../commands/ui";
@@ -54,15 +54,32 @@ async function setupCommand({ positionals, values, json }: Cmd): Promise<number>
   return ok ? EXIT.ok : EXIT.run_failed;
 }
 
-/** `capcomd upgrade` */
-async function upgradeCommand({ values, json }: Cmd): Promise<number> {
-  const r: any = await (await import("../commands/upgrade")).upgrade({ to: values.to as string | undefined, dryRun: !!values["dry-run"] });
-  if (json) out(r);
-  else if (r.how) console.log(`capcomd ${r.current} was installed with ${r.how.split(" ")[0]}; upgrade it with: ${r.how}`);
-  else if (r.upgraded) console.log(`✓ capcomd ${r.current} → ${r.latest} (${r.path})\n  ${r.next}`);
-  else if (r.dryRun) console.log(`capcomd ${r.latest} is available (this is ${r.current}); run \`capcomd upgrade\` to install it`);
-  else console.log(`capcomd ${r.current} is the latest`);
-  return EXIT.ok;
+/** `capcomd update` (alias `capcomd upgrade`) */
+async function updateCommand({ values, json }: Cmd): Promise<number> {
+  const U = await import("../commands/upgrade");
+  const r = await U.upgrade({ to: values.to as string | undefined, dryRun: !!values["dry-run"], restart: !values["no-restart"], json });
+  const e = r.engine;
+  const engineFailed = !!e && !r.dryRun && (e.detail !== undefined || (e.restarted && !e.running));
+  if (json) { out(r as unknown as Record<string, unknown>); return engineFailed ? EXIT.run_failed : EXIT.ok; }
+  const say = (s: string) => console.log(s);
+  if (r.how) {
+    if (r.kind === "checkout") say(`capcomd ${r.current} runs from a development checkout; update it with: ${r.how}`);
+    else say(`capcomd ${r.latest} is available (this is ${r.current}), but ${r.reason}; update it with: ${r.how}`);
+    return EXIT.ok;
+  }
+  if (r.dryRun) {
+    const change = r.latest ? `capcomd ${r.current} → ${r.latest}` : `capcomd ${r.current}`;
+    const restart = e?.wouldRestart ? ", then restart the engine service" : "";
+    say(`${change}: would run \`${r.command}\`${restart} (dry run: nothing was changed)`);
+    return EXIT.ok;
+  }
+  if (!r.upgraded) { say(`capcomd ${r.current} is up to date`); return EXIT.ok; }
+  say(`✓ capcomd ${r.current} → ${r.latest}${r.path ? ` (${r.path})` : r.command ? ` (${r.command})` : ""}`);
+  if (r.pruned?.length) say(`  removed the engines of ${r.pruned.join(", ")}`);
+  if (e?.restarted) say(e.running ? `✓ engine service restarted${e.version ? `; ${e.version} is running` : ""}${e.version && e.version !== r.latest ? ` (the service runs another capcomd install)` : ""}` : `✗ engine service restarted, but it isn't answering on :${e.port}`);
+  else if (e?.detail) say(`✗ couldn't restart the engine service: ${e.detail}`);
+  if (e?.hint) say(`  ${e.hint}`);
+  return engineFailed ? EXIT.run_failed : EXIT.ok;
 }
 
 /** `capcomd service` */
@@ -91,6 +108,7 @@ export const COMMANDS: Record<string, KernelCommand> = {
   "clients": clientsCommand,
   "ui": uiCommand,
   "setup": setupCommand,
-  "upgrade": upgradeCommand,
+  "update": updateCommand,
+  "upgrade": updateCommand,
   "service": serviceCommand,
 };

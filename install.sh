@@ -5,7 +5,7 @@
 #   CAPCOMD_VERSION=0.6.0      a specific version (default: the latest release)
 #   CAPCOMD_INSTALL_DIR=DIR    where to put it (default: ~/.capcomd/bin)
 #   CAPCOMD_INSTALL_FROM=DIR   install from local files instead of GitHub (capcomd-<os>-<arch> and its .sha256)
-# Later: `capcomd upgrade`.
+# Later: `capcomd update`.
 set -eu
 
 REPO=MarvinAmador7/capcomd

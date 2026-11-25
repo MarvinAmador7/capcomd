@@ -24,7 +24,7 @@ Without the MCP tools (no plugin), run `capcomd setup check --json` in a shell i
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | sh
 # a specific version (the one capcomd_setup names): … | CAPCOMD_VERSION=X.Y.Z sh
-# an older capcomd already installed: capcomd upgrade
+# an older capcomd already installed: capcomd update (a capcomd without `update`: capcomd upgrade)
 ```
 
 That installs one self-contained executable (about 220 MB: the CLI and its engine; no Bun or Node needed) in

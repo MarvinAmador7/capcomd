@@ -1,4 +1,4 @@
-// The single executable (scripts/build-binary.ts, install.sh, `capcomd upgrade`): the pure parts. The binary itself is
+// The single executable (scripts/build-binary.ts, install.sh, `capcomd update`): the pure parts. The binary itself is
 // built and driven in CI (the binary job) and by the release workflow on every platform.
 import { describe, expect, test } from "bun:test";
 import { selfArgv, CLI_ENTRY, VERSION } from "../../src/utils/self";

@@ -152,9 +152,12 @@ Usage:
   capcomd service install|uninstall|status [--port N] [--dry-run] [--no-login]
                                        The engine as a background service (launchd / systemd user unit);
                                        install --no-login starts it now but not at the next login
-  capcomd upgrade [--to X.Y.Z] [--dry-run]
-                                       Replace this capcomd with the latest release (the installed binary;
-                                       npm and Homebrew installs say how to upgrade them)
+  capcomd update [--to X.Y.Z] [--dry-run] [--no-restart]
+                                       Update capcomd to the latest release (or X.Y.Z), however it was installed:
+                                       the binary replaces itself; Bun and npm installs run bun add -g or
+                                       npm install -g; Homebrew runs brew upgrade capcomd. Then restarts the
+                                       engine service when the version changed (--no-restart: don't).
+                                       --dry-run says what it would run (alias: upgrade)
   capcomd sandbox shell <runId> <agentId>   A shell in the machine an agent runs on (its sandbox: what you change
   capcomd sandbox shell --sandbox docker|boxd --machine <id>   can change its work), or in a machine capcomd left behind
   capcomd plugins list [--json]          The plugins the running daemon has (or would load, when none runs): each

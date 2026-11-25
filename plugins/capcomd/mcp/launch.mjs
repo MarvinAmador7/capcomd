@@ -50,7 +50,8 @@ if (cmd && have && atLeast(have, want)) {
     : !cmd ? `the installed capcomd (${capcomd}) is the npm package, which needs Bun, and Bun isn't installed`
     : !have ? `the installed capcomd (${capcomd}) didn't report its version`
     : `the installed capcomd is ${have}; this plugin needs ${want} or newer`;
-  // The single executable (no Bun needed); an older one upgrades itself.
+  // The single executable (no Bun needed); an older one upgrades itself (`upgrade`, not `update`: a capcomd older than
+  // this plugin may predate `update`, and every version has `upgrade`).
   const install = [have && !script ? "capcomd upgrade" : `curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | CAPCOMD_VERSION=${want} sh`, "capcomd setup"];
   const info = {
     schema: "relay.v1", ok: false, ready: false, problem, install,
