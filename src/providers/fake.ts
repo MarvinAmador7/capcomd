@@ -21,14 +21,18 @@ function hostShimDir(): string | null {
   const d = mkdtempSync(join(tmpdir(), "capcomd-hostshims-"));
   // setsid CMD…: new session, then exec.
   writeFileSync(join(d, "setsid"), `#!/bin/sh\nexec perl -MPOSIX -e 'POSIX::setsid(); exec { $ARGV[0] } @ARGV or exit 127' -- "$@"\n`);
-  // timeout [-k KILL] SECS CMD…: TERM the command's process group after SECS (KILL after KILL more), exit 124 like GNU.
+  // timeout [-k KILL] SECS CMD…: TERM the command's process group after SECS, exit 124 like GNU. As GNU's, it returns
+  // once the command ends: KILL only if it still runs KILL seconds after the TERM (never a fixed KILL-second wait).
   writeFileSync(join(d, "timeout"), `#!/bin/sh
 k=0; if [ "$1" = "-k" ]; then k=$2; shift 2; fi
 s=$1; shift
-exec perl -e '
+exec perl -MPOSIX=:sys_wait_h -e '
   my ($k, $s) = (shift, shift);
   my $p = fork; if (!$p) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV or exit 127 }
-  $SIG{ALRM} = sub { kill "TERM", -$p; if ($k) { sleep $k; kill "KILL", -$p } waitpid($p, 0); exit 124 };
+  $SIG{ALRM} = sub {
+    kill "TERM", -$p;
+    my $t = $k * 10; select(undef, undef, undef, 0.1) while $t-- > 0 && waitpid($p, WNOHANG) == 0;
+    kill "KILL", -$p if $k && $t < 0; waitpid($p, 0); exit 124 };
   alarm $s; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$k" "$s" "$@"
 `);
   for (const f of ["setsid", "timeout"]) chmodSync(join(d, f), 0o755);

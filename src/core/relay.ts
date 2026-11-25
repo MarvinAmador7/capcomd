@@ -11,13 +11,15 @@ import { env } from "../utils/env";
 import { loadMergeConfig, taskBranch } from "../merge/config";
 import type { MergeOutcome } from "../merge/types";
 import { isoTs } from "../api/envelope";
+import { retryingClient } from "./engine-retry";
 
 export function endpoint(): string {
   return env("ENDPOINT") ?? "http://127.0.0.1:6420";
 }
 
+/** The engine's client. Its actor handles wait out the engine's "overloaded, retry after N ms" (src/core/engine-retry.ts). */
 export function client() {
-  return createClient<Registry>({ endpoint: endpoint() });
+  return retryingClient(createClient<Registry>({ endpoint: endpoint() }));
 }
 
 /** The engine's "no such actor" (a `get` on a key it never had). */
@@ -33,7 +35,8 @@ const actorsSeen = new Set<string>();
  * An actor's handle only when it already exists, else null; it never creates one. Reads go through this: the runs
  * index can list runs this engine never had (another engine's), and a read with getOrCreate left an empty actor behind
  * for each (the menu bar's daemon stream lists every run twice a second). The check is one engine lookup: the calls of
- * a plain `get` handle retry not_found for ~2.4 s, logging every retry. Throws when the engine can't say.
+ * a plain `get` handle retry not_found for ~2.4 s, logging every retry. An overloaded engine is asked again as it says
+ * (client()); throws when the engine still can't say.
  */
 export async function existingActor<K extends ActorKind>(kind: K, key: string[]): Promise<ReturnType<Client[K]["getOrCreate"]> | null> {
   const handle = (client()[kind] as any).get(key);
@@ -277,7 +280,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
     let worker = await workerHandle.getWorker({ workerId });
     if (!worker || worker.state === "provisioning" || worker.state === "failed") {
       const firstAgent = agentOf(tasks[0]!);
-      await workerHandle.provisionWorker({ workerId, runId, epoch: 1, ...(firstAgent ?? {}) });
+      await workerHandle.provisionWorker({ workerId, runId, epoch: 1, scopeBacked: false, ...(firstAgent ?? {}) });
       worker = await workerHandle.getWorker({ workerId });
     }
     emit("worker.ready", { workerId, state: worker?.state ?? "unknown" }, `✓ Worker ${workerId} ready (${worker?.state ?? "unknown"})`);
@@ -322,7 +325,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
             throw new Error(`Worker ${workerId} is busy on ${worker.context.taskId}, expected ${taskId}`);
           }
           const pushed = await workerHandle.pushBranch({
-            workerId, taskId, epoch, branch, runId, target, rework: !!task.context.conflict,
+            workerId, taskId, epoch, branch, runId, target, scopeBacked: false, rework: !!task.context.conflict,
             goal: String(task.context.goal ?? goalOf(taskId)), conflictFiles: task.context.conflict?.files,
             ...(agentOf(taskId) ?? {}),
           });
@@ -343,7 +346,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           const { landUnlessMemory } = await import("../plugins/recipe-hierarchical");
           const outcome = await landUnlessMemory(mergeCfg, { branch, target }, async (judged) => (await c.verifier.getOrCreate([runId, taskId]).verify({
             verifierId: `${taskId}-${approved ? "merge" : "verify"}-e${epoch}`,
-            taskId, branch, runId, target, testOnly, ...(judged ? { expectSha: judged } : {}),
+            taskId, branch, runId, target, testOnly, scopeBacked: false, ...(judged ? { expectSha: judged } : {}),
           })).outcome as MergeOutcome);
           if (outcome.status === "conflict") {
             await taskBoardHandle.mergeConflict({ taskId, files: outcome.files, targetSha: outcome.targetSha, epoch });

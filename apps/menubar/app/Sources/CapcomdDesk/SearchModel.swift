@@ -78,7 +78,16 @@ extension DeskModel {
     refreshSearchIndex()
     search.query = query
     runSearch()
+    paletteOpenedResult = false
     paletteOpen = true
+  }
+
+  /// Before the first ⌘K, once the window has drawn (`PaletteWarmer`): the index and the empty search made while the
+  /// palette is built hidden, so it has its rows, and the first ⌘K only refreshes what changed since.
+  package func warmPalette() {
+    guard !paletteOpen else { return }
+    refreshSearchIndex()
+    if search.query.isEmpty { runSearch() }
   }
 
   /// Esc, a click outside, the window losing the keyboard, or a result opened.
@@ -115,6 +124,7 @@ extension DeskModel {
 
   /// ↩ on a result, or a click.
   package func open(_ hit: SearchHit) {
+    if paletteOpen { paletteOpenedResult = true }
     closePalette()
     if case .agent = hit.item.action { search.remember(hit.item.id) }
     if case .project = hit.item.action { search.remember(hit.item.id) }
@@ -132,6 +142,7 @@ extension DeskModel {
     default: target = nil
     }
     guard let target, nav.sidebarOpen else { return open(hit) }
+    if paletteOpen { paletteOpenedResult = true }
     closePalette()
     search.remember(hit.item.id)
     openInSplit(runId: target.run, agentId: target.agent)

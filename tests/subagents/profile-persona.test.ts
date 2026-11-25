@@ -7,14 +7,15 @@
 // (`untrusted`); an agent already spawned keeps the text it was pinned with; the user's own persona needs no trust. A
 // `harness.cliVersion` the CLI its environment recorded doesn't satisfy, or can't be checked against, refuses the spawn
 // (`environment`), and `capcomd profiles validate` warns about it.
-import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../helpers/test-engine";
 import { capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 import { writeLedger, type EnvRecord } from "../../src/env/resolve";
+import { trustPath } from "../../src/install/trust";
 
 let engine: Engine;
 let env: Record<string, string>;
@@ -71,6 +72,11 @@ beforeAll(async () => {
   process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
 }, 120_000);
 
+beforeEach(() => {
+  put("profiles/critic/SOUL.md", SOUL);
+  rmSync(trustPath(env), { force: true });
+});
+
 afterAll(async () => {
   await engine?.stop();
   for (const k of Object.keys(env ?? {})) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
@@ -118,6 +124,7 @@ test("a project's persona waits for the operator's trust: a spawn before it is r
 }, 60_000);
 
 test("the persona is the first text of the agent's instructions, once, pinned by hash and never in an event", async () => {
+  expect((await cj(["profiles", "trust", "critic", "--yes"])).j?.trusted?.persona?.trust).toBe("trusted");
   const run = await newRun("persona-first");
   const id = await spawn(run, "critic", "critic");
   const text = await instructions(run, id);
@@ -143,6 +150,7 @@ test("the persona is the first text of the agent's instructions, once, pinned by
 }, 180_000);
 
 test("a changed persona needs trust again; an agent spawned before the change keeps the text it was pinned with", async () => {
+  expect((await cj(["profiles", "trust", "critic", "--yes"])).j?.trusted?.persona?.trust).toBe("trusted");
   const run = await newRun("persona-pin");
   // Spawned, not started: it is prepared after the edit, and still gets the text it was spawned with.
   const pinned = await spawn(run, "critic", "pinned", ["--no-start"]);

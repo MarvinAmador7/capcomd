@@ -128,7 +128,8 @@ curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.
 `capcomd upgrade` updates it later.
 
 **The Mac app** (optional; macOS 14 or later): a window with each run's agents side by side and a menu bar item with
-approvals, in one app. Homebrew installs it with the CLI:
+approvals, in one app. It uses the CLI you installed above, however you installed it (install.sh, Homebrew, Bun or
+npm), and doesn't install a second one:
 
 ```bash
 brew install --cask MarvinAmador7/tap/capcomd-app
@@ -137,12 +138,13 @@ brew install --cask MarvinAmador7/tap/capcomd-app
 If Homebrew refuses to load something "from untrusted tap" (Homebrew 7 and later), trust the tap once with
 `brew trust MarvinAmador7/tap` and run the install again.
 
-Open capcomd from Applications. It starts capcomd for you (as a login service) and connects by itself, so no
-terminal is needed after this. The app isn't notarized by Apple yet, so macOS blocks its first open: click **Done**,
-then in **System Settings › Privacy & Security** click **Open Anyway** next to "capcomd" and confirm. After that it
-opens like any app.
-Without Homebrew, download `capcomd-app-X.Y.Z.zip` from the [release](https://github.com/MarvinAmador7/capcomd/releases),
-move `capcomd.app` to Applications and install the CLI as above (the app finds it).
+Open capcomd from Applications. It finds your CLI and connects by itself; if capcomd already runs as a service
+(`capcomd service install`), it uses that one and the CLI that runs it, and asks nothing. Otherwise it starts capcomd
+for you (as a login service). No terminal is needed after this. Without a CLI yet, the app shows the command to
+install it. The app isn't notarized by Apple yet, so macOS blocks its first open: click **Done**, then in **System
+Settings › Privacy & Security** click **Open Anyway** next to "capcomd" and confirm. After that it opens like any app.
+Without Homebrew, download `capcomd-app-X.Y.Z.zip` from the [release](https://github.com/MarvinAmador7/capcomd/releases)
+and move `capcomd.app` to Applications.
 
 **1. Add capcomd to your agent.** The capcomd plugin gives your agent the MCP tools and two skills
 (orchestration, and setup):

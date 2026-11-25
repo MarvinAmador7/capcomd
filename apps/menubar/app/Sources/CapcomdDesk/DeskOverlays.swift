@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 import AppKit
+import QuartzCore
 import CapcomdStore
 import CapcomdUI
 
@@ -18,6 +19,8 @@ struct DeskOverlays: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let group: Anchor<CGRect>?
+  /// Search ⌘K built ahead of the first ⌘K, hidden (`PaletteWarmer`): the first ⌘K shows a view that is already there.
+  @State private var warmed = false
   var body: some View {
     let open = model.menuOpen || model.paletteOpen
     GeometryReader { g in
@@ -38,24 +41,134 @@ struct DeskOverlays: View {
         // Search ⌘K: in the window (SearchView), or its own panel over it (SearchPanel.swift; knob search.host).
         if DeskKnobs.searchHost.value == .panel {
           SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
-        } else if model.paletteOpen {
-          SearchView(onHeight: { _ in }, inWindow: true)
-            .frame(width: SearchMetrics.width(for: g.size.width))
+        } else if model.paletteOpen || model.paletteEverOpened || warmed {
+          // Built once the window has drawn (`PaletteWarmer`, below) or it has shown, then hidden while closed
+          // (`SearchOverlayHost.show`): ⌘K, the first one too, shows a view that is already there instead of making a
+          // hosting view, its field and its list.
+          SearchOverlaySlot(width: SearchMetrics.width(for: g.size.width), open: model.paletteOpen)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, SearchMetrics.top - Theme.Desk.titleBar)
-            .transition(.opacity)
+            .opacity(model.paletteOpen ? 1 : 0)
         }
       }
       .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
     }
     .animation(reduceMotion ? Theme.Motion.reduced : .spring(duration: 0.2, bounce: 0), value: model.menuOpen)
     // The scrim under Search ⌘K: at once from the keyboard (SPEC §4), a short fade otherwise.
-    .animation(NSApp.currentEvent?.type == .keyDown ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
+    .animation(model.paletteByKey ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
+    .background(PaletteFocusReturn(model: model, open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true))
+    // Once the window has drawn: the palette built ahead (in the window only), then AppKit's first-shortcut and
+    // first-field work (AppKitWarmup), each on a turn of its own.
+    .background {
+      PaletteWarmer { [model] in
+        guard DeskKnobs.searchHost.value != .panel, !model.paletteEverOpened else { return }
+        model.warmPalette()
+        warmed = true
+      }
+      .frame(width: 0, height: 0).accessibilityHidden(true)
+    }
   }
 
   /// Transform and opacity only; a crossfade with Reduce Motion.
   static func drop(_ reduceMotion: Bool) -> AnyTransition {
     reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)).combined(with: .offset(y: -4))
+  }
+}
+
+/// Search ⌘K in the window, at its height for the results it shows (fixed rows: known without laying them out). Its
+/// own view, so only it follows the results as they change.
+struct SearchOverlaySlot: View {
+  @Environment(DeskModel.self) private var model
+  let width: CGFloat
+  let open: Bool
+  var body: some View {
+    let s = model.search
+    SearchOverlay(model: model, open: open)
+      .frame(width: width, height: SearchMetrics.queryHeight + 0.5 + SearchMetrics.listHeight(s.sections, query: s.query) + SearchMetrics.footer)
+  }
+}
+
+/// Search ⌘K in the window, drawn in a hosting view of its own (`SearchOverlayHost`), as its panel is: a view that is
+/// the palette and nothing else, which the bench finds and judges by itself (its ink drawn alone, not through to the
+/// reel behind it). Its shadow reaches past it (the view doesn't clip).
+struct SearchOverlay: NSViewRepresentable {
+  let model: DeskModel
+  let open: Bool
+  func makeNSView(context: Context) -> SearchOverlayHost {
+    let h = SearchOverlayHost(rootView: SearchOverlayRoot(model: model))
+    h.sizingOptions = []
+    h.clipsToBounds = false
+    return h
+  }
+  func updateNSView(_ h: SearchOverlayHost, context: Context) {
+    if h.rootView.model !== model { h.rootView = SearchOverlayRoot(model: model) }
+    h.show(open, fading: context.transaction.animation != nil)
+  }
+}
+
+/// The palette's content in its own hosting view: SearchView on the model (a hosting view starts a new environment).
+package struct SearchOverlayRoot: View {
+  let model: DeskModel
+  package var body: some View { SearchView(onHeight: { _ in }, inWindow: true).environment(model) }
+}
+
+/// The in-window palette's hosting view (the bench's ink region `palette`, DESKBENCH.md).
+package final class SearchOverlayHost: NSHostingView<SearchOverlayRoot> {
+  private var hiding: DispatchWorkItem?
+
+  /// Open: shown. Closed: hidden, after the fade when the close fades (a click outside). The field gives up the keyboard
+  /// first: AppKit hands a hidden first responder's keyboard to the next key view, and the palette gives it back to
+  /// what had it before (`PaletteFocusReturn`).
+  func show(_ open: Bool, fading: Bool) {
+    hiding?.cancel(); hiding = nil
+    if open { if isHidden { isHidden = false }; return }
+    guard !isHidden else { return }
+    if let w = window, let v = PaletteFocusReturn.Keeper.owner(w.firstResponder), v.isDescendant(of: self) { w.makeFirstResponder(nil) }
+    guard fading else { isHidden = true; return }
+    let work = DispatchWorkItem { [weak self] in self?.isHidden = true }
+    hiding = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+  }
+}
+
+/// Builds Search ⌘K ahead of the first ⌘K without slowing the window's opening: `ready` runs once, on the main queue's
+/// next turn after the window has drawn its second frame with this view in it (the first frame, and whatever waits on
+/// it, go first), and AppKit's own first-use work follows it (`AppKitWarmup`, a turn each; it needs this view in the
+/// window, so the view stays). A window that never draws (hidden, minimised) builds nothing ahead: its first ⌘K builds
+/// the palette.
+struct PaletteWarmer: NSViewRepresentable {
+  let ready: () -> Void
+  func makeNSView(context: Context) -> Link { Link(ready: ready) }
+  func updateNSView(_ v: Link, context: Context) {}
+
+  final class Link: NSView {
+    private var ready: (() -> Void)?
+    private var link: CADisplayLink?
+    private var frames = 0
+    init(ready: @escaping () -> Void) { self.ready = ready; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      link?.invalidate(); link = nil; frames = 0
+      guard window != nil, ready != nil else { return }
+      let l = displayLink(target: self, selector: #selector(frame(_:)))
+      l.add(to: .main, forMode: .common)
+      link = l
+    }
+
+    @objc private func frame(_ l: CADisplayLink) {
+      frames += 1
+      guard frames >= 2 else { return }
+      l.invalidate(); link = nil
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.window != nil, let f = self.ready else { return }
+        self.ready = nil
+        f()
+        AppKitWarmup.start(in: self)
+      }
+    }
   }
 }
 
@@ -238,6 +351,81 @@ struct FlowRow: Layout {
       } else { rows.append(([i], s.width, s.height)) }
     }
     return rows
+  }
+}
+
+/// Search ⌘K dismissed (Esc, a click outside, ⌘K again) gives the keyboard back to what had it before it opened: a
+/// pane's or a column's message box, the sidebar's list, a field. SwiftUI otherwise leaves it with the closed field's
+/// editor (keys typed next went nowhere) or with nobody. When that view is gone or hidden (the pane shows another
+/// agent, the sidebar folded), or nothing had the keyboard, the pane you are in takes it (folded: the focused column).
+/// A result opened (↩, ⌘↩, a click) leaves the keyboard where the opened place puts it.
+struct PaletteFocusReturn: NSViewRepresentable {
+  let model: DeskModel
+  let open: Bool
+  func makeNSView(context: Context) -> Keeper { Keeper(model: model) }
+  func updateNSView(_ v: Keeper, context: Context) { v.set(open: open) }
+
+  final class Keeper: NSView {
+    private let model: DeskModel
+    private var open = false
+    /// What had the keyboard when the palette opened (a field, not its shared editor), and when it closed (its field).
+    private weak var before: NSView?
+    private weak var during: NSView?
+    init(model: DeskModel) { self.model = model; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func set(open o: Bool) {
+      guard o != open else { return }
+      open = o
+      if o {
+        let had = window.flatMap { Self.owner($0.firstResponder) }
+        before = had.flatMap { Self.isSearchField($0) ? nil : $0 }
+      } else {
+        during = window.flatMap { Self.owner($0.firstResponder) }
+        // After the update that closes it.
+        DispatchQueue.main.async { [weak self] in self?.giveBack() }
+      }
+    }
+
+    private func giveBack() {
+      guard let w = window, !open else { return }
+      defer { before = nil; during = nil }
+      if model.paletteOpenedResult { return }
+      // Something other than the palette's field has the keyboard (something took it meanwhile): leave it there.
+      if let now = Self.owner(w.firstResponder), now !== during, !Self.isSearchField(now), now.window === w, !now.isHiddenOrHasHiddenAncestor { return }
+      if let b = before, b.window === w, !b.isHiddenOrHasHiddenAncestor, b.acceptsFirstResponder, w.makeFirstResponder(b) { return }
+      if takeIntoPane(w) { return }
+      w.makeFirstResponder(nil)   // out of the closed field, at least
+    }
+
+    /// The focused pane (opened), else the reel's focused column (folded).
+    private func takeIntoPane(_ w: NSWindow) -> Bool {
+      guard let root = w.contentView else { return false }
+      var pane: NativeColumnView?, reel: ReelColumnViews?
+      func walk(_ v: NSView) {
+        guard !v.isHidden else { return }
+        if let c = v as? NativeColumnView, c.isPane {
+          if pane == nil || c.paneFocused { pane = c }
+          return
+        }
+        if reel == nil, let r = v as? ReelColumnViews, r.reelKind == .project { reel = r }
+        v.subviews.forEach(walk)
+      }
+      walk(root)
+      if let pane { return pane.takeKeyboard() }
+      guard !model.nav.sidebarOpen, !model.needs.isOpen, let reel, let f = model.focusedAgent, let i = model.columns.firstIndex(of: f),
+            let column = reel.columnView(at: i), !column.isHiddenOrHasHiddenAncestor else { return false }
+      if let c = column as? NativeColumnView { return c.takeKeyboard() }
+      return w.makeFirstResponder(column)
+    }
+
+    /// The view a responder stands for: a field editor's field, else the view itself.
+    static func owner(_ r: NSResponder?) -> NSView? {
+      if let t = r as? NSTextView, t.isFieldEditor { return t.delegate as? NSView }
+      return r as? NSView
+    }
+    static func isSearchField(_ v: NSView) -> Bool { (v as? NSTextField)?.accessibilityIdentifier() == SearchField.identifier }
   }
 }
 #endif
