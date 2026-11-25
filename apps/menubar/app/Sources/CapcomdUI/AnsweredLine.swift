@@ -41,6 +41,34 @@ package struct AnsweredLine: View {
   }
 }
 
+/// A question withdrawn before it was answered (its agent was cancelled): the answered line's shape, quieter, so the
+/// question reads as withdrawn instead of vanishing. "Withdrawn · Which limit? · 11:42", and why under it.
+package struct WithdrawnLine: View {
+  package let record: WithdrawnQuestion
+  package init(record: WithdrawnQuestion) { self.record = record }
+
+  package var body: some View {
+    let line = record.line(time: AnsweredLine.clock(record.atMs))
+    VStack(alignment: .leading, spacing: 2) {
+      HStack(alignment: .center, spacing: 8) {
+        Image(systemName: "xmark").font(.system(size: 7.5, weight: .bold)).foregroundStyle(Theme.AskCard.t3)
+          .frame(width: 16, height: 16).background(Circle().fill(Theme.AskCard.kbdFill))
+        (Text(verbatim: "\(line.lead) · ").foregroundStyle(Theme.AskCard.t3)
+          + Text(verbatim: line.question).foregroundStyle(Theme.AskCard.t2)
+          + Text(verbatim: " · \(line.tail)").foregroundStyle(Theme.AskCard.t3))
+          .font(.system(size: 12)).lineLimit(1).truncationMode(.middle).monospacedDigit()
+      }
+      .frame(minHeight: 28)
+      Text(verbatim: WithdrawnQuestion.why).font(.system(size: 12)).foregroundStyle(Theme.AskCard.t3).padding(.leading, 24)
+    }
+    .padding(.horizontal, 14).padding(.vertical, 10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.AskCard.inset))
+    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.AskCard.line, lineWidth: 0.5))
+    .accessibilityElement(children: .combine)
+  }
+}
+
 extension Theme {
   /// The question card's tokens (DurableAsked-v3): the board's --t1/--t2/--t3, its hairline and its strong line.
   package enum AskCard {

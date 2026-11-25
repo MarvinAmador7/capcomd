@@ -1,4 +1,5 @@
 import Foundation
+import CapcomdThread
 
 /// ADR-026 §4 (capability agents.ask): the question an agent asked and stopped on, as `Agent.asked` and agent.asked
 /// carry it. Its words are the agent's (untrusted); `to` is who it is asked of (an agent id), nil when it is the user's.
@@ -77,6 +78,26 @@ public struct AnsweredQuestion: Sendable, Hashable {
   }
 }
 
+extension AnsweredQuestion {
+  /// From the thread's record of it (a `question` item, answered): what rebuilds the line after a reconnect.
+  init?(_ q: CapcomdThread.Item.Question, fallbackMs: Int) {
+    guard q.state == .answered, let by = q.by else { return nil }
+    self.init(questionId: q.questionId, answer: q.answer ?? "", recommended: q.recommended ?? false, by: by, note: q.note, atMs: q.decidedAtMs ?? fallbackMs)
+  }
+}
+
+/// A question withdrawn before it was answered (its agent was cancelled): one quiet line where its card was,
+/// "Withdrawn · Which limit? · 11:42". The question is the asker's words.
+public struct WithdrawnQuestion: Sendable, Hashable {
+  public var questionId: String
+  public var question: UntrustedText
+  public var atMs: Int
+  public init(questionId: String, question: String, atMs: Int) { self.questionId = questionId; self.question = UntrustedText(question); self.atMs = atMs }
+  public func line(time: String) -> (lead: String, question: String, tail: String) { ("Withdrawn", question.firstLine, time) }
+  /// The line under it: why nobody will answer it.
+  public static let why = "Its agent was cancelled, so it won't be answered."
+}
+
 extension PendingApproval {
   /// Whether it is a person's to decide: every kind but a question asked of an agent (that one is quiet: its card shows,
   /// the user may answer it, but it isn't in Needs you, the badge or amber).
@@ -141,6 +162,13 @@ extension CapcomdStore {
       updateAgent(runId, agentId) { $0.asked?.to = d["to"]?.string }
       if let qid = d["questionId"]?.string, let id = approvals.first(where: { $0.value.ask?.questionId == qid })?.key { updateApproval(id) { $0.ask?.to = d["to"]?.string } }
     default:   // answered, withdrawn
+      if e.type == "agent.question_withdrawn", let qid = d["questionId"]?.string {
+        // Withdrawn reads as withdrawn, not gone: one line in the asker's thread, in its question's words.
+        let text = runs[runId]?.agents[agentId]?.asked.flatMap { $0.questionId == qid ? $0.question.plain : nil }
+          ?? approvals.values.first(where: { $0.ask?.questionId == qid })?.question.plain ?? ""
+        appendThread(runId, agentId, ThreadItem(id: "withdrawn:\(qid)", seq: e.seq, epochMs: e.epochMs,
+                                                kind: .withdrawn(WithdrawnQuestion(questionId: qid, question: text, atMs: e.epochMs))))
+      }
       updateAgent(runId, agentId) { if $0.asked?.questionId == d["questionId"]?.string { $0.asked = nil } }
       if let qid = d["questionId"]?.string, let id = approvals.first(where: { $0.value.ask?.questionId == qid })?.key { answering.remove(id) }
     }

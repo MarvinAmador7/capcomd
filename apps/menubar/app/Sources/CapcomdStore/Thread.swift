@@ -20,6 +20,8 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
     /// `agent.answered` (capability agents.ask): the question its card asked, answered, as one line ("Answered ·
     /// 100 req/min · 11:42"), in the asker's thread and the answering agent's. `byName` names an agent that answered.
     case answered(AnsweredQuestion, byName: String?)
+    /// `agent.question_withdrawn` (capability agents.ask): its agent was cancelled before the question was answered.
+    case withdrawn(WithdrawnQuestion)
     /// Child handed back: `agent.done.result` (ChildResult {summary, artifacts[{name,ref}]}).
     case handoff(childId: String, childName: String, summary: UntrustedText?, artifacts: [UntrustedText])
   }
@@ -27,6 +29,10 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
   public var seq: Int
   public var epochMs: Int
   public var kind: Kind
+  /// The question an answered or withdrawn line is about (agents.ask); nil for other kinds.
+  public var questionId: String? {
+    switch kind { case .answered(let r, _): r.questionId; case .withdrawn(let w): w.questionId; default: nil }
+  }
 }
 
 extension CapcomdStore {

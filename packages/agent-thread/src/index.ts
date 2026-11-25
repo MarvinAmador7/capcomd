@@ -15,7 +15,7 @@ export { claudeNaming, codexNaming, fxNaming, isClaudeNamingCall, isCodexNamingC
 import { classifyLink, mediaOfPath, resolveMedia, type LinkContext } from "./links";
 import { plainBlocks, toBlocks } from "./markdown";
 import { capBytes, oneLine, sanitize } from "./sanitize";
-import { CHECK_RESULTS, FINDING_SEVERITIES, HANDBACK_STATUSES, THREAD_FORMAT, type BlockNode, type FindingT, type HandbackT, type ItemDraft } from "./schema";
+import { CHECK_RESULTS, FINDING_SEVERITIES, HANDBACK_STATUSES, THREAD_FORMAT, type BlockNode, type FindingT, type HandbackT, type ItemDraft, type ThreadQuestionT } from "./schema";
 
 /**
  * A child agent handing back (agent.done / agent.failed): its summary as blocks, then its artifacts ({name, ref}) as
@@ -88,6 +88,27 @@ export function threadNote(o: { id: string; at: number; text: string; internal?:
 	// `internal`: a line about the daemon's own bookkeeping (src/bookkeeping.ts): recorded, hidden by default.
 	return { id: o.id, rev: 1, kind: "note", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text, blocks: plainBlocks(text), format: THREAD_FORMAT,
 		redacted: false, tool: null, error: null, truncated: null, child: null, ...(o.internal ? { internal: true } : {}) } as ItemDraft;
+}
+
+/**
+ * A question and what became of it (kind `question`, capability agents.ask, ADR-026 §4): the thread's record of it, so
+ * a client rebuilds its card (open) or its one-line record (answered, withdrawn) from the thread alone, and a
+ * conversation rebuilt from the thread keeps the decision. `text` says it in one line for clients that don't read
+ * `question` ("Asked: … · answered: … (not the recommendation) · note: …"). Its strings are someone's words, cleaned.
+ */
+export function questionDraft(o: { id: string; rev: number; at: number; question: ThreadQuestionT }): ItemDraft {
+	const q = o.question, c = (x: string | null, max: number) => (x == null ? null : oneLine(x, max) || null);
+	const question: ThreadQuestionT = {
+		...q, question: oneLine(q.question, 500), options: q.options.map((x) => ({ label: oneLine(x.label, 200), recommended: x.recommended })),
+		why: c(q.why, 600), holds: c(q.holds, 300), answer: c(q.answer, 2000), note: c(q.note, 2000),
+	};
+	const rec = question.options.find((x) => x.recommended)?.label;
+	const outcome = question.state === "answered"
+		? `answered: ${question.answer ?? ""}${question.recommended === false ? " (not the recommendation)" : ""}${question.note ? ` · note: ${question.note}` : ""}`
+		: question.state === "withdrawn" ? "withdrawn: its agent was cancelled" : rec ? `recommended: ${rec}` : "";
+	const text = oneLine([`Asked: ${question.question}`, outcome].filter(Boolean).join(" · "), 4000);
+	return { id: o.id, rev: o.rev, kind: "question", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text, blocks: plainBlocks(text), format: THREAD_FORMAT,
+		redacted: false, tool: null, error: null, truncated: null, child: null, question };
 }
 
 /** A reviewer's verdict on a hand-back: `{"passed", "reasons"}`, as the review contract has the reviewer answer. */

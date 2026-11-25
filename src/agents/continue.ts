@@ -22,7 +22,11 @@ import { messageText } from "./runner";
 /** A message the continued attempt starts with (after the agent's durable delivery cursor). */
 export type ContinueMessage = { seq: number; from: string; body: string; skills?: AttachedSkill[]; at?: number };
 /** A thread item as the scope stores it (the fields a prompt reads). */
-export type ContinueItem = { kind: string; text: string; at?: string; tool?: { name?: string; summary?: string } | null; child?: { agentId?: string; status?: string } | null };
+export type ContinueItem = {
+  kind: string; text: string; at?: string; tool?: { name?: string; summary?: string } | null; child?: { agentId?: string; status?: string } | null;
+  /** Kind question (ADR-026 §4): the question and what became of it. */
+  question?: { asker?: string; state?: string; question?: string; options?: Array<{ label?: string; recommended?: boolean }>; answer?: string | null; recommended?: boolean | null; by?: string | null; note?: string | null } | null;
+};
 /** What the scope gives a continued attempt (scope action `continuation`). */
 export interface Continuation {
   task: string;
@@ -92,10 +96,24 @@ export function wakePrompt(messages: ContinueMessage[]): string {
   return messages.map((m) => messageText({ from: m.from, body: m.body, ...(m.skills?.length ? { skills: m.skills } : {}) })).join("\n\n---\n\n");
 }
 
+/** Who answered, as the asker reads it in its rebuilt thread. */
+const answerer = (by: string) => (/^(agt-|wake-|job-|capcomd)/.test(by) ? by : "the user");
+
+/** A question (kind question) as the prompt says it: the asker's own, or one this agent answered for a child. */
+function questionLine(q: NonNullable<ContinueItem["question"]>, self: string): string {
+  const rec = q.options?.find((o) => o.recommended)?.label;
+  if (q.asker && q.asker !== self) return `you answered ${q.asker}'s question "${one(q.question ?? "")}": ${one(q.answer ?? "")}${q.note ? ` (your note: ${one(q.note)})` : ""}`;
+  const asked = `you asked: ${one(q.question ?? "")}${rec ? ` (you recommended: ${one(rec)})` : ""}`;
+  if (q.state === "answered") return `${asked}; ${answerer(q.by ?? "")} answered: ${one(q.answer ?? "")}${q.recommended === false ? " (not your recommendation)" : ""}${q.note ? `; their note: ${one(q.note)}` : ""}`;
+  if (q.state === "withdrawn") return `${asked}; the question was withdrawn`;
+  return `${asked}; not answered yet`;
+}
+
 /** One line of the thread for the prompt, or null for one that says nothing (thinking, an empty item). */
-function itemLine(it: ContinueItem): string | null {
+function itemLine(it: ContinueItem, self: string): string | null {
   const text = one(it.text ?? "");
   switch (it.kind) {
+    case "question": return it.question ? questionLine(it.question, self) : text || null;
     case "say": case "result": return text ? `you said: ${text}` : null;
     case "tool": return `you ran ${one(it.tool?.name ?? "a tool")}: ${one(it.tool?.summary ?? text)}`;
     case "handoff": return `${it.child?.agentId ?? "a child"} handed back (${it.child?.status ?? "done"}): ${text}`;
@@ -130,7 +148,7 @@ export function threadPrompt(o: { agentId: string; branch: string; target: strin
   // The thread, newest first: messages it had read and its items, merged by time.
   const timed: Array<{ at: number; line: string }> = [];
   for (const m of c.earlier) timed.push({ at: m.at ?? 0, line: `${m.from === "operator" || m.from === "driver" ? "the operator" : m.from.startsWith("wake-") ? "a wake-up" : m.from} wrote: ${one(m.body)}` });
-  for (const it of c.items) { const line = itemLine(it); if (line) timed.push({ at: it.at ? Date.parse(it.at) || 0 : 0, line }); }
+  for (const it of c.items) { const line = itemLine(it, o.agentId); if (line) timed.push({ at: it.at ? Date.parse(it.at) || 0 : 0, line }); }
   timed.sort((a, b) => b.at - a.at);
   const lines: string[] = [];
   for (const t of timed) {

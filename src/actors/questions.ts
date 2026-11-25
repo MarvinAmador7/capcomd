@@ -13,6 +13,7 @@
 //     an agent can't answer once the user has.
 //   - Its agent cancelled (or reaped): the question is withdrawn.
 import type { RawAccess } from "rivetkit/db";
+import { questionDraft, type ItemDraft } from "../../packages/agent-thread/src/index";
 
 export interface QuestionRow {
   questionId: string; agentId: string; epoch: number; to: string | null; question: string; recommend: string; options: string[];
@@ -128,11 +129,31 @@ export async function openQuestion(tx: RawAccess, agentId: string): Promise<Ques
 }
 
 /**
+ * ADR-026 §1 (the thread is the record): the question as a thread item (kind `question`). In the asker's thread its id
+ * is the same from the ask to the answer (each change a new rev); `answerer` writes the copy in the thread of an agent
+ * that answered it, as it answered. `replaces`: the agent whose answer a person's answer replaced.
+ */
+export function questionItem(q: QuestionRow, o: { rev: number; replaces?: string | null; answerer?: string }): ItemDraft {
+  const iso = (ms: number | null) => (ms == null ? null : new Date(ms).toISOString());
+  const answered = q.state === "answered";
+  return questionDraft({
+    id: o.answerer ? `itm-${o.answerer}-answered-${q.questionId}` : `itm-${q.agentId}-question-${q.questionId}`, rev: o.rev, at: o.answerer ? q.answeredAt ?? Date.now() : q.askedAt,
+    question: {
+      questionId: q.questionId, asker: q.agentId, state: q.state, question: q.question, options: q.options.map((label, i) => ({ label, recommended: i === 0 })),
+      why: q.why, holds: q.holds, to: q.to, passedBy: q.passed,
+      answer: answered ? q.answer : null, recommended: answered && q.answer != null ? isRecommended(q, q.answer) : null,
+      by: answered ? q.answeredBy : null, note: answered ? q.note : null, replaces: answered ? o.replaces ?? null : null,
+      reason: q.state === "withdrawn" ? "cancelled" : null, askedAt: iso(q.askedAt)!, decidedAt: q.state === "open" ? null : iso(q.answeredAt),
+    },
+  });
+}
+
+/**
  * Record an answer (the caller already put the message, `seq`, in the asker's mailbox), in the caller's transaction: the
  * question is answered (a person's answer may replace an agent's), the asker no longer shows a question, and
- * agent.answered says by whom and whether it was the recommendation.
+ * agent.answered says by whom and whether it was the recommendation. Returns whose answer it replaced (or null).
  */
-export async function recordAnswer(tx: RawAccess, q: QuestionRow, o: { by: string; answer: string; note: string | null; seq: number }, addEvent: AddEvent): Promise<void> {
+export async function recordAnswer(tx: RawAccess, q: QuestionRow, o: { by: string; answer: string; note: string | null; seq: number }, addEvent: AddEvent): Promise<{ replaces: string | null }> {
   const now = Date.now();
   const replaces = q.state === "answered" ? q.answeredBy : null;
   const answer = o.answer.slice(0, ASK_LIMITS.note), note = o.note ? o.note.slice(0, ASK_LIMITS.note) : null;
@@ -142,13 +163,16 @@ export async function recordAnswer(tx: RawAccess, q: QuestionRow, o: { by: strin
   await addEvent(tx, "AGENT_ANSWERED", q.agentId, {
     questionId: q.questionId, by: o.by, answer, recommended: isRecommended(q, answer), note, messageSeq: o.seq, replaces,
   }, replaces ? `answer-${q.questionId}-${o.seq}` : `answer-${q.questionId}`);
+  return { replaces };
 }
 
-/** Withdraw an agent's open question (it was cancelled, or reaped with its parent), in the caller's transaction. */
-export async function withdrawQuestions(tx: RawAccess, agentId: string, reason: "cancelled", addEvent: AddEvent): Promise<void> {
+/** Withdraw an agent's open question (it was cancelled, or reaped with its parent), in the caller's transaction. Returns
+ *  the withdrawn question's id (or null when it had none open). */
+export async function withdrawQuestions(tx: RawAccess, agentId: string, reason: "cancelled", addEvent: AddEvent): Promise<string | null> {
   const q = await openQuestion(tx, agentId);
-  if (!q) return;
+  if (!q) return null;
   await tx.execute("UPDATE questions SET state = 'withdrawn', answered_at = ? WHERE question_id = ? AND state = 'open'", Date.now(), q.questionId);
   await tx.execute("UPDATE agents_v2 SET asked = NULL WHERE agent_id = ?", agentId);
   await addEvent(tx, "AGENT_QUESTION_WITHDRAWN", agentId, { questionId: q.questionId, reason }, `withdraw-${q.questionId}`);
+  return q.questionId;
 }

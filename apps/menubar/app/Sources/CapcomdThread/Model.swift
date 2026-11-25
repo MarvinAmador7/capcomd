@@ -32,6 +32,50 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
   /// The agent's bookkeeping (capability `agents.thread_internal`): a wake armed, a wait, a poll of its own state, a CLI
   /// system event. Recorded, and shown only on request.
   public var `internal`: Bool
+  /// Kind question (capability `agents.ask`, ADR-026 §4): a question the agent asked, or one it answered, and what
+  /// became of it. The thread's record of it: after a reconnect it is what rebuilds the answered or withdrawn line.
+  public var question: Question?
+
+  /// A question and its outcome. Its words (the question, the answer, the note) are someone's: plain text, cleaned.
+  public struct Question: Sendable, Hashable, Decodable {
+    public enum State: String, Sendable, Hashable { case open, answered, withdrawn }
+    public var questionId: String
+    /// The agent that asked: this thread's agent, or (an answering agent's copy) the asker.
+    public var asker: String
+    public var state: State
+    public var question: String
+    /// Who it is asked of now (an agent), nil: the user.
+    public var to: String?
+    public var answer: String?
+    /// Answered: whether it was the recommended answer.
+    public var recommended: Bool?
+    /// Who answered: an agent (agt-…) or a person (operator, driver, client:<id>).
+    public var by: String?
+    public var note: String?
+    public var askedAt: String
+    /// When it was answered or withdrawn.
+    public var decidedAt: String?
+    public init(questionId: String, asker: String, state: State, question: String, to: String? = nil, answer: String? = nil, recommended: Bool? = nil,
+                by: String? = nil, note: String? = nil, askedAt: String, decidedAt: String? = nil) {
+      self.questionId = questionId; self.asker = asker; self.state = state; self.question = question; self.to = to; self.answer = answer
+      self.recommended = recommended; self.by = by; self.note = note; self.askedAt = askedAt; self.decidedAt = decidedAt
+    }
+    enum CodingKeys: String, CodingKey { case questionId, asker, state, question, to, answer, recommended, by, note, askedAt, decidedAt }
+    public init(from d: Decoder) throws {
+      let c = try d.container(keyedBy: CodingKeys.self)
+      questionId = try c.decode(String.self, forKey: .questionId); asker = try c.decode(String.self, forKey: .asker)
+      guard let st = State(rawValue: try c.decode(String.self, forKey: .state)) else {
+        throw DecodingError.dataCorruptedError(forKey: .state, in: c, debugDescription: "a question state this client doesn't know")
+      }
+      state = st
+      question = clean(try c.decode(String.self, forKey: .question)); to = try c.decodeIfPresent(String.self, forKey: .to)
+      answer = try c.decodeIfPresent(String.self, forKey: .answer).map(clean); recommended = try c.decodeIfPresent(Bool.self, forKey: .recommended)
+      by = try c.decodeIfPresent(String.self, forKey: .by); note = try c.decodeIfPresent(String.self, forKey: .note).map(clean)
+      askedAt = try c.decode(String.self, forKey: .askedAt); decidedAt = try c.decodeIfPresent(String.self, forKey: .decidedAt)
+    }
+    /// `decidedAt` as epoch milliseconds.
+    public var decidedAtMs: Int? { decidedAt.flatMap(isoMs) }
+  }
 
   public struct Tool: Sendable, Hashable, Decodable {
     public var callId: String
@@ -125,7 +169,7 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
     }
   }
 
-  enum CodingKeys: String, CodingKey { case id, rev, seq, order, agentId, kind, status, at, durationMs, text, blocks, format, redacted, tool, error, truncated, child, `internal` }
+  enum CodingKeys: String, CodingKey { case id, rev, seq, order, agentId, kind, status, at, durationMs, text, blocks, format, redacted, tool, error, truncated, child, `internal`, question }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     id = try c.decode(String.self, forKey: .id); rev = try c.decode(Int.self, forKey: .rev)
@@ -140,6 +184,8 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
     tool = try c.decodeIfPresent(Tool.self, forKey: .tool); error = try c.decodeIfPresent(ItemError.self, forKey: .error)
     truncated = try c.decodeIfPresent(Truncated.self, forKey: .truncated); child = try c.decodeIfPresent(Child.self, forKey: .child)
     `internal` = (try? c.decodeIfPresent(Bool.self, forKey: .internal)) ?? false
+    // A question this client can't read is none: the item still says it in `text`.
+    question = (try? c.decodeIfPresent(Question.self, forKey: .question)) ?? nil
   }
 
   /// `at` as epoch milliseconds (0 if it doesn't parse).

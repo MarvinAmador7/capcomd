@@ -49,7 +49,7 @@ import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, ty
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 import { fitJobRecord } from "../jobs/record";
 import { WAKES_SQL, alreadySatisfied, armedData, cancelWake, fireSlot, fireWake, matchWakes, parseFilter, recurring, wakeRow, wokenIn, type AddEvent, type WakeRow } from "./wakes";
-import { QUESTIONS_SQL, answerMessage, askedState, askedData, isPerson, openQuestion, parseAsk, questionMessage, questionRow, recordAnswer, withdrawQuestions, type AddEvent as QuestionEvent, type AskedState, type QuestionRow } from "./questions";
+import { QUESTIONS_SQL, answerMessage, askedState, askedData, isPerson, openQuestion, parseAsk, questionItem, questionMessage, questionRow, recordAnswer, withdrawQuestions, type AddEvent as QuestionEvent, type AskedState, type QuestionRow } from "./questions";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
   return {
@@ -81,6 +81,22 @@ async function putItemTx(tx: RawAccess, agentId: string, it: ItemDraft): Promise
   await tx.execute("INSERT OR REPLACE INTO agent_items (id, agent_id, seq, ord, rev, at, body, internal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     it.id, agentId, seq, prev.length ? Number(prev[0].ord) : seq, it.rev, Date.parse(it.at) || Date.now(), body, it.internal ? 1 : 0);
   return seq;
+}
+
+/**
+ * ADR-026 §4 and §1 (the thread is the record): a question's item in its asker's thread, at the question's current
+ * state (open, passed up, answered, withdrawn; each change a new rev of the same item), and, once an agent answered it,
+ * that agent's own copy in its thread. In the caller's transaction. `replaces`: whose answer a person's answer replaced.
+ */
+async function putQuestionItemTx(tx: RawAccess, questionId: string | null, o: { replaces?: string | null } = {}): Promise<void> {
+  if (!questionId) return;
+  const r = (await tx.execute("SELECT * FROM questions WHERE question_id = ?", questionId)) as any[];
+  if (!r.length) return;
+  const q = questionRow(r[0]);
+  const prev = ((await tx.execute("SELECT rev FROM agent_items WHERE id = ?", `itm-${q.agentId}-question-${q.questionId}`)) as any[])[0];
+  await putItemTx(tx, q.agentId, questionItem(q, { rev: prev ? Number(prev.rev) + 1 : 1, replaces: o.replaces ?? null }));
+  const by = q.answeredBy;
+  if (q.state === "answered" && by && by !== q.agentId && by.startsWith("agt-")) await putItemTx(tx, by, questionItem(q, { rev: 1, answerer: by }));
 }
 
 /** A stored thread item as the routes serve it. */
@@ -339,12 +355,14 @@ async function sendImpl(c: any, params: SendParams): Promise<{ seq: number; repl
     // ADR-026 §4: the answer to its question (§9.4: a plain message from a person or an ancestor is its answer).
     if (params.answers) {
       const q = questionRow(((await tx.execute("SELECT * FROM questions WHERE question_id = ?", params.answers.questionId)) as any[])[0]);
-      await recordAnswer(tx, q, { by: params.from, answer: params.answers.answer, note: params.answers.note, seq }, addEvent as QuestionEvent);
+      const { replaces } = await recordAnswer(tx, q, { by: params.from, answer: params.answers.answer, note: params.answers.note, seq }, addEvent as QuestionEvent);
+      await putQuestionItemTx(tx, q.questionId, { replaces });
       answered = q.questionId;
     } else {
       const q = await openQuestion(tx, target.agentId);
       if (q && (isPerson(params.from) || (await isAncestor(tx, params.from, target.agentId)))) {
-        await recordAnswer(tx, q, { by: params.from, answer: params.body.replace(/\s+/g, " ").trim(), note: null, seq }, addEvent as QuestionEvent);
+        const { replaces } = await recordAnswer(tx, q, { by: params.from, answer: params.body.replace(/\s+/g, " ").trim(), note: null, seq }, addEvent as QuestionEvent);
+        await putQuestionItemTx(tx, q.questionId, { replaces });
         answered = q.questionId;
       }
     }
@@ -469,7 +487,7 @@ async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, d
   // ADR-026 §3: every armed wake this event satisfies fires in this same transaction (src/actors/wakes.ts).
   await matchWakes(tx, { seq, type, agentId, data: data as Record<string, any> }, addEvent as AddEvent);
   // ADR-026 §4: a cancelled agent's question is withdrawn (nobody would read its answer as one).
-  if ((type === "AGENT_CANCELLED" || type === "AGENT_REAPED") && agentId) await withdrawQuestions(tx, agentId, "cancelled", addEvent as QuestionEvent);
+  if ((type === "AGENT_CANCELLED" || type === "AGENT_REAPED") && agentId) await putQuestionItemTx(tx, await withdrawQuestions(tx, agentId, "cancelled", addEvent as QuestionEvent));
 }
 
 /**
@@ -1396,6 +1414,7 @@ export const scopeActor = actor({
         const q = questionRow(((await tx.execute("SELECT * FROM questions WHERE question_id = ?", questionId)) as any[])[0]);
         await tx.execute("UPDATE agents_v2 SET asked = ?, updated_at = ? WHERE agent_id = ?", JSON.stringify(askedState(q)), now, params.agentId);
         await addEvent(tx, "AGENT_ASKED", params.agentId, askedData(q), `ask-${questionId}`);
+        await putQuestionItemTx(tx, questionId);
         if (a!.parent && (await tellAddressee(tx, q, a!.parent, null)) !== "none") told = a!.parent;
       }, { name: "scopeAsk" });
       agentsChanged(c);
@@ -1439,6 +1458,7 @@ export const scopeActor = actor({
         await tx.execute("UPDATE agents_v2 SET asked = ? WHERE agent_id = ? AND asked IS NOT NULL", JSON.stringify(askedState({ ...q, to })), q.agentId);
         await addEvent(tx, "AGENT_QUESTION_PASSED", q.agentId, { questionId: q.questionId, from: params.by, to }, `pass-${q.questionId}-${passed.length}`);
         q = { ...q, to, passed };
+        await putQuestionItemTx(tx, q.questionId);
         if (to && (await tellAddressee(tx, q, to, params.by)) !== "none") told = to;
       }, { name: "scopePassQuestion" });
       agentsChanged(c);
@@ -1543,7 +1563,7 @@ export const scopeActor = actor({
           // question it asked (nobody waits on its answer now).
           await txn(c, async (tx: RawAccess) => {
             for (const w of ((await tx.execute("SELECT * FROM wakes WHERE agent_id = ? AND state = 'armed'", a.agentId)) as any[]).map(wakeRow)) await cancelWake(tx, w, "ended", addEvent as AddEvent);
-            await withdrawQuestions(tx, a.agentId, "cancelled", addEvent as QuestionEvent);
+            await putQuestionItemTx(tx, await withdrawQuestions(tx, a.agentId, "cancelled", addEvent as QuestionEvent));
           }, { name: "scopeCancelIdle" });
           continue;
         }

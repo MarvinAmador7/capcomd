@@ -147,17 +147,23 @@ extension CapcomdStore {
   public func threadEntries(agentId: String) -> [ThreadEntry] {
     let events = thread(agentId: agentId)
     guard let book = books[agentId], threadSupported(agentId: agentId) == true else { return events.map(ThreadEntry.event) }
+    // Its questions (agents.ask) as the thread records them: an answered or withdrawn one is one line, placed when it was
+    // decided, and it wins over the line built from a live event (after a reconnect that line is gone; the record isn't).
+    // An open one is its docked card (from its approval), not a line.
+    let decided = book.shown.compactMap { it in it.question.flatMap { $0.state == .open ? nil : questionLine(it, $0, agentId: agentId) } }
+    let recorded = Set(decided.compactMap(\.questionId))
     // The agent's own output is in the book; keep only messages from someone else (steers, other agents).
     let messages = events.filter {
       if case .message(let from, _, _, _) = $0.kind { return from != agentId }
       if case .woke = $0.kind { return true }   // what woke it (agents.wake): a quiet line between its turns
-      if case .answered = $0.kind { return true }   // its question, answered (agents.ask): one line
+      if case .answered(let r, _) = $0.kind { return !recorded.contains(r.questionId) }   // its question, answered (agents.ask): one line
+      if case .withdrawn(let w) = $0.kind { return !recorded.contains(w.questionId) }
       return false
-    }
+    } + decided
     // Read newest first, the thread shows from its top down; messages from before its first item wait with it. The
     // agent's bookkeeping (ADR-026 §7) only when asked for.
     let internals = bookkeepingShown.contains(agentId)
-    let items = book.shown.filter { !$0.isSystemBookkeeping && (internals || !$0.internal) }
+    let items = book.shown.filter { !$0.isSystemBookkeeping && (internals || !$0.internal) && $0.kind != "question" }
     let from = book.hasEarlier ? items.first?.atMs ?? Int.max : Int.min
     var out: [ThreadEntry] = []; out.reserveCapacity(items.count + messages.count)
     var m = messages.filter { $0.epochMs >= from }.sorted { ($0.epochMs, $0.seq) < ($1.epochMs, $1.seq) }[...]
@@ -167,6 +173,21 @@ extension CapcomdStore {
     }
     out += m.map(ThreadEntry.event)
     return out
+  }
+
+  /// A decided question's line from its thread item (kind question): answered (named when an agent answered) or
+  /// withdrawn. Its id is the item's, so a page read twice shows it once.
+  func questionLine(_ it: CapcomdThread.Item, _ q: CapcomdThread.Item.Question, agentId: String) -> ThreadItem? {
+    let at = q.decidedAtMs ?? it.atMs
+    switch q.state {
+    case .answered:
+      guard let rec = AnsweredQuestion(q, fallbackMs: at) else { return nil }
+      let name = runs.values.first(where: { $0.agents[agentId] != nil })?.agents[rec.by]?.displayName
+      return ThreadItem(id: "q:\(it.id)", seq: it.seq, epochMs: at, kind: .answered(rec, byName: name))
+    case .withdrawn:
+      return ThreadItem(id: "q:\(it.id)", seq: it.seq, epochMs: at, kind: .withdrawn(WithdrawnQuestion(questionId: q.questionId, question: q.question, atMs: at)))
+    case .open: return nil
+    }
   }
 
   /// Shows or hides the agent's bookkeeping in its thread (its menu's Show Bookkeeping).
