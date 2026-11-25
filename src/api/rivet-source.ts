@@ -1,7 +1,7 @@
 // HarnessSource over the Rivet scope actors: what `capcomd serve` exposes on the harness socket.
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { existingActor, generateRunId } from "../core/relay";
+import { client, existingActor, generateRunId } from "../core/relay";
 import { redactShapes } from "../agents/redact";
 import { listSkills, readSkill } from "../agents/skills";
 import { archiveRun, cancelAny, decideMerge, pauseAgents, recentRuns, restoreRun, resumeAgents, sendToAgent, TARGET_KV } from "../primitives/ops";
@@ -282,7 +282,54 @@ async function archiveOutcome(run: () => Promise<{ changed: boolean }>): Promise
 	}
 }
 
-export function rivetSource(): HarnessSource {
+/** How long a run scope's events feed stays connected after its last waiter left: a client resuming its waits (the usual
+ *  loop: wait, handle, wait again from the cursor) reuses it instead of connecting each time. */
+const FEED_LINGER_MS = 5000;
+
+/**
+ * Capability events.wait's push over the run scopes' `eventsChanged` broadcast (src/actors/scope.ts: sent after every
+ * transaction that appended to the event log, once it committed). One connection per run scope while anything waits on
+ * it, shared by its waiters. Each (re)connect tells them all to look: an append while it wasn't connected can't have
+ * reached it. rivetkit sends the connection's event subscriptions just after it opens, so the look waits for an answer
+ * over the connection, which comes after the subscription is in place: from then on no append goes untold.
+ */
+function scopeEventFeeds() {
+	type Feed = { conn: any; listeners: Set<() => void>; linger: ReturnType<typeof setTimeout> | null };
+	const feeds = new Map<string, Feed>();
+	const tell = (f: Feed) => { for (const l of [...f.listeners]) try { l(); } catch { /* a waiter's failure is its own */ } };
+	const close = (runId: string, f: Feed) => {
+		if (feeds.get(runId) === f) feeds.delete(runId);
+		try { void Promise.resolve(f.conn.dispose?.()).catch(() => {}); } catch { /* already gone */ }
+	};
+	return {
+		subscribe(runId: string, onAppend: () => void): (() => void) | null {
+			let f = feeds.get(runId);
+			if (!f) {
+				let conn: any;
+				try { conn = (client().scope as any).get([runId]).connect(); } catch { return null; }
+				const feed: Feed = { conn, listeners: new Set(), linger: null };
+				conn.on("eventsChanged", () => tell(feed));
+				conn.onOpen?.(() => { void Promise.resolve().then(() => conn.getEvents({ since: Number.MAX_SAFE_INTEGER })).catch(() => {}).finally(() => tell(feed)); });
+				conn.onError?.(() => {});
+				feeds.set(runId, f = feed);
+			}
+			if (f.linger) { clearTimeout(f.linger); f.linger = null; }
+			const feed = f, l = () => onAppend();
+			feed.listeners.add(l);
+			return () => {
+				if (!feed.listeners.delete(l) || feed.listeners.size) return;
+				feed.linger = setTimeout(() => { if (!feed.listeners.size) close(runId, feed); }, FEED_LINGER_MS);
+				(feed.linger as { unref?: () => void }).unref?.();
+			};
+		},
+		listeners: (runId?: string) => runId === undefined ? [...feeds.values()].reduce((n, f) => n + f.listeners.size, 0) : feeds.get(runId)?.listeners.size ?? 0,
+		/** Connections open now (lingering ones too). */
+		connections: () => feeds.size,
+	};
+}
+
+export function rivetSource(): HarnessSource & { eventListeners(runId?: string): number; eventFeeds(): number } {
+	const feeds = scopeEventFeeds();
 	const runsIndex = () => recentRuns(500);
 	const runs = async () => Promise.all(runsIndex().map(runOfRow));
 	const surface = sandboxSurface({
@@ -361,6 +408,9 @@ export function rivetSource(): HarnessSource {
 			});
 		},
 		events: async (runId, after) => (await existingScope(runId).then((s) => s?.getEvents({ since: after }) ?? []).catch(() => [])) as any,
+		subscribeEvents: (runId, onAppend) => feeds.subscribe(runId, onAppend),
+		eventListeners: (runId) => feeds.listeners(runId),
+		eventFeeds: () => feeds.connections(),
 		transcript: async (runId, agentId, after, limit) => {
 			const s = await existingScope(runId).catch(() => null);
 			const a = s ? await s.getAgent({ agentId }).catch(() => null) : null;

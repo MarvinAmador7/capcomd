@@ -2,8 +2,9 @@
 //
 // `type` and `agent` filter a scope's durable events; `wait` holds the request until one matches or the wait runs out.
 // The answer's `cursor` is the highest seq the daemon scanned, matching or not, so a client that resumes from it never
-// rescans what didn't match, and never misses what did: every look reads all events after the cursor (no "look, then
-// subscribe" window, since there is no subscription: each poll reads from where the last one stopped).
+// rescans what didn't match, and never misses what did: every look reads all events after the cursor, from where the last
+// one stopped. A wait looks again as soon as its scope appends (pushed; a slow poll stays as the fallback), subscribed
+// before its first look, so an append after that look is told and one before it is in it (src/api/server.ts eventsPage).
 //
 // Board's before-or-after rule for state filters (as `wake.arm` checks the current state in its arming transaction,
 // src/actors/wakes.ts `alreadySatisfied`): a wait on a state-like event of named agents (agent.done, agent.failed,

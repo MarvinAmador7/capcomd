@@ -244,3 +244,132 @@ describe("GET /v1/events/wait (events.wait)", () => {
 		expect(Date.now() - t0).toBeLessThan(5000);
 	});
 });
+
+// The push path: a wait looks again as soon as its scope says it appended (the source's subscribeEvents, the daemon
+// state's onDaemonEvent) instead of at its next poll. These servers poll only every minute, so an answer within a few
+// milliseconds of an append came from the push.
+describe("GET /v1/events/wait: woken by push", () => {
+	const SLOW = 60_000;
+	function pushed(o: { waitFallbackMs?: number } = {}) {
+		const state = harnessState(null);
+		const log: RawEvent[] = [{ seq: 1, at: 1792900500000, type: "RUN_NEW", agentId: null, data: { budget: {}, label: "demo" } }];
+		const src = memorySource({ runs: [run], agents: { "run-1": [agent("agt-a", "running"), agent("agt-b", "running")] }, events: { "run-1": log } });
+		const app = harnessApp({ source: src, clients: () => loadClients(path), pollMs: SLOW, state, ...o });
+		const append = (type: string, agentId: string | null, data: Record<string, unknown> = {}) => src.push("run-1", { at: Date.now(), type, agentId, data }).seq;
+		const get = async (q: string, signal?: AbortSignal) => {
+			const r = await app.request(`/v1/events/wait?${q}`, { headers: { authorization: `Bearer ${reader}` }, ...(signal ? { signal } : {}) });
+			return { status: r.status, body: (await r.json()) as any };
+		};
+		return { src, state, app, log, append, get };
+	}
+	/** Resolves once `cond` holds (checked every ms), or throws after `ms`. */
+	const until = async (cond: () => boolean, ms = 2000) => {
+		const end = Date.now() + ms;
+		while (!cond()) { if (Date.now() > end) throw new Error("condition not reached"); await Bun.sleep(1); }
+	};
+
+	test("a run scope's wait answers within milliseconds of the append", async () => {
+		const { src, append, get } = pushed();
+		const p = get("scope=run-1&after=1&type=agent.done&agent=agt-a&wait=30");
+		await until(() => src.eventListeners("run-1") === 1);
+		await Bun.sleep(20);
+		append("AGENT_STEP", "agt-a", { kind: "read", count: 1 }); // told, looked at, doesn't match: it keeps waiting
+		await Bun.sleep(20);
+		const t0 = performance.now();
+		const s = append("AGENT_DONE", "agt-a", { summary: "ok" });
+		const r = await p;
+		const ms = performance.now() - t0;
+		expect(ms).toBeLessThan(100);
+		expect(r.body).toMatchObject({ cursor: s, reached: [], timedOut: false });
+		expect(r.body.events.map((e: any) => e.seq)).toEqual([s]);
+		expect(src.eventListeners()).toBe(0);
+	});
+
+	test("the daemon scope's wait answers within milliseconds of the event", async () => {
+		const { state, get } = pushed();
+		const head = state.recordDaemonEvent({ type: "profile.changed", entity: "profile:a", text: "a", data: {} }).seq;
+		const p = get(`scope=daemon&after=${head}&type=project.configured&wait=30`);
+		await until(() => state.daemonListeners() === 1);
+		state.recordDaemonEvent({ type: "profile.changed", entity: "profile:a", text: "a2", data: {} });
+		await Bun.sleep(20);
+		const t0 = performance.now();
+		const c = state.recordDaemonEvent({ type: "project.configured", entity: "project:x", text: "x", data: {} });
+		const r = await p;
+		expect(performance.now() - t0).toBeLessThan(100);
+		expect(r.body.events.map((e: any) => e.seq)).toEqual([c.seq]);
+		expect(r.body.cursor).toBe(c.seq);
+		expect(state.daemonListeners()).toBe(0);
+	});
+
+	test("no lost event: concurrent appends and resumed waits, two waiters, woken only by push", async () => {
+		const { src, append, get } = pushed();
+		const appended: number[] = [];
+		const N = 40;
+		const writer = (async () => {
+			for (let i = 0; i < N; i++) {
+				append("AGENT_STEP", "agt-b", { kind: "read", count: 1 });
+				appended.push(append(i % 2 ? "AGENT_DONE" : "AGENT_PAUSED", "agt-a"));
+				// Some in the same tick, some between a tell and its look, some while nobody waits.
+				await Bun.sleep(i % 3 === 0 ? 0 : i % 3 === 1 ? 1 : 5);
+			}
+		})();
+		const waiter = async () => {
+			let cursor = 1;
+			const seen: number[] = [];
+			while (seen.length < N) {
+				const r = await get(`scope=run-1&after=${cursor}&type=agent.done,agent.paused&agent=agt-a&wait=10`);
+				expect(r.status).toBe(200);
+				expect(r.body.timedOut).toBe(false); // every append was told: none waited for the minute's poll
+				expect(r.body.cursor).toBeGreaterThanOrEqual(cursor);
+				seen.push(...r.body.events.map((e: any) => e.seq));
+				cursor = r.body.cursor;
+			}
+			return seen;
+		};
+		const [a, b] = await Promise.all([waiter(), waiter(), writer]);
+		expect(a).toEqual(appended);
+		expect(b).toEqual(appended);
+		expect(src.eventListeners()).toBe(0);
+	});
+
+	test("an append no one was told of is still found by the fallback poll", async () => {
+		const { src, log, get } = pushed({ waitFallbackMs: 100 });
+		const p = get("scope=run-1&after=1&type=agent.done&wait=10");
+		await until(() => src.eventListeners("run-1") === 1);
+		// Written straight into the log, with no tell (as one lost while a feed reconnects).
+		log.push({ seq: 2, at: Date.now(), type: "AGENT_DONE", agentId: "agt-a", data: {} });
+		const t0 = Date.now();
+		const r = await p;
+		expect(Date.now() - t0).toBeLessThan(1000);
+		expect(r.body).toMatchObject({ cursor: 2, timedOut: false });
+		expect(r.body.events.map((e: any) => e.seq)).toEqual([2]);
+	});
+
+	test("listeners: none left after waits that end every way, and after clients that go away", async () => {
+		const { src, state, append, get } = pushed();
+		const head = append("AGENT_STEP", "agt-b", { kind: "read", count: 1 });
+		// No wait: never subscribes. An event already there: answers on the first look.
+		await get("scope=run-1&after=1");
+		for (let i = 0; i < 20; i++) await get(`scope=run-1&after=1&type=agent.step&wait=5`);
+		expect(src.eventListeners()).toBe(0);
+		// Waits that end by a push, many at once.
+		const many = Array.from({ length: 30 }, () => get(`scope=run-1&after=${head}&type=agent.done&wait=30`));
+		await until(() => src.eventListeners("run-1") === 30);
+		append("AGENT_DONE", "agt-a");
+		for (const r of await Promise.all(many)) expect(r.body.events).toHaveLength(1);
+		expect(src.eventListeners()).toBe(0);
+		// Waits that run out.
+		const short = harnessApp({ source: src, clients: () => loadClients(path), pollMs: SLOW, state });
+		await Promise.all(Array.from({ length: 5 }, () => short.request(`/v1/events/wait?scope=run-1&after=100&type=agent.done&wait=1`, { headers: { authorization: `Bearer ${reader}` } })));
+		expect(src.eventListeners()).toBe(0);
+		// Clients that go away, on a run and on the daemon: their waits end and unsubscribe at once.
+		const acs = Array.from({ length: 10 }, () => new AbortController());
+		const gone = acs.map((ac, i) => get(i % 2 ? "scope=run-1&after=100&type=agent.done&wait=30" : "scope=daemon&after=100000&type=project.configured&wait=30", ac.signal).catch(() => null));
+		await until(() => src.eventListeners() === 5 && state.daemonListeners() === 5);
+		const t0 = Date.now();
+		for (const ac of acs) ac.abort();
+		await Promise.all(gone);
+		await until(() => src.eventListeners() === 0 && state.daemonListeners() === 0, 1000);
+		expect(Date.now() - t0).toBeLessThan(1000);
+	});
+});

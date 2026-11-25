@@ -6,6 +6,8 @@
   one is appended, or none when the wait runs out. Pass `cursor` back as `after` to resume: it moves past the events
   that didn't match and never past one that did. Example:
   `GET /v1/events/wait?scope=run-…&after=120&type=agent.done,agent.failed,agent.asked&agent=agt-…&wait=30`.
+- A wait answers as soon as a matching event happens: the daemon is told of each new event instead of checking for
+  them twice a second.
 - A wait for an agent's state that it already reached before your cursor (`agent.done`, `agent.failed`,
   `agent.cancelled`, `agent.paused` or `agent.asked` with `agent=`) answers at once with `reached` (the agent, the
   state, and the event that put it there) instead of waiting for an event that already happened.

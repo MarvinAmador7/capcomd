@@ -130,8 +130,9 @@ and for recovery.
 - **A durable delivery cursor per agent:** the last message seq the CLI took, so a new attempt never re-delivers.
 - **Push delivery:** the scope broadcasts "messages changed" to the runner instead of a 5 s poll.
 - **A filtered, cursor-resumable wait** on the API (`GET /v1/events/wait?scope=&after=&wait=&type=&agent=`), with Board's
-  before-or-after rule for state filters, for drivers and the app. *(Built 2026-11-21, capability `events.wait`: waits poll every 500 ms, at most 45 s; the
-  answer's `reached` is the before-or-after rule.)*
+  before-or-after rule for state filters, for drivers and the app. *(Built 2026-11-21, capability `events.wait`: at most 45 s; the
+  answer's `reached` is the before-or-after rule. Since 2026-11-25 a wait looks again when the scope broadcasts
+  "events changed" after each append it commits (the daemon's own events likewise), with a 5 s poll as the fallback.)*
 - The in-VM CLI's waits stop being loops the model sees: `--wake` is what the skills and prompts teach, and capcomd sets
   `BASH_DEFAULT_TIMEOUT_MS` for the few blocking waits left.
 
