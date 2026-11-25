@@ -14,7 +14,7 @@ final class QuestionLineTests: XCTestCase {
   static let question = "Ship the limiter at 100 or 500 req/min?"
 
   /// planner (root, "rate limit api") → lead ("api lead") → worker ("request limiter"), the worker asked.
-  func feed(_ s: CapcomdStore, to: String? = "agt-l", approval: Bool = true, workerStatus: String = "done") {
+  func feed(_ s: CapcomdStore, to: String? = "agt-l", approval: Bool = true, workerStatus: String = "done", messages: String = "[]", on scope: String? = nil) {
     let q = { (v: String?) in v.map { #""\#($0)""# } ?? "null" }
     let asked = #"{"questionId":"qst-1","approvalId":"apr-1","question":"\#(Self.question)","recommend":"100 req/min","options":["100 req/min","500 req/min"],"why":"The docs set the free tier at 100.","holds":"write tests","to":\#(q(to)),"at":"2026-11-20T11:40:00.000Z"}"#
     let agent = { (id: String, profile: String, parent: String?, status: String, asked: String, title: String) in
@@ -25,8 +25,8 @@ final class QuestionLineTests: XCTestCase {
     let subject = #"{"questionId":"qst-1","options":[{"label":"100 req/min","recommended":true},{"label":"500 req/min","recommended":false}],"recommend":"100 req/min","why":"The docs set the free tier at 100.","holds":"write tests","to":\#(q(to))}"#
     let approvals = approval ? #"[{"approvalId":"apr-1","kind":"question","status":"pending","question":"\#(Self.question)","requestedBy":{"agentId":"agt-w","runId":"run-q"},"subject":\#(subject),"requestedAt":"2026-11-20T11:40:00.000Z"}]"# : "[]"
     for (e, d) in [("snapshot.run", #"{"run":{"id":"run-q","projectId":"prj-q","label":null,"state":"running","goal":"Rate limit the public API"}}"#),
-                   ("snapshot.agents", #"{"agents":[\#(agents)]}"#), ("snapshot.approvals", #"{"approvals":\#(approvals)}"#), ("snapshot.end", #"{"snapshotSeq":3}"#)] {
-      s.receive(StreamFrame.parse(event: e, data: d), scope: scope)
+                   ("snapshot.agents", #"{"agents":[\#(agents)]}"#), ("snapshot.approvals", #"{"approvals":\#(approvals)}"#), ("snapshot.threads", #"{"messages":\#(messages)}"#), ("snapshot.end", #"{"snapshotSeq":3}"#)] {
+      s.receive(StreamFrame.parse(event: e, data: d), scope: scope ?? self.scope)
     }
   }
   var seq = 3
@@ -109,6 +109,7 @@ final class QuestionLineTests: XCTestCase {
     XCTAssertEqual(lines(s2, "agt-p").first?.atMs, 1_795_174_860_000)   // when it reached the planner
     s2 = await fresh(to: "agt-p", "agt-l", [item("agt-l", rev: 3, state: "withdrawn", to: "agt-p", passedBy: ["agt-l"], decidedAt: "2026-11-20T11:44:00.000Z")])
     XCTAssertEqual(lines(s2, "agt-l").first?.summary, "request limiter asked: \(Self.question) · withdrawn")
+    XCTAssertEqual(lines(s2, "agt-l").first?.state, .withdrawn(atMs: 1_795_175_040_000))   // when it was withdrawn: the quiet line's clock
     XCTAssertNil(lines(s2, "agt-l").first?.card)
   }
 
@@ -122,6 +123,7 @@ final class QuestionLineTests: XCTestCase {
     // message to the asker), and it shows sending wherever it is drawn.
     let card = try XCTUnwrap(s.questionCard(runId: "run-q", agentId: "agt-w"))
     XCTAssertEqual(l.card, card)
+    XCTAssertTrue(card.docks)   // asked of an agent: the asker's column docks it
     s.answering.insert(card.approvalId)
     XCTAssertEqual(lines(s, "agt-l").first?.card?.sending, true)
     XCTAssertEqual(s.questionCard(runId: "run-q", agentId: "agt-w")?.sending, true)
@@ -148,6 +150,17 @@ final class QuestionLineTests: XCTestCase {
     XCTAssertEqual(s.needsAsks().map(\.agentId), ["agt-w"])
     XCTAssertEqual(s.pendingApprovals.map(\.id), ["apr-1"])
     XCTAssertEqual(s.badgeCount, 1)
+    // The asker's thread: no docked card (it is owed in the root's thread), its line "asked you" with Answer instead,
+    // opening the same card. From `to`, whatever columns are open.
+    let card = try XCTUnwrap(s.questionCard(runId: "run-q", agentId: "agt-w"))
+    XCTAssertFalse(card.docks)
+    let mine = lines(s, "agt-w")
+    XCTAssertEqual(mine.map(\.summary), ["request limiter asked you: \(Self.question) · waiting on you"])
+    XCTAssertFalse(mine[0].forYou)
+    XCTAssertEqual(mine[0].card, card)
+    XCTAssertEqual(mine[0].atMs, 1_795_174_800_000)
+    // One full card for the question across the run: the root's.
+    XCTAssertEqual(["agt-p", "agt-l", "agt-w"].flatMap { lines(s, $0) }.filter(\.forYou).count, 1)
     // Live: the approval turned the user's as it was passed (agent.question_passed): the root's record still says the
     // planner, the line follows the pass.
     let s2 = CapcomdStore(thread: t)
@@ -157,6 +170,11 @@ final class QuestionLineTests: XCTestCase {
     event(s2, "agent.question_passed", #"{"questionId":"qst-1","from":"agt-p","to":null,"cause":"passed_up"}"#)
     XCTAssertTrue(lines(s2, "agt-p")[0].forYou)
     XCTAssertEqual(s2.needsAsks().map(\.agentId), ["agt-w"])
+    XCTAssertEqual(s2.questionCard(runId: "run-q", agentId: "agt-w")?.docks, false)
+    // A root's own question to you docks at the root, as before: no line.
+    let s3 = CapcomdStore()
+    feed(s3, to: "agt-p")
+    XCTAssertEqual(s3.questionCard(runId: "run-q", agentId: "agt-w")?.docks, true)
   }
 
   func testAnsweringInOnePlaceTurnsEveryPlaceIntoTheAnsweredLine() async throws {
@@ -188,25 +206,48 @@ final class QuestionLineTests: XCTestCase {
     XCTAssertEqual(s.threadEntries(agentId: "agt-p").count, 1)
   }
 
-  func testOneLineAndNoQuestionMessageInTheAddresseesThread() async throws {
-    // The message that delivered the question to the lead (from the asker, naming it) is the line now; an agent that
-    // answered has the line, not also the live answered line.
+  func testTheDeliveringMessageIsBookkeepingAndTheLineIsOne() async throws {
+    // The message that delivered the question to the lead is bookkeeping (the daemon marks it internal): out of the
+    // thread unless its bookkeeping is shown. An agent that answered has the line, not also the live answered line.
     let t = FakeThread()
     let s = CapcomdStore(thread: t)
     feed(s)
-    event(s, "message.sent", #"{"to":"agt-l","seq":5,"bytes":80,"text":"agt-w asked you a question (qst-1) and stopped until it's answered:\n\#(Self.question)"}"#, ms: 1_795_174_800_000)
+    event(s, "message.sent", #"{"to":"agt-l","seq":5,"bytes":80,"text":"agt-w asked you a question (qst-1) and stopped until it's answered:\n\#(Self.question)","internal":true}"#, ms: 1_795_174_800_000)
     event(s, "message.sent", #"{"to":"agt-l","seq":6,"bytes":10,"text":"also: hello"}"#, ms: 1_795_174_801_000)
     await load(s, t, "agt-l", [item("agt-l")])
     event(s, "agent.answered", #"{"questionId":"qst-1","by":"agt-l","answer":"100 req/min","recommended":true,"note":null,"messageSeq":9,"replaces":null,"cause":"answered"}"#)
-    let kinds = s.threadEntries(agentId: "agt-l").map { e -> String in
+    let kinds = { s.threadEntries(agentId: "agt-l").map { e -> String in
       guard case .event(let it) = e else { return "item" }
       switch it.kind {
       case .question(let l): return "line: \(l.summary)"
-      case .message(_, _, let text, _): return "message: \(text?.plain ?? "")"
+      case .message(_, _, let text, _): return "message: \(text?.plain.prefix(24) ?? "")"
       case .answered: return "answered"
       default: return "other"
       }
-    }
-    XCTAssertEqual(kinds, ["line: request limiter asked: \(Self.question) · api lead answered 100 req/min (recommended)", "message: also: hello"])
+    } }
+    XCTAssertEqual(kinds(), ["line: request limiter asked: \(Self.question) · api lead answered 100 req/min (recommended)", "message: also: hello"])
+    s.setBookkeepingShown(true, agentId: "agt-l")
+    XCTAssertEqual(kinds(), ["message: agt-w asked you a questi", "line: request limiter asked: \(Self.question) · api lead answered 100 req/min (recommended)",
+                             "message: also: hello"])
+    // From a snapshot too (snapshot.threads carries `internal`).
+    let s2 = CapcomdStore()
+    feed(s2, messages: #"[{"seq":5,"from":"agt-w","to":"agt-l","at":"2026-11-20T11:40:00.000Z","text":"agt-w asked you a question (qst-1)","attachment":null,"internal":true},{"seq":6,"from":"agt-w","to":"agt-l","at":"2026-11-20T11:40:01.000Z","text":"hi","attachment":null}]"#, on: "run-q")   // the run's own stream carries its threads
+    XCTAssertEqual(s2.thread(agentId: "agt-l").map(\.internal), [true, false])
+    XCTAssertEqual(s2.threadEntries(agentId: "agt-l").count, 1)
+  }
+
+  func testAWithdrawnQuestionIsOneQuietLineWithItsReasonOnHover() async throws {
+    let w = WithdrawnQuestion(questionId: "qst-1", question: Self.question, atMs: 1_795_175_040_000)
+    let l = w.line(time: "11:44")
+    XCTAssertEqual("\(l.lead) · \(l.question) · \(l.tail)", "Withdrawn · \(Self.question) · 11:44")
+    XCTAssertEqual(WithdrawnQuestion.why, "Its agent was cancelled, so it won't be answered.")
+    // Live, before the lead's record says so: the line follows the asker's withdrawal, at its time.
+    let t = FakeThread()
+    let s = CapcomdStore(thread: t)
+    feed(s)
+    await load(s, t, "agt-l", [item("agt-l")])
+    event(s, "agent.question_withdrawn", #"{"questionId":"qst-1","reason":"cancelled","cause":"withdrawn"}"#, ms: 1_795_175_100_000)
+    XCTAssertEqual(lines(s, "agt-l").first?.state, .withdrawn(atMs: 1_795_175_100_000))
+    XCTAssertNil(lines(s, "agt-l").first?.card)
   }
 }

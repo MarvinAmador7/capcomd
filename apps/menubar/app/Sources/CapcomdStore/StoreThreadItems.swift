@@ -146,32 +146,32 @@ extension CapcomdStore {
 
   public func threadEntries(agentId: String) -> [ThreadEntry] {
     let events = thread(agentId: agentId)
-    guard let book = books[agentId], threadSupported(agentId: agentId) == true else { return events.map(ThreadEntry.event) }
+    let internals = bookkeepingShown.contains(agentId)
+    // Its own question, passed up to you: its line here (its card is in the root's thread).
+    let mine = askerLine(agentId: agentId).map { [$0] } ?? []
+    guard let book = books[agentId], threadSupported(agentId: agentId) == true else {
+      let shown = events.filter { internals || !$0.internal }
+      return (mine.isEmpty ? shown : (shown + mine).sorted { ($0.epochMs, $0.seq) < ($1.epochMs, $1.seq) }).map(ThreadEntry.event)
+    }
     // Its questions (agents.ask) as the thread records them: an answered or withdrawn one is one line, placed when it was
     // decided, and it wins over the line built from a live event (after a reconnect that line is gone; the record isn't).
     // An open one is its docked card (from its approval), not a line.
     let decided = book.shown.compactMap { it in it.question.flatMap { $0.asker != agentId || $0.state == .open ? nil : questionLine(it, $0, agentId: agentId) } }
     // Another agent's question that reached this one (asked of it, passed up by it, answered by it, or the user's at the
-    // root): one line where it reached it, at the question's one state, in place of the live answered line and of the
-    // message that delivered the question (from the asker, naming it).
+    // root): one line where it reached it, at the question's one state, in place of the live answered line.
     let held = book.shown.compactMap { it in it.question.flatMap { $0.asker == agentId ? nil : heldQuestionLine(it, $0, agentId: agentId) } }
-    let heldIds = Set(held.compactMap(\.questionId))
-    let recorded = Set(decided.compactMap(\.questionId)).union(heldIds)
-    let delivered = { (from: String, text: UntrustedText?) -> Bool in
-      guard let t = text?.plain, !heldIds.isEmpty else { return false }
-      return held.contains { if case .question(let l) = $0.kind { return l.askerId == from && t.contains(l.questionId) }; return false }
-    }
+    let recorded = Set(decided.compactMap(\.questionId)).union(held.compactMap(\.questionId))
     // The agent's own output is in the book; keep only messages from someone else (steers, other agents).
     let messages = events.filter {
-      if case .message(let from, _, let text, _) = $0.kind { return from != agentId && !delivered(from, text) }
+      // A message capcomd wrote to carry a question or its answer is bookkeeping: shown only with it.
+      if case .message(let from, _, _, _) = $0.kind { return from != agentId && (internals || !$0.internal) }
       if case .woke = $0.kind { return true }   // what woke it (agents.wake): a quiet line between its turns
       if case .answered(let r, _) = $0.kind { return !recorded.contains(r.questionId) }   // its question, answered (agents.ask): one line
       if case .withdrawn(let w) = $0.kind { return !recorded.contains(w.questionId) }
       return false
-    } + decided + held
+    } + decided + held + mine
     // Read newest first, the thread shows from its top down; messages from before its first item wait with it. The
     // agent's bookkeeping (ADR-026 §7) only when asked for.
-    let internals = bookkeepingShown.contains(agentId)
     let items = book.shown.filter { !$0.isSystemBookkeeping && (internals || !$0.internal) && $0.kind != "question" }
     let from = book.hasEarlier ? items.first?.atMs ?? Int.max : Int.min
     var out: [ThreadEntry] = []; out.reserveCapacity(items.count + messages.count)

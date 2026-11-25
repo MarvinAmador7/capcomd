@@ -112,7 +112,8 @@ public struct QuestionLine: Sendable, Hashable {
     case passed(to: String)
     /// `byName` names an agent that answered; nil when a person did.
     case answered(AnsweredQuestion, byName: String?)
-    case withdrawn
+    /// Its agent was cancelled before it was answered, at `atMs`.
+    case withdrawn(atMs: Int)
   }
   public var questionId: String
   public var askerId: String
@@ -127,9 +128,12 @@ public struct QuestionLine: Sendable, Hashable {
   public var card: QuestionCardModel?
   /// It is the user's to answer and this is the run's root thread: the full card, not the line.
   public var forYou: Bool
+  /// The asker's own thread, the question passed up to you: its card is owed in the root's thread, here it is the line
+  /// ("asked you").
+  public var askedYou = false
 
   /// "asked: Ship the limiter at 100 or 500 req/min?": after the asker's name, one line.
-  public var asked: String { "asked: \(question.firstLine)" }
+  public var asked: String { "\(askedYou ? "asked you" : "asked"): \(question.firstLine)" }
   /// What became of it, after the question: "waiting on planner", "passed up to you", "withdrawn"; nil once answered (the
   /// outcome line says it).
   public var status: String? {
@@ -182,6 +186,11 @@ public struct QuestionCardModel: Sendable, Hashable {
   public var askedOf: String?
   /// An answer from the card is on its way.
   public var sending: Bool
+  /// Whether the asker's column docks it: yes when it is asked of an agent, or of you by the root itself. A question
+  /// passed up to you from below the root is owed in the root's thread (its card there), so the asker's thread shows
+  /// its line, "asked you", instead: one full card per question, wherever it is decided (from `to`, not from what is
+  /// on screen).
+  public var docks: Bool = true
   /// "Answer as you, or let the planner answer." (asked of an agent); nil when it is yours.
   public var hint: String? { askedOf.map { "Answer as you, or let the \($0) answer." } }
   /// The line under the question when nothing waits on it: what happens to the asker.
@@ -197,7 +206,7 @@ extension CapcomdStore {
     let of = q.to.flatMap { id in run.agents[id]?.displayName ?? name(id) }
     return QuestionCardModel(approvalId: ap.id, questionId: q.questionId, askerId: agentId, askerName: a.titleText ?? a.displayName,
                              whoLine: "\(a.displayName) · asked \(of ?? "you")", question: ap.question, options: q.options, why: q.why, holds: q.holds,
-                             askedOf: of, sending: answering.contains(ap.id))
+                             askedOf: of, sending: answering.contains(ap.id), docks: q.to != nil || a.parent == nil)
   }
 
   /// Answer from the card: the chosen option's words as a message to the asker (ADR-026 §9.4: a plain message to an
@@ -264,7 +273,7 @@ extension CapcomdStore {
     case .answered:
       guard let r = answered else { return nil }
       line = .answered(r, byName: r.byPerson ? nil : name(r.by))
-    case .withdrawn: line = .withdrawn
+    case .withdrawn: line = .withdrawn(atMs: q.decidedAtMs ?? withdrawnAt(q.questionId, asker: q.asker) ?? it.atMs)
     case .open:
       if to == agentId { line = .open(waitingOn: name(agentId) ?? "agent") }
       else if to == nil && isRoot { line = .open(waitingOn: "you"); forYou = true }
@@ -288,6 +297,23 @@ extension CapcomdStore {
     return QuestionCardModel(approvalId: key, questionId: q.questionId, askerId: q.asker, askerName: a.map { $0.titleText ?? $0.displayName } ?? q.asker,
                              whoLine: "\(a?.displayName ?? "agent") · asked \(of ?? "you")", question: UntrustedText(q.question),
                              options: q.options.map { QuestionAsk.Option(label: $0.label, recommended: $0.recommended) },
-                             why: q.why.map(UntrustedText.init), holds: q.holds.map(UntrustedText.init), askedOf: of, sending: answering.contains(key))
+                             why: q.why.map(UntrustedText.init), holds: q.holds.map(UntrustedText.init), askedOf: of, sending: answering.contains(key),
+                             docks: to != nil || a?.parent == nil)
+  }
+
+  /// When a live agent.question_withdrawn said it (the record may not have come yet).
+  private func withdrawnAt(_ questionId: String, asker: String) -> Int? {
+    thread(agentId: asker).last { if case .withdrawn(let w) = $0.kind { return w.questionId == questionId }; return false }?.epochMs
+  }
+
+  /// The asker's own line for its open question when the question is the user's and the asker isn't the root
+  /// (`docks` false): "request limiter asked you: … · waiting on you" with Answer, where it asked. Its card is the root's.
+  func askerLine(agentId: String) -> ThreadItem? {
+    guard let run = runs.values.first(where: { $0.agents[agentId] != nil }), let card = questionCard(runId: run.id, agentId: agentId), !card.docks else { return nil }
+    let at = run.agents[agentId]?.asked.flatMap { $0.questionId == card.questionId ? $0.atMs : nil }
+      ?? approvals[card.approvalId]?.requestedAtMs ?? 0
+    let line = QuestionLine(questionId: card.questionId, askerId: agentId, askerName: card.askerName, question: card.question,
+                            state: .open(waitingOn: "you"), atMs: at, card: card, forYou: false, askedYou: true)
+    return ThreadItem(id: "asked-you:\(card.questionId)", seq: 0, epochMs: at, kind: .question(line))
   }
 }

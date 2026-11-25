@@ -177,6 +177,51 @@ final class QuestionCaptureTests: XCTestCase {
     try Self.drawPane("agt-l", ym, name: "lead-thread-passed-up-to-you", into: dir, size: CGSize(width: 760, height: 360))
   }
 
+  // ── v4: one row when it fits, the asker's "asked you" line, the root's card, the quiet withdrawn line ─────────────
+  /// The row's height at `width`, as the thread lays it out.
+  @MainActor static func height(_ view: AnyView, model: DeskModel, width: CGFloat) -> CGFloat {
+    let host = NSHostingView(rootView: view.frame(width: width, alignment: .topLeading).environment(model).environment(\.colorScheme, .dark))
+    return host.fittingSize.height
+  }
+
+  @MainActor func testV4Captures() throws {
+    let dir = ProcessInfo.processInfo.environment["PANE_CAPTURE_DIR"].map { URL(fileURLWithPath: $0) }
+    if let dir { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+    // One row in a pane's width, two in a reel column's: ViewThatFits decides, no width of ours.
+    let s = treeStore(to: "agt-l", items: ["agt-l": [Self.held("agt-l", to: "agt-l")]])
+    let m = DeskModel(store: s)
+    let l = try line(s, "agt-l")
+    let row = { AnyView(QuestionLineRow(runId: "run-q", agentId: "agt-l", line: l, proseWidth: nil).padding(.horizontal, 16).environment(\.threadHost, ThreadHostBox(host: m))) }
+    let wide = Self.height(row(), model: m, width: 720), narrow = Self.height(row(), model: m, width: 432)
+    XCTAssertLessThan(wide, narrow, "one row at 720 pt, two at 432 pt")
+    try Self.draw(row(), model: m, width: 720, name: "v4-line-one-row-pane", into: dir)
+    try Self.draw(row(), model: m, width: 432, name: "v4-line-two-rows-column", into: dir)
+    let answered = treeStore(to: "agt-l", items: ["agt-l": [Self.held("agt-l", state: "answered", to: "agt-l", answer: "500 req/min", recommended: false, by: "agt-l",
+                                                                      note: "Our biggest client already does 300.", decidedAt: "2026-11-20T11:44:00.000Z")]])
+    let am = DeskModel(store: answered)
+    let al = try line(answered, "agt-l")
+    try Self.draw(AnyView(QuestionLineRow(runId: "run-q", agentId: "agt-l", line: al, proseWidth: nil).padding(.horizontal, 16)
+      .environment(\.threadHost, ThreadHostBox(host: am))), model: am, width: 720, name: "v4-line-answered-one-row-pane", into: dir)
+    // Passed up to you: the asker's pane has its line "asked you" (no docked card); the root's pane has the card.
+    let you = treeStore(to: nil, items: [
+      "agt-p": [Self.say("p1", "agt-p", order: 1, at: "2026-11-20T11:35:00.000Z", "I split the work: the lead takes the request limiter."),
+                Self.held("agt-p", to: nil, passedBy: ["agt-l", "agt-p"], at: "2026-11-20T11:41:00.000Z")],
+      "agt-w": [Self.say("w1", "agt-w", order: 1, at: "2026-11-20T11:38:00.000Z", "The gateway shares one pool across every key; the limit decides how it is split.")],
+    ])
+    XCTAssertEqual(you.questionCard(runId: "run-q", agentId: "agt-w")?.docks, false)
+    let ym = DeskModel(store: you)
+    try Self.drawPane("agt-w", ym, name: "v4-asker-asked-you", into: dir, size: CGSize(width: 760, height: 420))
+    try Self.drawPane("agt-p", ym, name: "v4-root-card", into: dir, size: CGSize(width: 760, height: 720))
+    // Withdrawn: the asker's record and the parent's line, one quiet line each (the reason is the hover help).
+    let w = treeStore(to: "agt-l", items: ["agt-l": [Self.held("agt-l", state: "withdrawn", to: "agt-l", decidedAt: "2026-11-20T11:44:00.000Z")]])
+    let wm = DeskModel(store: w)
+    let wl = try line(w, "agt-l")
+    try Self.draw(AnyView(VStack(alignment: .leading, spacing: 12) {
+      WithdrawnLine(record: WithdrawnQuestion(questionId: "qst-1", question: Self.question, atMs: 1_795_175_040_000))
+      QuestionLineRow(runId: "run-q", agentId: "agt-l", line: wl, proseWidth: nil).padding(.horizontal, 16)
+    }.environment(\.threadHost, ThreadHostBox(host: wm))), model: wm, width: 432, name: "v4-withdrawn", into: dir)
+  }
+
   /// Draws an agent's opened pane offscreen (as PaneCaptureTests.draw, for any agent); with `dir`, to <dir>/<name>.png.
   @MainActor static func drawPane(_ agentId: String, _ m: DeskModel, name: String, into dir: URL?, size: CGSize, settle: Int = 8) throws {
     let w = NSWindow(contentRect: CGRect(origin: CGPoint(x: -20_000, y: -20_000), size: size), styleMask: [.borderless], backing: .buffered, defer: false)

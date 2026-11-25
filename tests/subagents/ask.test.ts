@@ -299,6 +299,19 @@ test("the thread is the record: a fresh client reads each question and what beca
     question: { questionId: qid, asker: W, state: "open", to: L, passedBy: [], why: "the docs", holds: "tests" } });
   expect(atL.at).toBe(it.question.askedAt);
   expect(await read(P)).toEqual([]);
+  // The message that delivered it to L is bookkeeping (the item shows it): marked internal, never a thread item; the
+  // question item is not bookkeeping, with or without internal=true.
+  const get = async (path: string) => { const res = await fresh.request(path, { headers: { authorization: `Bearer ${token}` } }); expect(res.status).toBe(200); return (await res.json()) as any; };
+  const messages = async () => (await get(`/v1/runs/${run}/messages`)) as any[];
+  const delivered = (await messages()).filter((m) => m.to === L && m.from === W);
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]).toMatchObject({ internal: true });
+  expect(delivered[0].text).toContain(qid);
+  for (const q of ["", "?internal=true"]) {
+    const items = (await get(`/v1/runs/${run}/agents/${L}/thread${q}`)).items as any[];
+    expect(items.filter((i) => i.kind === "question")).toMatchObject([{ id: `itm-${L}-asked-${qid}`, internal: false }]);
+    expect(items.some((i) => String(i.text).includes("asked you a question"))).toBe(false);
+  }
   // Passed up by L: the same items, a new rev, asked of P now; P's thread has it from now on.
   expect(await rpc(run, L, "answer", { question: qid, up: true })).toMatchObject({ ok: true });
   [it] = await read(W);
@@ -344,6 +357,13 @@ test("the thread is the record: a fresh client reads each question and what beca
     question: { questionId: lq, state: "withdrawn", reason: "cancelled", answer: null, by: null } });
   expect(w.question.decidedAt).not.toBeNull();
   expect(await of(P, lq)).toMatchObject([{ id: `itm-${P}-asked-${lq}`, rev: 2, text: `${L} asked: Merge now? · withdrawn: its agent was cancelled`, question: { state: "withdrawn" } }]);
+  // Every message capcomd wrote to carry a question or its answer is bookkeeping; a plain message stays as it was.
+  await s.sendMessage({ to: L, from: "operator", body: "plain words" });
+  const all = await messages();
+  const carried = all.filter((m) => [qid, q2, lq].some((q) => String(m.text).includes(q)));
+  expect(carried.length).toBeGreaterThanOrEqual(6);   // delivered to L, P (passed), and the answers worded by capcomd
+  expect(carried.every((m) => m.internal === true)).toBe(true);
+  expect(all.find((m) => m.text === "plain words")?.internal).toBeUndefined();
   // A conversation rebuilt from the thread keeps the decision (it isn't bookkeeping).
   const { threadPrompt } = await import("../../src/agents/continue");
   const c = (await s.continuation({ agentId: W }))!;

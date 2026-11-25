@@ -41,40 +41,42 @@ package struct AnsweredLine: View {
   }
 }
 
-/// A question withdrawn before it was answered (its agent was cancelled): the answered line's shape, quieter, so the
-/// question reads as withdrawn instead of vanishing. "Withdrawn · Which limit? · 11:42", and why under it.
+/// A question withdrawn before it was answered (its agent was cancelled): quiet, not a failure. One muted line in the
+/// answered line's place, "Withdrawn · Which limit? · 11:42", a small dash in its leading slot, every word the grey of
+/// the thread's other quiet lines; why (its agent was cancelled) is the hover help, not a second line. `leading`: the
+/// answered line's inset (14) in the asker's thread; 0 where the row's slot is the thread's own (another agent's line).
 package struct WithdrawnLine: View {
   package let record: WithdrawnQuestion
-  package init(record: WithdrawnQuestion) { self.record = record }
+  package var leading: CGFloat = 14
+  package init(record: WithdrawnQuestion, leading: CGFloat = 14) { self.record = record; self.leading = leading }
 
   package var body: some View {
     let line = record.line(time: AnsweredLine.clock(record.atMs))
-    VStack(alignment: .leading, spacing: 2) {
-      HStack(alignment: .center, spacing: 8) {
-        Image(systemName: "xmark").font(.system(size: 7.5, weight: .bold)).foregroundStyle(Theme.AskCard.t3)
-          .frame(width: 16, height: 16).background(Circle().fill(Theme.AskCard.kbdFill))
-        (Text(verbatim: "\(line.lead) · ").foregroundStyle(Theme.AskCard.t3)
-          + Text(verbatim: line.question).foregroundStyle(Theme.AskCard.t2)
-          + Text(verbatim: " · \(line.tail)").foregroundStyle(Theme.AskCard.t3))
-          .font(.system(size: 12)).lineLimit(1).truncationMode(.middle).monospacedDigit()
+    HStack(alignment: .center, spacing: 8) {
+      Text(verbatim: "–").font(.system(size: 12)).foregroundStyle(Theme.AskCard.t3).frame(width: 16, height: 16).accessibilityHidden(true)
+      HStack(spacing: 4) {
+        Text(verbatim: "\(line.lead) · \(line.question)").lineLimit(1).truncationMode(.tail)
+        Text(verbatim: "· \(line.tail)").monospacedDigit().fixedSize()
       }
-      .frame(minHeight: 28)
-      Text(verbatim: WithdrawnQuestion.why).font(.system(size: 12)).foregroundStyle(Theme.AskCard.t3).padding(.leading, 24)
+      .font(.system(size: 12)).foregroundStyle(Theme.AskCard.t3)
     }
-    .padding(.horizontal, 14).padding(.vertical, 10)
+    .frame(minHeight: 28)
+    .padding(.horizontal, leading)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.AskCard.inset))
-    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.AskCard.line, lineWidth: 0.5))
+    .contentShape(Rectangle())
+    .help(WithdrawnQuestion.why)
     .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(line.lead): \(line.question), \(line.tail). \(WithdrawnQuestion.why)")
   }
 }
 
-/// Another agent's question in this thread (capability agents.ask; QuestionLine): one compact row in thread v2's row
-/// language, where the question reached this agent. The asker's bot and name (a click opens the asker, as a hand-back's
-/// who line does) and "asked: <question>" at 62 % on one line; under the words, what became of it: "waiting on planner"
-/// with `accessory` on the right (the desktop's Answer), "passed up to you", "withdrawn", or "You answered 500 req/min
-/// — not the recommendation" with the blue tick and the note under it. Every string but the words around them is
-/// someone's: plain text only.
+/// Another agent's question in this thread (capability agents.ask; QuestionLine), or the asker's own once it is passed
+/// up to you ("asked you"): one compact row in thread v2's row language, where the question reached this agent. One row
+/// when it fits ("<bot> request limiter asked: Ship the limiter…? · waiting on api lead  [Answer]", an opened pane), two
+/// in a narrow column (what became of it under the words): ViewThatFits decides. The asker's name opens it, as a
+/// hand-back's who line does; a cut question shows whole on hover. Answered: "You answered 500 req/min — not the
+/// recommendation" with the blue tick, and the note under it. Withdrawn: the quiet withdrawn line. Every string but
+/// the words around them is someone's: plain text only.
 package struct QuestionLineView<Accessory: View>: View {
   @Environment(\.threadHost) private var host
   package let runId: String
@@ -86,39 +88,64 @@ package struct QuestionLineView<Accessory: View>: View {
   private var indent: CGFloat { Theme.Rows.whoBot + Theme.Rows.gap }
 
   package var body: some View {
-    let h = host?.host
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: Theme.Rows.gap) {
-        Button { h?.openAgent(runId: runId, agentId: line.askerId) } label: {
-          HStack(spacing: Theme.Rows.gap) {
-            ProvidedBot(traits: h?.bot(runId: runId, agentId: line.askerId), size: .xs, provider: h?.agentProvider(runId: runId, agentId: line.askerId))
-              .frame(width: Theme.Rows.whoBot, height: Theme.Rows.whoBot)
-            Text(verbatim: line.askerName).font(Theme.Rows.whoName).foregroundStyle(Theme.Rows.whoNameText).lineLimit(1).fixedSize()
+    Group {
+      if case .withdrawn(let at) = line.state {
+        WithdrawnLine(record: WithdrawnQuestion(questionId: line.questionId, question: "\(line.askerName) \(line.asked)", atMs: at), leading: 0)
+      } else {
+        VStack(alignment: .leading, spacing: 0) {
+          ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Rows.gap) {
+              who
+              Text(verbatim: line.asked).font(Theme.Rows.detail).foregroundStyle(Theme.Rows.detailText).lineLimit(1).fixedSize()
+              Text(verbatim: "·").font(Theme.Rows.detail).foregroundStyle(Theme.Rows.statusText)
+              outcome.fixedSize()
+              Spacer(minLength: Theme.Rows.statusLead)
+              trailing
+            }
+            .frame(minHeight: Theme.Rows.height)
+            VStack(alignment: .leading, spacing: 0) {
+              HStack(spacing: Theme.Rows.gap) {
+                who
+                Text(verbatim: line.asked).font(Theme.Rows.detail).foregroundStyle(Theme.Rows.detailText).lineLimit(1).truncationMode(.tail)
+                  .help(line.question.plain)
+                Spacer(minLength: 0)
+              }
+              .frame(minHeight: Theme.Rows.height)
+              HStack(alignment: .center, spacing: Theme.Rows.gap) {
+                outcome
+                Spacer(minLength: Theme.Rows.statusLead)
+                trailing
+              }
+              .padding(.leading, indent)
+            }
           }
-          .contentShape(Rectangle())
+          if let n = line.noteLine {
+            Text(verbatim: n).font(Theme.Rows.statusWord).foregroundStyle(Theme.Rows.statusText).lineSpacing(3)
+              .fixedSize(horizontal: false, vertical: true).padding(.leading, indent).padding(.top, 2)
+          }
         }
-        .buttonStyle(.plain)
-        .help("Open its thread")
-        .accessibilityLabel("Open \(line.askerName)")
-        Text(verbatim: line.asked).font(Theme.Rows.detail).foregroundStyle(Theme.Rows.detailText).lineLimit(1).truncationMode(.tail)
-        Spacer(minLength: 0)
-      }
-      .frame(minHeight: Theme.Rows.height)
-      HStack(alignment: .center, spacing: Theme.Rows.gap) {
-        outcome
-        Spacer(minLength: Theme.Rows.statusLead)
-        trailing
-      }
-      .padding(.leading, indent)
-      if let n = line.noteLine {
-        Text(verbatim: n).font(Theme.Rows.statusWord).foregroundStyle(Theme.Rows.statusText).lineSpacing(3)
-          .fixedSize(horizontal: false, vertical: true).padding(.leading, indent).padding(.top, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(line.summary)
       }
     }
     .padding(.bottom, Theme.Rows.bottom)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(line.summary)
+  }
+
+  /// The asker's bot and name: a click opens its thread.
+  private var who: some View {
+    let h = host?.host
+    return Button { h?.openAgent(runId: runId, agentId: line.askerId) } label: {
+      HStack(spacing: Theme.Rows.gap) {
+        ProvidedBot(traits: h?.bot(runId: runId, agentId: line.askerId), size: .xs, provider: h?.agentProvider(runId: runId, agentId: line.askerId))
+          .frame(width: Theme.Rows.whoBot, height: Theme.Rows.whoBot)
+        Text(verbatim: line.askerName).font(Theme.Rows.whoName).foregroundStyle(Theme.Rows.whoNameText).lineLimit(1).fixedSize()
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help("Open its thread")
+    .accessibilityLabel("Open \(line.askerName)")
   }
 
   /// What became of it, in words: the status, or (answered) who answered what.
@@ -127,7 +154,7 @@ package struct QuestionLineView<Accessory: View>: View {
       (Text(verbatim: "\(o.lead) ").foregroundStyle(Theme.Rows.statusText)
         + Text(verbatim: o.answer).font(Theme.Rows.verdictFont).foregroundStyle(Theme.Rows.cardText)
         + Text(verbatim: " \(o.tail)").foregroundStyle(Theme.Rows.statusText))
-        .font(Theme.Rows.detail).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        .font(Theme.Rows.detail).lineLimit(2)
     } else {
       HStack(spacing: Theme.Rows.statusWordGap) {
         if case .passed = line.state {

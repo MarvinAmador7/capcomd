@@ -26,7 +26,7 @@ export type ContinueItem = {
   kind: string; text: string; at?: string; tool?: { name?: string; summary?: string } | null; child?: { agentId?: string; status?: string } | null;
   /** Kind question (ADR-026 §4): the question and what became of it. */
   question?: {
-    asker?: string; state?: string; question?: string; options?: Array<{ label?: string; recommended?: boolean }>; answer?: string | null; recommended?: boolean | null;
+    questionId?: string; asker?: string; state?: string; question?: string; options?: Array<{ label?: string; recommended?: boolean }>; answer?: string | null; recommended?: boolean | null;
     by?: string | null; note?: string | null; to?: string | null; passedBy?: string[]; replaces?: string | null;
   } | null;
 };
@@ -117,7 +117,8 @@ function questionLine(q: NonNullable<ContinueItem["question"]>, self: string): s
       return `${head}; ${who} answered: ${one(q.answer ?? "")}${q.note ? ` (${q.by === self ? "your" : "their"} note: ${one(q.note)})` : ""}${q.replaces === self ? " (it replaced your answer)" : ""}`;
     }
     if (q.state === "withdrawn") return `${head}; the question was withdrawn (${q.asker} was cancelled)`;
-    if (q.to === self) return `${head}; not answered yet`;
+    // Its delivery message is bookkeeping (left out above): the item says how to answer.
+    if (q.to === self) return `${head}; not answered yet${q.questionId ? ` (capcomd answer ${q.questionId} "<answer>", --recommended, or --up to pass it up)` : ""}`;
     return `${head}; ${passed.includes(self) ? "you passed it up" : "it was passed up"} to ${q.to ?? "the user"}, not answered yet`;
   }
   const asked = `you asked: ${one(q.question ?? "")}${rec ? ` (you recommended: ${one(rec)})` : ""}`;

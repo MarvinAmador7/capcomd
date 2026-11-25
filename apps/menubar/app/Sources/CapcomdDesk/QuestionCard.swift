@@ -165,9 +165,12 @@ private struct CardPlacement: ViewModifier {
 
 /// Another agent's question in this thread (QuestionLine, capability agents.ask): its compact line, whose Answer opens
 /// the asker's card in a popover anchored to the line (the same card, answering the same way: the user's answer wins);
-/// in the run's root thread, when the question is the user's, the card itself in the line's place.
+/// in the run's root thread, when the question is the user's, the card itself in the line's place. In the asker's own
+/// thread once its question is passed up to you, the line "asked you" (its card is the root's).
 struct QuestionLineRow: View {
   @Environment(DeskModel.self) private var model
+  /// In Needs you the asker's column docks the card; a root column there keeps the line (one card per screen).
+  @Environment(\.needsReel) private var inNeeds
   let runId: String
   let agentId: String
   let line: QuestionLine
@@ -177,7 +180,7 @@ struct QuestionLineRow: View {
   var body: some View {
     DeskProbe.body("QuestionLineRow", id: agentId)
     return Group {
-      if line.forYou, let card = line.card {
+      if line.forYou, !inNeeds, let card = line.card {
         QuestionCard(card: card, focused: model.agent(agentId)?.focused ?? false, placement: .inline)
           .padding(.bottom, Theme.Content.proseBottom)
       } else {

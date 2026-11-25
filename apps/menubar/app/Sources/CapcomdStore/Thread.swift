@@ -32,6 +32,12 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
   public var seq: Int
   public var epochMs: Int
   public var kind: Kind
+  /// Bookkeeping (ADR-026 §7): a message capcomd wrote to carry what a question item already shows (a question
+  /// delivered, an answer it worded). Shown only with the agent's bookkeeping.
+  public var `internal` = false
+  public init(id: String, seq: Int, epochMs: Int, kind: Kind, internal: Bool = false) {
+    self.id = id; self.seq = seq; self.epochMs = epochMs; self.kind = kind; self.internal = `internal`
+  }
   /// The question an answered, withdrawn or question line is about (agents.ask); nil for other kinds.
   public var questionId: String? {
     switch kind { case .answered(let r, _): r.questionId; case .withdrawn(let w): w.questionId; case .question(let l): l.questionId; default: nil }
@@ -65,7 +71,7 @@ extension CapcomdStore {
         appendThread(runId, to, .init(id: id, seq: e.seq, epochMs: e.epochMs, kind: .steer(bytes: d["bytes"]?.int)))
       } else {
         let from = e.agentId ?? "operator", mid = d["seq"]?.int.map { "msg:\(from):\(to):\($0)" } ?? id
-        let item = ThreadItem(id: mid, seq: e.seq, epochMs: e.epochMs, kind: .message(from: from, to: to, text: text, attachment: att))
+        let item = ThreadItem(id: mid, seq: e.seq, epochMs: e.epochMs, kind: .message(from: from, to: to, text: text, attachment: att), internal: d["internal"]?.bool == true)
         appendThread(runId, to, item); if from != to { appendThread(runId, from, item) }
       }
     case "agent.answered":
@@ -94,7 +100,7 @@ extension CapcomdStore {
     guard let runId = runs.values.first(where: { $0.agents[m.to] != nil || $0.agents[m.from] != nil })?.id else { return }
     let ms = m.at.flatMap(Self.parseISO).map { Int($0.timeIntervalSince1970 * 1000) } ?? 0
     let item = ThreadItem(id: "msg:\(m.from):\(m.to):\(m.seq)", seq: m.seq, epochMs: ms,
-                          kind: .message(from: m.from, to: m.to, text: m.text.map(UntrustedText.init), attachment: AttachmentRef(m.attachment)))
+                          kind: .message(from: m.from, to: m.to, text: m.text.map(UntrustedText.init), attachment: AttachmentRef(m.attachment)), internal: m.internal == true)
     appendThread(runId, m.to, item); if m.from != m.to { appendThread(runId, m.from, item) }
   }
 

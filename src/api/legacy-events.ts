@@ -164,7 +164,7 @@ export const LegacyEventShapes = {
 	"deadlock.detected": { cycle: z.array(S) },
 	"drive.failed": { kind: S, error_kind: S, message: T, attempt: N, driver: U, consecutive: N },
 	"token.revoked": { jti: S, reason: nT },
-	"message.sent": { to: U, seq: N, bytes: N, text: nT.describe("Message body, inline when ≤ 64 KB (UTF-8); null when stored as `attachment`"), attachment: AttachmentRef.nullable().describe("Set when the body is over 64 KB: the full body is stored as this attachment"), skills: z.array(S).optional().describe("Names of the skills sent with the message (POST …/messages `skills`, `capcomd send --skill`); the agent got each one's SKILL.md with it. Empty when none; absent on events from before skill attach") },
+	"message.sent": { to: U, seq: N, bytes: N, text: nT.describe("Message body, inline when ≤ 64 KB (UTF-8); null when stored as `attachment`"), attachment: AttachmentRef.nullable().describe("Set when the body is over 64 KB: the full body is stored as this attachment"), skills: z.array(S).optional().describe("Names of the skills sent with the message (POST …/messages `skills`, `capcomd send --skill`); the agent got each one's SKILL.md with it. Empty when none; absent on events from before skill attach"), internal: z.literal(true).optional().describe("Capability agents.ask (ADR-026 §7 bookkeeping): capcomd wrote it to carry what a `question` thread item already shows (a question delivered, an answer worded by capcomd); clients leave it out of the thread unless they show bookkeeping. Absent: not bookkeeping") },
 	"verify.started": { id: S },
 	"verify.passed": { id: S },
 	"verify.failed": { id: S },

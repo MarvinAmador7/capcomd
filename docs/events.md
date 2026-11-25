@@ -1214,6 +1214,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "items": {
         "type": "string"
       }
+    },
+    "internal": {
+      "description": "Capability agents.ask (ADR-026 §7 bookkeeping): capcomd wrote it to carry what a `question` thread item already shows (a question delivered, an answer worded by capcomd); clients leave it out of the thread unless they show bookkeeping. Absent: not bookkeeping",
+      "type": "boolean",
+      "const": true
     }
   },
   "required": [
@@ -6140,6 +6145,11 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             ],
             "additionalProperties": {},
             "description": "Full text stored by the daemon; fetch it with attachments.get"
+          },
+          "internal": {
+            "description": "Capability agents.ask (ADR-026 §7 bookkeeping): a message capcomd wrote to carry what a thread item of kind question already shows (a question delivered to the agent it is asked of, an answer worded by capcomd for its asker). The agent reads it as any other; a client leaves it out of the thread unless it shows bookkeeping. Absent: not bookkeeping",
+            "type": "boolean",
+            "const": true
           }
         },
         "required": [
