@@ -20,7 +20,8 @@ this file in the same PR).
 - One topic per commit. Don't mix a refactor with a behavior change.
 - Never commit secrets, keys, logins, or anything under `.relay/`, `.traces/`, `~/.capcomd`, nor `.trace` files.
 - Commit only when asked, and never to `main` directly unless a maintainer says to. Never force-push `main`.
-- End the message with the attribution trailer the session gives you.
+- Author and committer: `marvinamador7 <marvin.ac.cr@gmail.com>`. End the message with a `Co-Authored-By:` line
+  at most: never "Generated with Claude Code" or a claude.ai session link (`Claude-Session:`), in commits or PRs.
 
 ## Branches and pull requests
 
@@ -125,7 +126,7 @@ move/delete a published tag by hand. Fix forward with a patch.
 2. **Release PR** titled `release: vX.Y.Z`. First `bun scripts/changes.ts fold` (the notes into `CHANGELOG.md`), then
    change only:
    - `version` in `package.json`, `plugins/capcomd/.claude-plugin/plugin.json`,
-     `plugins/capcomd/.codex-plugin/plugin.json`;
+     `plugins/capcomd/.codex-plugin/plugin.json` and `packages/plugin/package.json` (`--check` requires all four);
    - `CHANGELOG.md`: `## Unreleased` → `## X.Y.Z (YYYY-MM-DD)` (today), a one-line summary under it (it starts with
      the stage for a prerelease: `Release candidate: …`), and a new empty `## Unreleased` above. Edit the folded
      bullets into release notes a user reads top to bottom: lead with what changes in their day, group related

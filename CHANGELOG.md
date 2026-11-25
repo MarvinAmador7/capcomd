@@ -5,6 +5,201 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.13.0-rc.1 (2026-11-25)
+
+Release candidate: agents you can keep talking to. A finished agent is idle, not done: message it and it continues the
+same conversation, on the same parked machine for planners and leads. Agents wait between turns instead of inside a
+tool call, ask you instead of guessing, and hand back typed results. Also `capcomd update`, a filtered event wait for
+drivers, a fix for worker machines left running after a slow start, and a calmer desktop thread.
+
+### Behavior changes to watch for
+
+- **Breaking:** a finished agent (done, failed or stopped) now shows as **idle** and takes messages: a message to it
+  continues it (`continued: true`) instead of being refused with 409. Only a message to an archived run is refused
+  (409 `archived`). A client that used the 409 to know an agent had ended should read the agent's status instead.
+- Codex no longer runs with `--ephemeral`: capcomd keeps its session so a woken agent continues the same conversation.
+- A planner's or lead's machine is **parked** (boxd hibernate, billed for disk only; Docker stop) when its turn ends,
+  and deleted after 24 hours by default. Workers' machines are still deleted when they finish.
+- An agent's bookkeeping (wake arms, polls, its CLI's system events) is hidden from its thread by default.
+- A run's goal branch is named after your repository's own branch habits (`feat/csv-export`, `bugfix/login-crash`)
+  instead of `capcomd/<goal-slug>`.
+- A plugin can no longer register a command named `update`.
+
+### Agents you can keep talking to
+
+- An agent whose work ended (done, failed or stopped) is now idle, not finished: a message to it (`capcomd send`, the
+  app's message box, a parent's message) starts its next turn on a fresh machine, from its own branch or last
+  checkpoint, in the same conversation: its saved Claude Code or Codex session is resumed with the message as the next
+  turn. When that session can't be resumed, it starts a new one with its thread so far as its context, and the thread
+  says so in one quiet line. The send answers `continued: true`. Messages that arrive as an attempt ends are never
+  lost: the agent continues at once to read them.
+- An agent's Claude Code or Codex conversation now outlives its machine. capcomd picks the session id when the agent
+  starts, copies the CLI's session file out of the machine as it grows (secrets redacted, compressed, readable only by
+  you) into `~/.capcomd/state/sessions/<run>/<agent>/`, and keeps it as long as the run.
+- Optional iCloud Drive copy: set `"sessions": {"replica": "icloud-drive"}` in `~/.capcomd/config.json` (or
+  `CAPCOMD_SESSIONS_REPLICA=icloud-drive`) and every saved session is also written to `iCloud Drive/capcomd/sessions/`,
+  encrypted on your Mac first (AES-256-GCM). The key is `~/.capcomd/state/session-replica.key`: copy it to another Mac
+  to read the copy there. Off by default; your Mac's own copy always comes first.
+- A planner or lead now wakes in a moment when you message it after its turn ended. Its machine is parked instead of
+  deleted, and a message wakes that same machine and resumes the same conversation there, with its checkout as it left
+  it. If a parked machine is gone or won't wake, the agent quietly gets a fresh machine with its conversation restored.
+- Parked machines are deleted after 24 hours by default. Change it per place in Settings › Machines › "Keep parked
+  machines for" (4 hours, 24 hours or 7 days); each run keeps the value it started with. They are also deleted when
+  more than 10 are parked at a place (the oldest first), when the run is archived (its conversations stay, so a restored
+  run picks up where it was) or when the agent is cancelled. `CAPCOMD_PARKED_RETENTION_SECONDS` overrides the setting.
+  Settings › Machines lists them as "parked · deletes at …"; Delete removes only the machine, and the agent stays idle.
+- `capcomd run archive <run>` makes a run read-only: its agents take no messages ("… is archived · restore to
+  continue") until `capcomd run restore <run>`. A run can't be archived while an agent in it still works.
+- `capcomd send --model <model> --effort <level>` (`model` and `effort` on the messages API) changes what an agent's
+  next turns run with. A working agent finishes its current turn first; the thread shows a "model → … · effort …" line.
+- Budgets add up across an agent's turns: turns and spend count every attempt, and wall time counts only while it
+  works (not while it is idle or waiting to be woken).
+- The orchestration skill tells drivers to message an idle child instead of spawning a new one, and to use
+  `spawn --continue` for an agent stopped at a limit (`grant` still refuses an ended agent).
+
+### Waiting, asking and handing back
+
+- Planners and leads no longer wait inside a tool call. In its VM an agent runs `capcomd verify --ref <agt> --wake`,
+  `capcomd check --wake` or `capcomd await <agt…> --wake` (`wake: true` on the MCP tools): it answers at once, the
+  agent ends its turn, and the result comes to it as a message that starts its next turn ("Wake-up wk-…: verify vfy-…
+  passed"). `capcomd wake --op <id> | --agents a,b [--all] | --events agent.done,… | --in 10m | --at <time>
+  [--note "…"]` (`capcomd_wake`) does the same for anything else; a wake waits at most 6 hours. `capcomd wake --list`
+  and `--cancel <wk>` manage them. An agent can wait only on what it can see (its own subtree and its siblings'). A
+  Codex agent can't be woken and keeps the blocking forms.
+- Recurring check-ins: `capcomd wake --every 30m [--times N] [--note "…"]` (`every`/`times` on `capcomd_wake`). A
+  check-in that comes while the agent is idle starts its next turn; one missed while capcomd was down is skipped, not
+  delivered late; a schedule ends when its agent is cancelled or its run archived, or with `capcomd wake --cancel <wk>`.
+- Agents ask instead of guessing or waiting. An agent that needs a decision runs `capcomd ask "<question>" --recommend
+  "<answer>" [--option "<other>"]… [--why "<one line>"] [--holds "<what waits on it>"]` (`capcomd_ask` in its VM) and
+  its turn ends: its work is saved, it frees its slot and its machine parks or goes. It shows as **asked** until
+  someone answers.
+- The question goes to the agent's parent, or to you when a root agent asks. A parent waiting with `await --wake` is
+  woken by it (a blocking `await` returns with `asked`), and answers with `capcomd answer <qst|agt> "<answer>" [--note
+  "why"]`, `--recommended` to take the recommendation, or `--up` to pass it to its own parent (you, at the root). You
+  can always answer, in the app or by sending the agent a message: a plain message to an asked agent is its answer, and
+  your answer wins over an agent's. A cancelled agent's question is withdrawn.
+- Messages (yours, a child's, a wake-up) now reach a running agent at once instead of within 5 seconds, and an agent
+  that is started again is never handed a message it already read.
+- When the daemon restarts in the middle of a verify, check or merge that an agent is waiting on, it picks that work up
+  again as it starts, so the agent isn't left waiting until its wake's deadline.
+- Agents hand back typed: `capcomd result --handback '{"status": "done", "outcome": "…", "changed": [{"path": "…"}],
+  "checked": [{"check": "bun test", "result": "passed"}], "risks": [], "decide": []}'` (`handback` on the
+  `capcomd_result` tool). One that doesn't fit is refused with each field to fix, and nothing is recorded. Its prose form
+  ("Done: …", then bullets) becomes the summary, so the commit subject and older readers are unchanged. A prose
+  `--summary` alone still works. A parent reads a typed hand-back as fields (`result.typed`) in `capcomd await`,
+  `status` and the driver's tools (marked untrusted, with its author).
+- A reviewer's verdict is typed too (review-verdict@1): `{"passed": …, "findings": [{"severity": "blocker", "file":
+  "src/a.ts", "line": 3, "text": "…"}]}`, recorded as `result.typed`; `result.verdict.reasons` carries the same findings
+  as lines. A reviewer's hand-back says **Approve** or **Changes needed** with its findings, most severe first.
+- What an agent hands back is short and formatted: its outcome in one line ("Done: added the Home section to the
+  desktop page.") and a few bullets (what changed, how it was checked, risks, what you must decide). A commit made from
+  "Done: added X" gets the subject "Add X".
+- The orchestration skill and the planner's brief teach waking, and how to write a child's task: for a stranger (the
+  files it owns, what is out of scope, the command that proves it's done), no more than three deliverables, no two
+  tasks on the same files, dependencies stated, milestones rather than heartbeats.
+
+### CLI
+
+- New `capcomd update`: brings capcomd up to the latest release however you installed it. The single executable
+  replaces itself; a Bun global install runs `bun add -g capcomd@<version>`, an npm global install `npm install -g
+  capcomd@<version>`, and Homebrew `brew upgrade capcomd`, with their output shown. When capcomd is current it says so
+  and changes nothing. If it can't tell which package manager installed capcomd, or that install isn't writable by you,
+  it prints the command to run instead (it never uses sudo). After a version change it restarts the engine when it runs
+  as capcomd's background service and checks it came back on the new version (`--no-restart` leaves it running).
+  `--dry-run` says what it would do; `--to X.Y.Z` installs that version (not for Homebrew). `capcomd upgrade` still
+  works, with the same flags and output.
+- A run's goal branch is now named the way your repository already names its branches: its type prefixes and their
+  spelling (`feature/csv-export`, `bugfix/login-crash`), or the one prefix most of its branches share
+  (`marvin/csv-export`); otherwise `<type>/<slug>` (`feat/csv-export`, `fix/login-crash`), with the type read from the
+  goal's words. A ticket id in the goal (`ENG-142`) leads the name. `--goal-branch` still names it yourself.
+
+### Fixes
+
+- An agent whose machine took longer than 90 seconds to start no longer leaves that machine running after it ends: it
+  is deleted (or parked, for a planner or lead) like any other. Before, it kept running until its idle lifetime ran out
+  (an hour by default). On boxd, swarms hit this most, since many machines start at once.
+- A verification whose checks run past `CAPCOMD_CHECKS_TIMEOUT_MS` (20 minutes) on boxd now fails, with the check's
+  output and a line saying it didn't finish in time. Before, it never ended: every poll started the checks again in a
+  new VM. Name a check that ends on its own in the project's `run.checks` (for example `bun run test:fast`).
+- An in-VM `capcomd verify` or `capcomd check` that waits through long checks no longer fails with "no answer from the
+  orchestrator" or "HTTP request error … timed out" while the checks are still running.
+- When the engine is briefly overloaded and asks to be called again ("overloaded … retry after N ms"), capcomd waits
+  that long and asks again (about two seconds at most) instead of failing the call with a spurious `unavailable`.
+- A background job (`capcomd job start`, a plugin's `ctx.jobs`) whose runner can't start in its machine now fails as
+  soon as the runner is gone, instead of after waiting 5 s for it.
+- With no engine running, the commands that read a run's repository settings (the context brief, memory and secret
+  scan) no longer wait 3 s for an answer that can't come.
+
+### Desktop app
+
+- An agent's thread is calmer and easier to scan. Each tool call is one grey line: its icon, the tool's name, what it
+  was about, and on the right a spinner, a blue tick, "Failed" or "Not allowed" (only that word is coloured). Tool calls
+  in a row fold into one line, "Used 3 tools · 5.0s" (saying so when one was refused or failed); click it to see each
+  call, and a call to see its arguments and result. Back-to-back thinking shows as one "Thinking · 5s" line.
+- Threads no longer show Claude Code's bookkeeping as raw lines ("System: thinking_tokens" and the like); a refused
+  tool call says "Not allowed" on its own row, and model-request retries and fallbacks are said in plain words. An
+  agent's ••• menu has Show Bookkeeping.
+- A question shows as a card in the asker's thread: numbered options with keys, the advised one marked Recommended with
+  the agent's reason under it, what waits on it, and Answer; once answered it becomes one line ("Answered · 100 req/min
+  · 11:42", saying when it wasn't the recommendation and keeping your note). Asked agents read "asked" in the sidebar,
+  the tree and the columns, and an asked agent's message box sends the answer.
+- Typed hand-backs are cards: the outcome line ("Done", or "Blocked" in red), what you must decide, the files changed,
+  each check with its result, and the risks. A reviewer's card shows a green "Passed review" or red "Didn't pass review"
+  seal with its findings (severity, file:line). Hand-back summaries render as formatted text, clamped with Show more.
+- An agent getting ready shows one quiet line where its turn begins, saying what the daemon is doing ("Starting planner
+  · Copying the repository 53%") with a clock and a thin progress bar; a reel column shows a small ring. The menu bar's
+  agent rows show the same line.
+- An agent waiting between turns shows one card at the end of its thread ("Waiting for verify vfy-3f9a", how long, and
+  that the result or a message from you wakes it). A root agent whose turn ended reads "idle", a woken one "waking"
+  (after a second, with the "Restoring the conversation" step), and an archived run's agents "archived".
+- The opened pane's message box is the same card as Home's: + attaches a skill, the model chip shows the agent's
+  harness and model, then the mic and send. While the agent works and the box is empty, send becomes Stop (it pauses
+  the agent; Resume continues it). The chip's menu picks the model and effort for the agent's next turn.
+- The Home composer looks like the menu bar's (the round +, Local / Cloud segments, the planner chip with its model and
+  effort, the white send); the menu bar composer names the planner's model, lets you pick it, and has the mic. Neither
+  asks for a branch name: the name that will be used shows under the goal; click it to change it.
+- An agent's pane centres its thread in a wide window with the message box in the same column; the pane header no
+  longer repeats the run's title (hover the agent's title for the run's goal), and its title is no longer bold.
+- Panes keep your place: expanding (⇧⌘↩) and coming back, or a split opening or closing beside it, keeps the same
+  messages in view (a thread you follow at the end stays at the end). No more blank panes after a pick, a split
+  (⇧⌘D) or expanding again. The keyboard follows Expand Pane and stays in the pane when you collapse it; Esc collapses
+  at once; closing Search gives the keyboard back to where it was.
+- Search (⌘K) and the first shortcut after the window opens are faster: the palette is built ahead and stays built.
+- The window no longer opens a tab for a run that has nothing to show yet (`capcomd run new` with no goal and no
+  agents); it gets its tab once its first agent starts.
+
+### For harness.v1 clients and plugins
+
+- New `GET /v1/events/wait` (capability `events.wait`): wait until something you care about happens instead of polling.
+  `type=` (event names such as `agent.done`, repeated or comma-separated), `agent=` (agent ids, the same way) and
+  `wait=` (seconds, at most 45). It answers `{events, cursor, reached, timedOut}`: only the matching events, as soon as
+  one is appended, or none when the wait runs out. Pass `cursor` back as `after` to resume. A wait for an agent's state
+  it already reached before your cursor (`agent.done`, `agent.failed`, `agent.cancelled`, `agent.paused`, `agent.asked`
+  with `agent=`) answers at once with `reached`. `GET /v1/events` is unchanged.
+- Capabilities `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archive`, `agents.park`, `agents.ask`,
+  `agents.thread_internal`, `agents.handback_typed`, `agents.setup`.
+- Waking: events `agent.wake_armed` (`every`/`times`), `agent.woken` (`slot`/`skipped`) and `agent.wake_cancelled`
+  (reason `archived`) on run streams and the lifecycle feed; `Agent.activity` of kind `wait` with `wake`.
+- Idle agents: `Agent.continued`, `Run.archived`; events `agent.continued`, `agent.model_changed`, `run.archived`,
+  `run.restored`; setup phase `restore`; thread item kind `note`; `POST /v1/runs/{id}/archive` and `/restore`.
+- Asking: `Agent.asked`; events `agent.asked`, `agent.answered`, `agent.question_passed`, `agent.question_withdrawn`;
+  approvals of kind `question` answered with `POST /v1/approvals/{id}/decision` `{decision: "answer", answer, reason}`
+  (or `approve` for the recommendation), status `answered`.
+- Parked machines: `GET /v1/sandboxes/{name}/resources` lists them with state `parked`, their agent as owner and
+  `deleteAfter`; their only action is `delete`. Places have a `parkedRetention` setting and `caps.hibernate` (`memory`,
+  `disk` or `none`); `sandbox.resource_deleted` has causes `retention` and `parked_limit`.
+- Thread items carry `internal: true` for bookkeeping, left out of GET …/thread, …/thread/tail and `?thread=1` frames
+  unless asked for with `internal=true` (`internal=1` on the stream); a handoff item carries `child.handback`,
+  `child.verdict` and `child.verdict.findings`; `GET /v1/schemas` lists the payload schemas; `Agent.result.typed`.
+- While an agent is being set up, `Agent.activity` has kind `setup` and a `setup` object (`phase`, `bytes`,
+  `totalBytes`), sent live on `agent.activity_changed`.
+
+### Known issues
+
+- The live boxd end-to-end run for parked machines is part of this candidate's testing; results go in the release PR.
+- After the app reconnects, an answered question's "Answered" line isn't shown again, and a question shows only in the
+  asker's thread, not as a line in its parent's. Both are fixed for the next candidate.
+
 ## 0.12.2 (2026-11-18)
 
 The Mac app uses the capcomd CLI you already have, and `capcomd run --legacy` and desktop Search are faster.

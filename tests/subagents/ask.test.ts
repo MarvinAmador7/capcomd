@@ -180,8 +180,9 @@ test("a parent that can't decide passes it up to the user; the user's answer (th
   const qid = passed.data.questionId;
   expect(lastJson(seen(parent, "answer-out.txt"))).toMatchObject({ ok: true, to: null });
   const approvalId = approvalIdFor(run, qid);
-  expect((await rivetSource().approvals(run))[0]).toMatchObject({ approvalId, kind: "question", subject: { to: null, passedBy: [parent] } });
+  // The asker's turn ends with its question open before the question's approval is listed (on a slow runner, after this).
   await until(run, kid, (x) => x.status === "done" && !!x.asked);
+  expect((await rivetSource().approvals(run))[0]).toMatchObject({ approvalId, kind: "question", subject: { to: null, passedBy: [parent] } });
   // A deny is no answer; an answer without its text is refused.
   expect((await api(`/v1/approvals/${approvalId}/decision`, { method: "POST", headers: { "idempotency-key": "deny-it-1" }, body: JSON.stringify({ decision: "deny" }) })).status).toBe(422);
   expect((await api(`/v1/approvals/${approvalId}/decision`, { method: "POST", headers: { "idempotency-key": "empty-it-1" }, body: JSON.stringify({ decision: "answer" }) })).status).toBe(422);

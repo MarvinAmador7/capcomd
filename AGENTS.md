@@ -18,6 +18,9 @@ rules an agent must follow in this repository; `CLAUDE.md` imports it.
   in the §18 table: rows are numbered when folded, so refer to a change by what it does, not by a row number.
 - Don't touch `version` in `package.json` outside a release (CI checks it against the changelog).
 - Never commit secrets, keys, logins or anything under `.relay/`, `.traces/` or `~/.capcomd`.
+- Commits are authored and committed as `marvinamador7 <marvin.ac.cr@gmail.com>` (check `git config user.email`
+  before committing). Never put "Generated with Claude Code" or a claude.ai session link (a `Claude-Session:` line
+  included) in a commit message or a PR description.
 
 ## Test fixtures
 
