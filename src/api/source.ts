@@ -195,7 +195,7 @@ export function envelopes(runId: string, evs: RawEvent[], projectId: string | nu
 export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
 	return evs.filter((e) => e.type === "MESSAGE_SENT" || e.type === "message.sent").map((e) => ({
 		seq: Number(e.data.seq), from: e.agentId ?? "operator", to: typeof e.data.to === "string" ? e.data.to : JSON.stringify(e.data.to), at: isoTs(e.at),
-		text: (e.data.text as string | null) ?? null, attachment: (e.data.attachment as any) ?? null,
+		text: (e.data.text as string | null) ?? null, attachment: (e.data.attachment as any) ?? null, ...(e.data.internal === true ? { internal: true as const } : {}),
 	}));
 }
 

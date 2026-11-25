@@ -240,6 +240,19 @@ Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archi
 - `capcomd send --model --effort` changes what an agent's next turns run with (phase 2).
 - `capcomd run archive|restore`; a run can't be archived while an agent in it still works.
 - A question can be passed up with `capcomd answer <qst> --up`; a cancelled agent's question is withdrawn.
+- A question is a thread item (kind `question`, §1): the asker's thread keeps it from the ask to its answer or
+  withdrawal, and an answering agent's thread keeps its copy, so the answered line survives a reconnect or restart and
+  a conversation rebuilt from the thread keeps the decision.
+- One question, one state, one full card where the decision is owed (owner, 2026-11-25; replaces the parent's full
+  card on DurableAsked-v3). Asked of an agent: the card in the asker's thread, and one compact line in the thread of
+  the agent it is asked of (after a pass-up, the new addressee's too) where it reached it, "request limiter asked: … ·
+  waiting on api lead" with Answer (the same card, in a popover; the user's answer wins, §9.1); one row where it fits,
+  two in a narrow column. Asked of the user (passed up from below the root): the card in the root's thread (and Needs
+  you, the menu bar), the line "asked you" in the asker's. Decided: "api lead answered 500 req/min — not the
+  recommendation", "passed up to you", or the quiet "Withdrawn · … · 11:42" (why on hover). Each of those threads has
+  its own item (`itm-<agent>-asked-<qst>`, the same `question` at the same state), so every place reads one state and
+  survives a reconnect; the messages capcomd writes to deliver a question or word an answer are bookkeeping
+  (`internal`, §7).
 - A worker whose machine took more than 90 s to get ready the first time is still deleted (or parked) when it ends;
   before the fix it was left `failed` and its machine ran until its idle lifetime.
 
@@ -262,8 +275,6 @@ Capabilities: `agents.wake`, `agents.idle`, `agents.messages.model`, `runs.archi
   `capcomd await` don't use it yet.
 - A recurring schedule without `--times` has no end until its agent is cancelled or its run archived. Proposed: a
   default of 24 check-ins.
-- The "Answered" line isn't rebuilt after the app reconnects (the API doesn't serve past questions).
-- A question card shows in the asker's thread but not yet in its parent's, as the board (DurableAsked-v3) draws it.
 
 ## Consequences
 

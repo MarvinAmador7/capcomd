@@ -138,7 +138,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `agents.park` | Parked machines (ADR-026 §6): when a planner or lead (an orchestrate profile, or a root agent) ends its turn idle, its machine is parked (hibernated: boxd hibernate, Docker stop) instead of deleted, and a message to it wakes that machine and resumes its conversation there in a moment (Agent.activity setup shows no restore phase). A worker's machine is deleted when it ends, as before. Parked machines aren't shown with agents: GET /v1/sandboxes/{name}/resources lists them with state `parked`, their agent as owner and `deleteAfter` (when they are deleted), and Delete (capability sandboxes.actions) deletes only the machine (its agent stays idle; sandbox.resource_action `parked: true`). They are deleted when the place's `parkedRetention` setting (4 h, 24 h or 7 days; 24 h by default; recorded with each run) runs out, when more than 10 are parked at the place (the oldest first), when the run is archived or the agent cancelled. Descriptors' caps carry `hibernate` (memory, disk or none). A parked machine holds no memory slot |
 | `agents.thread_internal` | Thread items carry `internal: true` for an agent's bookkeeping (ADR-026 §7: a wake armed or a check-in booked, a wait on other agents, a poll of its own state, a CLI system event). GET …/thread and …/thread/tail leave them out unless asked for with `internal=true`, and `?thread=1` frames unless the stream asks with `internal=1` |
 | `agents.handback_typed` | Typed hand-backs (ADR-026 §7): GET /v1/schemas lists the registered payload schemas (handback@1, review-verdict@1; `name@version`, never changed once registered). An agent hands back with `capcomd result --handback JSON`, checked against handback@1 before it is recorded (a payload that doesn't fit is refused, field by field); a reviewer's verdict is recorded as review-verdict@1. Agent.result.typed is `{schema, value}`; a handoff thread item carries `child.handback` and `child.verdict.findings` |
-| `agents.ask` | Ask and stop (ADR-026 §4): an agent asks a question (`capcomd ask`, `capcomd_ask` in its VM) and its turn ends: Agent.asked carries the question while it is open, agent.asked / agent.answered / agent.question_passed / agent.question_withdrawn on run streams and the lifecycle feed (causes asked, answered, passed_up, withdrawn), and an approval of kind question (subject: questionId, options with the recommended one first, why, holds, to) for every open question. Answer it with POST /v1/approvals/{approvalId}/decision (decision answer with `answer`, or approve for its recommendation), or with a plain message to the agent (POST …/agents/{agentId}/messages): either continues its conversation. A person's answer replaces an agent's. Schedules (ADR-026 §3): agent.wake_armed `every`/`times` for a recurring check-in, agent.woken `slot`/`skipped`, agent.wake_cancelled reason `archived`; a check-in outlives the agent's turn and continues it when it is idle |
+| `agents.ask` | Ask and stop (ADR-026 §4): an agent asks a question (`capcomd ask`, `capcomd_ask` in its VM) and its turn ends: Agent.asked carries the question while it is open, agent.asked / agent.answered / agent.question_passed / agent.question_withdrawn on run streams and the lifecycle feed (causes asked, answered, passed_up, withdrawn), and an approval of kind question (subject: questionId, options with the recommended one first, why, holds, to) for every open question. Answer it with POST /v1/approvals/{approvalId}/decision (decision answer with `answer`, or approve for its recommendation), or with a plain message to the agent (POST …/agents/{agentId}/messages): either continues its conversation. A person's answer replaces an agent's. The thread is the record (ADR-026 §1): the asker's thread has one item of kind `question` per question (written when it asks, a new rev when it is passed up, answered or withdrawn; `question` carries the question, its options, who it is asked of, and its state, answer, `recommended`, who answered, their note, and when), and every other agent it concerns has one item for it in its thread at the same state (`itm-<agent>-asked-<qst>`, placed when the question reached it): each agent it was asked of (its parent, then each one it was passed up to), an agent that answered it, and, once it is the user's, the asker's root agent; one item per thread and question, so GET …/thread and …/thread/tail rebuild the card, the answered line or the addressee's line after any reconnect The messages capcomd writes to carry them (the question delivered to the agent it is asked of, an answer worded by capcomd for its asker) are bookkeeping: message.sent and Message carry `internal: true`, and a client leaves them out of the thread unless it shows bookkeeping. Schedules (ADR-026 §3): agent.wake_armed `every`/`times` for a recurring check-in, agent.woken `slot`/`skipped`, agent.wake_cancelled reason `archived`; a check-in outlives the agent's turn and continues it when it is idle |
 | `events.wait` | GET /v1/events/wait, a filtered, cursor-resumable wait (ADR-026 §3): `type` and `agent` filter a scope's durable events, `wait` (seconds, at most 45) holds the request until one matches; it answers an EventsPage (`events`, `cursor` to resume from, `reached`, `timedOut`). GET /v1/events is unchanged. A wait on agent.done, agent.failed, agent.cancelled, agent.paused or agent.asked of named agents already in that state answers at once with `reached` |
 
 ## Event envelope
@@ -275,7 +275,7 @@ Why opt-in on the run stream: the lifecycle feed stays state changes only for cl
 
 An agent's thread: typed items with stable ids, each message parsed once by the daemon into a sanitized block tree (format `blocks/1`), so a client renders it without parsing markdown.
 `after` is a run-wide write cursor (`seq`): items created *or changed* since come back, in write order, so a tool item is seen `open` at the call and again `done` (isError, durationMs when the CLI reports one) at its result. Sort by `order`; the highest `rev` of an id wins.
-Kinds: say, thinking (`redacted` when the CLI withheld it), tool (`tool.summary` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line). Render an unknown kind as a plain line of `text`.
+Kinds: say, thinking (`redacted` when the CLI withheld it), tool (`tool.summary` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line), note (a quiet daemon-written line), question (capability agents.ask: a question the agent asked, or another agent's question that reached it, and what became of it: `question` carries it, `text` says it in one line). Render an unknown kind as a plain line of `text`.
 Every string in an item is agent-written plain text (x-untrusted): never HTML, never a link followed or media loaded without the user's click. Links carry the daemon's `target` (web: show `host`, and the full URL when `mismatch`; file, artifact, agent, run; none: plain text). Media: `remote` never loads by itself; `attachment` and `inline` come from GET /v1/runs/{runId}/attachments/{id}/content, `workspace` from GET /v1/runs/{runId}/agents/{agentId}/workspace?path=.
 Caps (block boundaries only): 65536 bytes of blocks and of `text` per item (whole trailing blocks dropped, `truncated` says how many); code blocks keep their first 400 lines (`truncatedLines`); tables 50 rows × 8 columns (`truncatedRows`/`truncatedCols`); a tool's `diff` its first 40 lines of 240 characters at most (`truncatedLines`; `added`/`removed` count the whole change).
 Bookkeeping (capability agents.thread_internal): an agent's waits and polls (a wake armed or a check-in booked, a wait on other agents, a read of its own state, its inbox or the run's events) and its CLI's system events (a retried or fallen-back model request, a compacted conversation) are recorded with `internal: true` and left out of GET …/thread, …/thread/tail and `?thread=1` frames unless asked for with `internal=true` (`internal=1` on the stream); a client that asks shows them only on request.
@@ -341,7 +341,7 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
     },
     "kind": {
       "type": "string",
-      "description": "say, thinking, tool, error, result, plan, handoff, other, note. More may be added: render an unknown kind as a plain line of `text`"
+      "description": "say, thinking, tool, error, result, plan, handoff, other, note, question. More may be added: render an unknown kind as a plain line of `text`"
     },
     "status": {
       "type": "string",
@@ -826,6 +826,163 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
       "required": [
         "agentId",
         "status"
+      ]
+    },
+    "question": {
+      "description": "Capability agents.ask, kind question: the question and what became of it (open, answered, withdrawn), so the thread alone rebuilds its card, its one-line record, or (in another agent's thread: `asker` isn't this agent) its line there, after any reconnect or restart. `text` says the same in words for clients that don't read this field. Absent on other kinds",
+      "type": "object",
+      "properties": {
+        "questionId": {
+          "type": "string",
+          "description": "qst-…: the question's id, as agent.asked and its approval's subject.questionId carry it"
+        },
+        "asker": {
+          "type": "string",
+          "description": "The agent that asked (agt-…). Not this thread's agent: the question reached this one (it was asked of it or passed up by it, it answered it, or it is the asker's root and the question is the user's)"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "answered",
+            "withdrawn"
+          ],
+          "description": "open: waiting for its answer (the approval of kind question is pending); answered; withdrawn: its agent was cancelled before it was answered"
+        },
+        "question": {
+          "type": "string",
+          "x-untrusted": true,
+          "description": "Agent-written text: the question. Plain text: never markdown, HTML, or a link to follow"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: an option. Plain text: never markdown, HTML, or a link to follow"
+              },
+              "recommended": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "label",
+              "recommended"
+            ]
+          },
+          "description": "The recommended answer first, then the asker's other options"
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: the asker's reason for its recommendation. Plain text: never markdown, HTML, or a link to follow"
+        },
+        "holds": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: what waits on the answer. Plain text: never markdown, HTML, or a link to follow"
+        },
+        "to": {
+          "description": "Who it is asked of now: an agent (its parent, or an ancestor it was passed up to); null: the user",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "passedBy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The agents that passed it up, in order (each one that couldn't decide)"
+        },
+        "answer": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text (or a person's): the answer, once answered (the latest: a person's answer replaces an agent's). Plain text: never markdown, HTML, or a link to follow"
+        },
+        "recommended": {
+          "description": "Answered: whether the answer was the recommended one; null otherwise",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "by": {
+          "description": "Who answered: an agent (agt-…) or a person (operator, driver, client:<id>); null until answered",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text (or a person's): the answerer's note. Plain text: never markdown, HTML, or a link to follow"
+        },
+        "replaces": {
+          "description": "Answered: the agent whose earlier answer this person's answer replaced; null otherwise",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Withdrawn: why (its agent was cancelled); null otherwise",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "cancelled",
+            null
+          ]
+        },
+        "askedAt": {
+          "type": "string",
+          "description": "When it was asked (ISO 8601 UTC, ms precision)"
+        },
+        "decidedAt": {
+          "description": "When it was answered or withdrawn (ISO 8601 UTC, ms precision); null while open",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "questionId",
+        "asker",
+        "state",
+        "question",
+        "options",
+        "why",
+        "holds",
+        "to",
+        "passedBy",
+        "answer",
+        "recommended",
+        "by",
+        "note",
+        "replaces",
+        "reason",
+        "askedAt",
+        "decidedAt"
       ]
     },
     "internal": {

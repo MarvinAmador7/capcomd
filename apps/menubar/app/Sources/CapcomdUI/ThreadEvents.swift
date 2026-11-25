@@ -70,6 +70,12 @@ package struct ThreadItemView: View {
     case .answered(let rec, let byName):
       // A question answered (agents.ask): its card's one-line record.
       AnsweredLine(record: rec, byName: byName)
+    case .withdrawn(let rec):
+      // A question withdrawn (its agent was cancelled): it reads as withdrawn, not gone.
+      WithdrawnLine(record: rec)
+    case .question(let line):
+      // Another agent's question that reached this one: its compact line (the desktop adds Answer and the root's card).
+      QuestionLineView(runId: runId, line: line) { EmptyView() }
     case .woke(let s):
       // What woke the agent (agents.wake): quiet, between its turns.
       HStack(alignment: .firstTextBaseline, spacing: 6) {

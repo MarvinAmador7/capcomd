@@ -954,7 +954,12 @@ struct Column: View {
           ColdTail(agentId: agentId)
         }
         // A question (agents.ask): its card, then the box, whose message is its answer.
-        if let q = a.question { QuestionCard(card: q, focused: focused); ColumnComposer(agentId: agentId, name: a.header.name) }
+        if let q = a.question {
+          // Docked only where it is decided: asked of an agent, or of you by the root itself; passed up to you, its card is
+          // in the root's thread and this thread has its line (Needs you, which shows only this column, still docks it).
+          if q.docks || inNeeds { QuestionCard(card: q, focused: focused) }
+          ColumnComposer(agentId: agentId, name: a.header.name)
+        }
         else if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
         else if let l = a.limit { LimitBar(limit: l, focused: focused) }
         else if let g = a.goal, g.docks || g.outcome != nil { GoalDock(card: g) }
@@ -1227,7 +1232,11 @@ struct EventEntry: View {
   let item: ThreadItem
   let proseWidth: CGFloat?
   var body: some View {
-    ThreadItemView(runId: runId, agentId: agentId, item: item).padding(.bottom, Theme.Content.proseBottom).modifier(ProseColumn(proseWidth))
+    if case .question(let line) = item.kind {
+      QuestionLineRow(runId: runId, agentId: agentId, line: line, proseWidth: proseWidth)
+    } else {
+      ThreadItemView(runId: runId, agentId: agentId, item: item).padding(.bottom, Theme.Content.proseBottom).modifier(ProseColumn(proseWidth))
+    }
   }
 }
 

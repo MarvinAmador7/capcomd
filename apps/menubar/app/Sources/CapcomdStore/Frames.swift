@@ -117,5 +117,7 @@ struct SnapshotApprovalsFrame: Codable { var approvals: [SnapshotApproval] }
 /// `snapshot.threads` message: `text` is agent-written (x-untrusted).
 public struct SnapshotMessage: Codable, Sendable, Hashable {
   public var seq: Int; public var from: String; public var to: String; public var at: String?; public var text: String?; public var attachment: JSONValue?
+  /// Bookkeeping (capability agents.ask): capcomd wrote it to carry what a question item shows. Absent: not.
+  public var `internal`: Bool?
 }
 struct SnapshotThreadsFrame: Codable { var messages: [SnapshotMessage] }
