@@ -1,8 +1,8 @@
 import Foundation
 import PerfLoopProbe
 
-/// The scenarios the bench drives, each tied to one SPEC §1 budget. The bench's `Harness` knows how to drive them;
-/// this is what `list` prints and what `Budgets.evaluate` judges by.
+/// The scenarios the bench drives, each tied to one SPEC §1 budget: what `describe` lists (BenchCatalog.swift) and the
+/// bench's drivers (CapcomdDeskBench/Drive*.swift) run.
 public struct ScenarioSpec: Codable, Sendable, Hashable {
   public enum Kind: String, Codable, Sendable { case latency, smooth, isolation }
   public var name: String
@@ -16,6 +16,9 @@ public struct ScenarioSpec: Codable, Sendable, Hashable {
   public var latencyBudgetMs: Double?
   /// Parameters the scenario takes (`--set key=value`), with defaults.
   public var params: [String: String]
+  /// The fixture it runs on when nobody names one (nil: `Scenarios.defaultFixture`). The manifest's `scenarios[].fixture`:
+  /// perfloop always passes `--fixture`, this one unless told otherwise; `deskbench run` without `--fixture` uses it too.
+  public var fixture: String? = nil
 }
 
 public enum Scenarios {
@@ -63,15 +66,18 @@ public enum Scenarios {
     ScenarioSpec(name: "sidebar-scroll", summary: "A long sidebar (every project unfolded) scrolled down and back with replayed trackpad gestures.",
                  budget: "Sidebar scroll: no dropped frames, no pane work", rule: "no late frame while it moves; no stretch over 16.7 ms; no pane body",
                  kind: .smooth, latencyBudgetMs: nil, params: ["scrolls": "4", "gesture": "synthetic:scroll-down", "gestureBack": "synthetic:scroll-up"]),
+    ScenarioSpec(name: "palette-first", summary: "The first Search ⌘K after the window opens (fixture `search`): the window shown and at rest, then ⌘K once, to the frame that shows the palette and its results.",
+                 budget: "Search ⌘K opens: first frame ≤ 50 ms", rule: "latency from the first ⌘K to the first frame with the palette and its results ≤ 50 ms; checks: warmed-ahead, shown, items, empty-search",
+                 kind: .latency, latencyBudgetMs: 50, params: [:], fixture: "search"),
     ScenarioSpec(name: "palette-open", summary: "Search ⌘K on the empty search, then Esc, repeatedly (fixture `search`: 250+ items): ⌘K to the frame that shows the panel and its results.",
                  budget: "Search ⌘K opens: first frame ≤ 50 ms", rule: "median latency from ⌘K to the first frame with the panel and its results ≤ 50 ms; checks: items, empty-search, panel-drawn, esc-closes",
-                 kind: .latency, latencyBudgetMs: 50, params: ["opens": "6"]),
+                 kind: .latency, latencyBudgetMs: 50, params: ["opens": "6"], fixture: "search"),
     ScenarioSpec(name: "palette-type", summary: "Type a query into Search ⌘K a character at a time (key events to its field): each keystroke to the frame that shows its results.",
                  budget: "Search ⌘K: a keystroke's results within a frame", rule: "median latency from a key to the frame that shows its results ≤ 16.7 ms; checks: typed, ranking, panel-drawn",
-                 kind: .latency, latencyBudgetMs: 16.7, params: ["query": "matchkey"]),
+                 kind: .latency, latencyBudgetMs: 16.7, params: ["query": "matchkey"], fixture: "search"),
     ScenarioSpec(name: "palette-keys", summary: "Search ⌘K's keys: type a query, ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens the first (folded: as ↩ does), Esc closes.",
                  budget: "Search ⌘K: keys and opening a result ≤ 50 ms", rule: "median latency from a key to the frame that shows what it did ≤ 50 ms; checks: selection, return-opens, split-falls-back, esc-closes, panel-drawn",
-                 kind: .latency, latencyBudgetMs: 50, params: ["query": "shard"]),
+                 kind: .latency, latencyBudgetMs: 50, params: ["query": "shard"], fixture: "search"),
     // Splits and expand in the opened window (design/desktop/rex RexSplit, RexExpanded; SPEC §2.1). Each rep starts from
     // one pane and ends with its panes on screen.
     ScenarioSpec(name: "split-open", summary: "With the sidebar open, ⌘D (split right), ⇧⌘D (split down), then ⌘W twice, as key events to the app; each shows the panes.",
@@ -83,91 +89,38 @@ public enum Scenarios {
     ScenarioSpec(name: "split-burst", summary: "Three panes: thread items for the middle pane's agent at a steady rate.",
                  budget: "A thread item arrives: re-renders its own column only (in a split: its own pane)", rule: "no other pane's body, no sidebar body or slice assignment during the burst; the target pane's thread renders; no late frame",
                  kind: .isolation, latencyBudgetMs: nil, params: ["itemsPerSecond": "20", "seconds": "3"]),
-    ScenarioSpec(name: "pane-expand", summary: "Two panes, the focused thread scrolled up: ⇧⌘↩ expands it to the window, Esc brings back the same panes.",
-                 budget: "Expand or collapse a pane: first frame ≤ 50 ms, no thread rebuilt", rule: "median latency from the key to the frame that shows it ≤ 50 ms; expanded fills the window; back: same panes, frames, scroll position and views",
+    ScenarioSpec(name: "pane-expand", summary: "Two panes, the focused thread scrolled up, the keyboard in the sidebar: ⇧⌘↩ expands it to the window, Esc brings back the same panes with the keyboard still in the pane.",
+                 budget: "Expand or collapse a pane: first frame ≤ 50 ms, no thread rebuilt", rule: "median latency from the key to the frame that shows it ≤ 50 ms; expanded fills the window; back: same panes, frames, scroll position and views; the keyboard in the pane, expanded and back",
                  kind: .latency, latencyBudgetMs: 50, params: ["toggles": "4"]),
-    ScenarioSpec(name: "expand-switch", summary: "A pane expanded: other agents picked as the palette's ↩ picks them, then ⌘K over it and Esc.",
-                 budget: "Switch agent: first frame ≤ 50 ms (expanded stays expanded)", rule: "median latency from the pick to the frame that shows the agent ≤ 50 ms; still expanded, full window, every pick shown",
+    ScenarioSpec(name: "expand-switch", summary: "A pane expanded: other agents picked as the palette's ↩ picks them, then ⌘K over it and Esc, then Esc collapses it and ⇧⌘↩ expands it again.",
+                 budget: "Switch agent: first frame ≤ 50 ms (expanded stays expanded)", rule: "median latency from the pick to the frame that shows the agent ≤ 50 ms; still expanded, full window, every pick shown; Esc after ⌘K gives the keyboard back to the pane (focus palette-esc), and it stays there when Esc collapses the pane (focus collapse); expanded again, its thread shows rows (re-expanded, ink)",
                  kind: .latency, latencyBudgetMs: 50, params: ["switches": "4"]),
-    // The Needs you reel (SPEC, Needs you reel). Run them on `needs5` or `needs20` (asks across projects).
+    // The Needs you reel (SPEC, Needs you reel), on `needs5` (their own fixture) or `needs20` (asks across projects).
     ScenarioSpec(name: "needs-open", summary: "Open the Needs you reel (the hand): every ask across projects as a column, oldest first.",
                  budget: "Open the Needs you reel: first frame ≤ 50 ms", rule: "median latency from openNeedsReel() to the frame that shows its columns ≤ 50 ms; the columns are the asks oldest first; no stretch over 100 ms",
-                 kind: .latency, latencyBudgetMs: 50, params: [:]),
+                 kind: .latency, latencyBudgetMs: 50, params: [:], fixture: "needs5"),
     ScenarioSpec(name: "needs-answer", summary: "Answer the focused ask, again and again: its column slides out (≤ 300 ms, transform and opacity) and the next takes its place.",
                  budget: "Answer an ask: the column slides out with no dropped frame", rule: "no late frame while the columns close up; no stretch over 16.7 ms; the answered column left, the rest kept their order, the next one leads and has the focus",
-                 kind: .smooth, latencyBudgetMs: nil, params: ["answers": "3"]),
+                 kind: .smooth, latencyBudgetMs: nil, params: ["answers": "3"], fixture: "needs5"),
     ScenarioSpec(name: "needs-arrive", summary: "A new ask arrives while the reel is open, with the reel scrolled to a middle column: it joins at the end.",
                  budget: "A new ask: joins at the end, nothing moves", rule: "the new column is last, the leading column and its place in the window are unchanged; no late frame",
-                 kind: .isolation, latencyBudgetMs: nil, params: ["arrivals": "3"]),
+                 kind: .isolation, latencyBudgetMs: nil, params: ["arrivals": "3"], fixture: "needs5"),
     ScenarioSpec(name: "needs-step", summary: "⌘J through the asks: in the reel it focuses the next column; outside it opens each ask's agent in its project, oldest first, round again.",
                  budget: "⌘J: first frame ≤ 50 ms", rule: "median latency from nextAsk() to the next frame ≤ 50 ms; the asks come oldest first, one at a time",
-                 kind: .latency, latencyBudgetMs: 50, params: [:]),
+                 kind: .latency, latencyBudgetMs: 50, params: [:], fixture: "needs5"),
     ScenarioSpec(name: "needs-empty", summary: "Answer every ask until \"Nothing needs you.\", then Esc back to where the reel was opened from.",
                  budget: "Answer an ask: the column slides out with no dropped frame", rule: "no late frame; the end state shows \"Nothing needs you.\"; Esc (a key event to the window) closes the reel and gives the focus back",
-                 kind: .smooth, latencyBudgetMs: nil, params: [:]),
+                 kind: .smooth, latencyBudgetMs: nil, params: [:], fixture: "needs5"),
     ScenarioSpec(name: "needs-swipe", summary: "A recorded (or synthetic) trackpad gesture replayed into the Needs you reel's scroll view, as `swipe` does for the project reel.",
                  budget: "Reel scroll: no dropped frames at 120 Hz", rule: "no late frame while the reel moves; the content within 1 pt of the fingers (p95) with no stall; it lands on a column edge",
-                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "0", "timestamps": "recorded", "deliver": "window"]),
+                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "0", "timestamps": "recorded", "deliver": "window"], fixture: "needs5"),
   ]
   public static func spec(_ name: String) -> ScenarioSpec? { all.first { $0.name == name } }
   /// The scenarios `suite` runs, in order.
   public static let suite = ["open", "switch", "step", "jump", "fling", "burst", "typing", "resize", "follow", "palette-open", "palette-type", "palette-keys"]
-  /// The fixture a scenario runs on unless told otherwise (Search ⌘K's need hundreds of searchable items).
-  public static func defaultFixture(_ scenario: String) -> String? { scenario.hasPrefix("palette-") ? "search" : nil }
-}
-
-public enum Budgets {
-  /// Judges a run against its scenario's rule. Scenario-specific checks (which views re-rendered, where the reel
-  /// landed) come in through each rep's `checks`.
-  public static func evaluate(_ spec: ScenarioSpec, reps: [RepResult], summary: Summary) -> BudgetVerdict {
-    var reasons: [String] = []
-    // "No late frame" is judged on late frame time (rate-invariant); reps from an older bench only have the count.
-    func lateFrames() {
-      if let h = summary.hitchTimeRatioMsPerS {
-        if h.median > 0 { reasons.append("late frame time: median \(h.median) ms per second of scenario (max \(h.max)) at \(summary.steadyHz.median.clean) Hz; \(summary.lateFrames.median) late frames/rep, frame p99 \(summary.frameP99Ms.median) ms") }
-      } else if summary.lateFrames.median > 0 {
-        reasons.append("late frames: median \(summary.lateFrames.median) per rep (max \(summary.lateFrames.max)) at \(summary.steadyHz.median.clean) Hz; frame p99 \(summary.frameP99Ms.median) ms")
-      }
-    }
-    switch spec.kind {
-    case .latency:
-      if let d = summary.latencyMs, let b = spec.latencyBudgetMs, d.median > b {
-        reasons.append("median latency \(d.median) ms is over the \(Int(b)) ms budget (p95 \(d.p95) ms, n=\(d.n))")
-      }
-      if summary.latencyMs == nil { reasons.append("no latency was measured") }
-      if summary.hangsOver100.max > 0 { reasons.append("a main-thread stretch over 100 ms in \(Int(summary.hangsOver100.max)) rep(s); longest \(summary.longestStretchMs.max) ms") }
-    case .smooth:
-      lateFrames()
-      if spec.name == "resize" {
-        if summary.hangsOver100.median > 0 { reasons.append("main-thread stretches over 100 ms: median \(summary.hangsOver100.median) per rep") }
-      } else if summary.stretchesOver16.median > 0 {
-        reasons.append("main-thread stretches over 16.7 ms: median \(summary.stretchesOver16.median) per rep (longest \(summary.longestStretchMs.median) ms)")
-      }
-    case .isolation:
-      lateFrames()
-    }
-    // A replayed gesture: the content follows the fingers (Gestures.swift).
-    reasons += Smoothness.budgetReasons(summary)
-    // Checks fail the budget when they failed in most reps (one wild rep is noise, not a verdict).
-    for name in summary.checksFailed {
-      let failed = reps.filter { $0.checks.contains { $0.name == name && !$0.pass } }
-      if failed.count * 2 > reps.count {
-        let detail = failed.first?.checks.first { $0.name == name }?.detail ?? ""
-        reasons.append("check '\(name)' failed in \(failed.count)/\(reps.count) reps: \(detail)")
-      }
-    }
-    return BudgetVerdict(budget: spec.budget, rule: spec.rule, pass: reasons.isEmpty, reasons: reasons)
-  }
-
-  /// The frame and stretch metrics the bench has always compared; `Comparison` prints them as information (they no
-  /// longer decide: the objective and the guards do).
-  public static func metrics(for spec: ScenarioSpec) -> [(name: String, pick: (RepResult) -> Double?, floorPct: Double, absoluteFloor: Double)] {
-    switch spec.kind {
-    case .latency:
-      return [("latencyMs", { Stats.median($0.latencies) }, 15, 3), ("longestStretchMs", { $0.mainThread.longestMs }, 25, 4)]
-    case .smooth, .isolation:
-      return [("lateFrames", { Double($0.frames.late) }, 25, 2), ("frameP95Ms", { $0.frames.p95Ms }, 15, 1),
-              ("longestStretchMs", { $0.mainThread.longestMs }, 25, 4), ("stretchesOver16", { Double($0.mainThread.over16) }, 25, 2)]
-    }
-  }
+  /// The fixture every scenario without one of its own runs on (the manifest's `defaultFixture`).
+  public static let defaultFixture = "crew17"
+  /// The fixture `scenario` runs on unless told otherwise: its own (Search ⌘K's need hundreds of searchable items, the
+  /// Needs you reel's need asks across projects), else the default.
+  public static func fixture(for scenario: String) -> String { spec(scenario)?.fixture ?? defaultFixture }
 }

@@ -12,7 +12,7 @@
 // the fixture's reply path, and the fixture drops its own reply when it reads it back. A goal-branch run's pull request
 // (a fake GitHub) is followed once it is open: a reviewer's comment there starts its planner again through the real
 // github source, and the answer is one marked comment on the pull request, which the source never reads as a trigger.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -24,12 +24,13 @@ let w: World;
 let gh: ReturnType<typeof fakeGitHub>;
 let dir: string, inbox: string, tlog: string, settings: string;
 const started: string[] = [];
+const resetSettings = () => writeFileSync(settings, JSON.stringify({ sources: { fixture: { allowed: ["alice"], mode: "observe" } } }));
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-scn-triggers-"));
   inbox = join(dir, "inbox.ndjson");
   tlog = join(dir, "source.ndjson");
   settings = join(dir, "triggers.json");
-  writeFileSync(settings, JSON.stringify({ sources: { fixture: { allowed: ["alice"], mode: "observe" } } }));
+  resetSettings();
   w = await world("triggers", {
     // The run a trigger starts has no planner agent on the fake sandbox: the recipe-hierarchical plugin's, off unless on.
     CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true",
@@ -44,6 +45,7 @@ beforeAll(async () => {
     },
   });
 }, 120_000);
+beforeEach(resetSettings);
 afterAll(async () => {
   // The run the trigger started: let it finish (fake agents: seconds), else cancel it, before the engine goes.
   for (const id of started) {
@@ -86,6 +88,13 @@ const daemonEvents = (): Array<{ type: string; entity: string; text: string; dat
 const WAIT_MSG = `wait_msg() { end=$(( $(date +%s) + 150 )); while :; do m=$(capcomd inbox); case "$m" in *"$1"*) printf "%s" "$m" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const m of JSON.parse(s).messages)if(m.body.text.includes(process.argv[1]))console.log("msg-from: "+m.from+"\\nmsg: "+JSON.stringify(m.body.text))})' "$1"; return 0;; esac; [ $(date +%s) -gt $end ] && return 1; sleep 0.2; done; }`;
 
 test("a fixture source's triggers: started, deduped, denied, recorded, continued; a subscription expires; observe runs nothing", async () => {
+  const eventOffset = daemonEvents().length;
+  const sourceOffset = heard().length;
+  const previousLog = await w.cj(["triggers", "log"]);
+  expect(previousLog.code).toBe(0);
+  const logOffset = previousLog.j.triggers.length;
+  const newEvents = () => daemonEvents().slice(eventOffset);
+  const newSourceLines = () => heard().slice(sourceOffset);
   const { recentRuns } = await import("../../src/primitives/ops");
   // A run whose planner (spawned as the run's planner, key "planner") waits for a message from the thread it follows.
   const run = await newRun(w);
@@ -130,8 +139,8 @@ capcomd result --summary "read it" >/dev/null`), { args: ["--key", "planner"] })
   expect(logs).not.toContain("push to main");
 
   // The short subscription expires (the daemon sweeps every 300 ms here); after it, the thread is gated like any.
-  for (let i = 0; i < 100 && !daemonEvents().some((e) => e.type === "trigger.unsubscribed"); i++) await sleep(100);
-  expect(daemonEvents().filter((e) => e.type === "trigger.unsubscribed").map((e) => e.data)).toEqual([{ source: "fixture", thread: "issue/9", runId: run, cause: "expired" }]);
+  for (let i = 0; i < 100 && !newEvents().some((e) => e.type === "trigger.unsubscribed"); i++) await sleep(100);
+  expect(newEvents().filter((e) => e.type === "trigger.unsubscribed").map((e) => e.data)).toEqual([{ source: "fixture", thread: "issue/9", runId: run, cause: "expired" }]);
   expect((await emit("c7", { actor: { id: "carol", display: "Carol", bot: false }, thread: "issue/9" })).decision).toMatchObject({ kind: "denied", by: "allowlist" });
 
   // Observe ran nothing: the only new run is the one the explicit trigger started, and it carries its trigger.
@@ -143,22 +152,23 @@ capcomd result --summary "read it" >/dev/null`), { args: ["--key", "planner"] })
   expect(status.code).toBe(0);
 
   // The daemon stream: one trigger.received per trigger, in order; the started run follows its thread.
-  const received = daemonEvents().filter((e) => e.type === "trigger.received");
+  const received = newEvents().filter((e) => e.type === "trigger.received");
   expect(received.map((e) => [e.data.id, e.data.decision])).toEqual([["c1", "started"], ["c1", "deduped"], ["c2", "denied"], ["c3", "recorded"], ["c4", "denied"], ["c5", "denied"], ["c6", "continued"], ["c7", "denied"]]);
   expect(received[5]!.data).toMatchObject({ actor: "carol", decision: "denied", runId: run });
   expect(received[0]).toMatchObject({ text: `A trigger from fixture started ${startedRun}.`, data: { source: "fixture", thread: "issue/1", actor: "alice", addressed: "mention", runId: startedRun } });
-  expect(daemonEvents().filter((e) => e.type === "trigger.subscribed").map((e) => [e.data.runId, e.data.thread])).toEqual([[run, "issue/7"], [run, "issue/9"], [startedRun, "issue/1"]]);
+  expect(newEvents().filter((e) => e.type === "trigger.subscribed").map((e) => [e.data.runId, e.data.thread])).toEqual([[run, "issue/7"], [run, "issue/9"], [startedRun, "issue/1"]]);
   // The plugin heard every decision (trigger.changed) and was asked only about what the gate allowed.
-  for (let i = 0; i < 50 && heard().filter((l) => l.what === "changed").length < 8; i++) await sleep(100);
-  expect(heard().filter((l) => l.what === "changed").map((l) => [l.id, l.decision.kind])).toEqual(received.map((e) => [e.data.id, e.data.decision]));
-  expect(heard().filter((l) => l.what === "admitting").map((l) => l.id)).toEqual(["c1", "c3", "c4"]);
+  for (let i = 0; i < 50 && newSourceLines().filter((l) => l.what === "changed").length < 8; i++) await sleep(100);
+  expect(newSourceLines().filter((l) => l.what === "changed").map((l) => [l.id, l.decision.kind])).toEqual(received.map((e) => [e.data.id, e.data.decision]));
+  expect(newSourceLines().filter((l) => l.what === "admitting").map((l) => l.id)).toEqual(["c1", "c3", "c4"]);
 
   // capcomd triggers log: every decision, oldest first.
   const tl = await w.cj(["triggers", "log"]);
   expect(tl.code).toBe(0);
-  expect(tl.j.triggers.map((e: any) => `${e.id} ${e.decision.kind}`)).toEqual(["c1 started", "c1 deduped", "c2 denied", "c3 recorded", "c4 denied", "c5 denied", "c6 continued", "c7 denied"]);
-  expect(tl.j.triggers[3]).toMatchObject({ gate: { allowed: true, strength: "inferred", mode: "observe" }, decision: { wouldHave: "start" } });
-  expect(tl.j.triggers[5]).toMatchObject({ actor: { id: "carol" }, gate: { allowed: false }, decision: { kind: "denied", by: "allowlist", wouldHave: "continue", runId: run } });
+  const decisions = tl.j.triggers.slice(logOffset);
+  expect(decisions.map((e: any) => `${e.id} ${e.decision.kind}`)).toEqual(["c1 started", "c1 deduped", "c2 denied", "c3 recorded", "c4 denied", "c5 denied", "c6 continued", "c7 denied"]);
+  expect(decisions[3]).toMatchObject({ gate: { allowed: true, strength: "inferred", mode: "observe" }, decision: { wouldHave: "start" } });
+  expect(decisions[5]).toMatchObject({ actor: { id: "carol" }, gate: { allowed: false }, decision: { kind: "denied", by: "allowlist", wouldHave: "continue", runId: run } });
 }, 240_000);
 
 /** A planner that does its first pass, and, started again on a message containing $MARK, reads it and says so. */

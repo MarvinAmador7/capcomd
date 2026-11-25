@@ -74,6 +74,7 @@ public struct SearchText: Sendable, Hashable {
   let chars: Int
   let keys: [UInt32]
   let starts: [Bool]
+  private let keyPresence: UInt64
 
   public init(_ text: String) {
     self.text = text
@@ -87,6 +88,7 @@ public struct SearchText: Sendable, Hashable {
       prevAlnum = alnum; prevLower = c.isLowercase
     }
     self.keys = keys; self.starts = starts; chars = keys.count
+    keyPresence = Self.presence(of: keys)
   }
 
   /// A character's key: ASCII is lowercased directly; anything else is folded by Foundation.
@@ -100,11 +102,16 @@ public struct SearchText: Sendable, Hashable {
     query.split(whereSeparator: \.isWhitespace).map { $0.map(key) }
   }
 
+  /// A cheap rejection filter. Different keys may share a bit, so a hit still needs the full match.
+  static func presence(of keys: [UInt32]) -> UInt64 {
+    keys.reduce(0) { $0 | (UInt64(1) << ($1 & 63)) }
+  }
+
   /// Where `token` matches, and how well: the whole text starting with it, then a word starting with it, then it
   /// anywhere, then its characters in order from a word start (fuzzy). Nil: no match.
-  func match(_ token: [UInt32]) -> (score: Int, at: [Int])? {
+  func match(_ token: [UInt32], requiring presence: UInt64 = 0) -> (score: Int, at: [Int])? {
     let m = token.count, n = chars
-    guard m > 0, m <= n else { return nil }
+    guard m > 0, m <= n, keyPresence & presence == presence else { return nil }
     let first = token[0]
     var best: (score: Int, start: Int)?
     var i = 0
@@ -115,7 +122,8 @@ public struct SearchText: Sendable, Hashable {
         if j == m {
           let s = i == 0 ? 1000 : starts[i] ? 800 : 500
           if best == nil || s > best!.score { best = (s, i) }
-          if s == 1000 { break }
+          // At a word start, no later match can score higher.
+          if s >= 800 { break }
         }
       }
       i += 1
@@ -235,18 +243,37 @@ public struct SearchIndex: Sendable {
   /// the commands. An agent that needs you shows there only.
   public var all: [SearchItem] {
     let asking = Set(asks.compactMap(\.agentId))
-    return asks + runs.flatMap { agents[$0] ?? [] }.filter { !asking.contains($0.agentId ?? "") } + projects + commands
+    var entries = asks
+    entries.reserveCapacity(count)
+    for run in runs {
+      guard let items = agents[run] else { continue }
+      if asking.isEmpty { entries.append(contentsOf: items) }
+      else { entries.append(contentsOf: items.lazy.filter { !asking.contains($0.agentId ?? "") }) }
+    }
+    entries.append(contentsOf: projects)
+    entries.append(contentsOf: commands)
+    return entries
   }
 
   /// The query's results by group. `among`: only these items can match (the previous, shorter query's hits: a longer
   /// query never matches more); nil, all of them.
   public func search(_ query: String, among: Set<String>? = nil) -> (sections: [SearchSection], matched: Set<String>) {
-    let tokens = SearchText.tokens(query)
+    var work = Work()
+    return search(query, among: among, work: &work)
+  }
+
+  /// What a search did, counted rather than timed (SearchTests guard a keystroke's cost with it: wall-clock time on a
+  /// shared CI Mac measures the Mac as much as the search): `scored`, the items it matched the query against.
+  struct Work { var scored = 0 }
+
+  func search(_ query: String, among: Set<String>?, work: inout Work) -> (sections: [SearchSection], matched: Set<String>) {
+    let tokens = SearchText.tokens(query).map { (keys: $0, presence: SearchText.presence(of: $0)) }
     guard !tokens.isEmpty else { return ([], []) }
     var byGroup: [SearchGroup: [(hit: SearchHit, order: Int)]] = [:]
     var matched = Set<String>()
     for (order, item) in all.enumerated() {
       if let among, !among.contains(item.id) { continue }
+      work.scored += 1
       guard let h = Self.match(tokens, item) else { continue }
       matched.insert(item.id)
       byGroup[item.group, default: []].append((h, order))
@@ -283,10 +310,16 @@ public struct SearchIndex: Sendable {
   }
 
   /// Every word typed must match the title or the subtitle; a title match counts double.
-  static func match(_ tokens: [[UInt32]], _ item: SearchItem) -> SearchHit? {
+  static func match(_ tokens: [(keys: [UInt32], presence: UInt64)], _ item: SearchItem) -> SearchHit? {
     var score = 0, th: [Int] = [], sh: [Int] = []
     for t in tokens {
-      let a = item.title.match(t), b = item.subtitle?.match(t)
+      let a = item.title.match(t.keys, requiring: t.presence)
+      // For up to 22 keys, even a fuzzy match cannot outscore an exact prefix (1000).
+      if let a, t.keys.count <= 22, a.score * 2 >= 1000 {
+        score += a.score * 2; th += a.at
+        continue
+      }
+      let b = item.subtitle?.match(t.keys, requiring: t.presence)
       switch (a, b) {
       case let (a?, b?) where b.score > a.score * 2: score += b.score; sh += b.at
       case let (a?, _): score += a.score * 2; th += a.at

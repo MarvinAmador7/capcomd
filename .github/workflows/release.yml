@@ -300,7 +300,9 @@ jobs:
           name: binaries
           path: dist
 
-      - name: The cask installs the app and the formula (from a throwaway local tap)
+      # The cask installs the app alone (no second CLI for someone who has one from install.sh, Bun or npm); the
+      # formula next to it is installed separately, as the cask's caveats say.
+      - name: The cask installs the app, without the formula (from a throwaway local tap)
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_FROM_API: "1"
@@ -309,11 +311,13 @@ jobs:
           tap="$(brew --repository)/Library/Taps/capcomd-ci/homebrew-app"
           mkdir -p "$tap/Formula" "$tap/Casks"
           bun scripts/homebrew-formula.ts "$V" dist "file://$PWD/dist" > "$tap/Formula/capcomd.rb"
-          bun scripts/homebrew-cask.ts "$V" apps/menubar/build "file://$PWD/apps/menubar/build" capcomd-ci/app/capcomd > "$tap/Casks/capcomd-app.rb"
-          # Homebrew 7 refuses a cask's formula dependency from a tap nobody trusted; older Homebrew has no `trust`.
+          bun scripts/homebrew-cask.ts "$V" apps/menubar/build "file://$PWD/apps/menubar/build" > "$tap/Casks/capcomd-app.rb"
+          # Homebrew 7 refuses to load from a tap nobody trusted; older Homebrew has no `trust`.
           if brew help trust >/dev/null 2>&1; then brew trust capcomd-ci/app; fi
           brew install --cask capcomd-ci/app/capcomd-app
           [ "$(plutil -extract CFBundleShortVersionString raw -o - /Applications/capcomd.app/Contents/Info.plist)" = "$V" ]
+          if brew list --formula capcomd >/dev/null 2>&1; then echo "::error::the cask installed the capcomd formula"; exit 1; fi
+          brew install capcomd-ci/app/capcomd
           "$(brew --prefix)/bin/capcomd" --version | grep -qx "capcomd $V"
           brew uninstall --cask capcomd-app && brew uninstall capcomd && brew untap capcomd-ci/app
 
@@ -481,7 +485,7 @@ jobs:
           name: app
           path: dist-app
 
-      # The cask is capcomd-app (scripts/homebrew-cask.ts says why), next to the formula, and depends on it.
+      # The cask is capcomd-app (scripts/homebrew-cask.ts says why), next to the formula; it doesn't depend on it.
       - name: Commit Formula/capcomd.rb and Casks/capcomd-app.rb to MarvinAmador7/homebrew-tap
         run: |
           if [ -z "$TAP_KEY" ]; then echo "::warning::no HOMEBREW_TAP_DEPLOY_KEY secret: the tap was not updated (brew install MarvinAmador7/tap/capcomd and the capcomd-app cask stay on the previous version)"; exit 0; fi

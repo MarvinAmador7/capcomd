@@ -3,7 +3,7 @@
 // which only the daemon runs (out of process: the proc-gate fixture in <home>/plugins), judges them as it judges an
 // agent's. Before, the CLI and the MCP server ran verify and approve themselves, where only the built-in gates listen:
 // proc-gate's verify.judging and approval.deciding were never asked.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -63,6 +63,7 @@ beforeAll(async () => {
   mcp = new Client({ name: "front-door-test", version: "0.0.1" });
   await mcp.connect(new StdioClientTransport({ command: "bun", args: [CLI, "mcp"], cwd: w.dir, stderr: "ignore", env: { ...process.env, ...w.env } as Record<string, string> }));
 }, 180_000);
+beforeEach(() => control({ "merge.landing": "allow" }));
 afterAll(async () => {
   try { await mcp?.close(); await w?.stop(); } finally { rmSync(pluginDir, { recursive: true, force: true }); }
 });
@@ -129,21 +130,30 @@ test("capcomd_await on a verify the daemon runs waits for the daemon's judges: i
   control({ "merge.landing": "allow" });
   const run = await newRun("await");
   const a = await done(run, "e");
-  // The plugin doesn't answer: only the daemon's verify can end it, and that waits for the plugin.
-  control({ "verify.judging": "none", "merge.landing": "allow" });
+  // Hold the judge until the assertion, then release it before another test uses this daemon.
+  control({ "verify.judging": "wait", "merge.landing": "allow" });
   const started: any = await mcp.callTool({ name: "capcomd_verify", arguments: { runId: run, ref: a, check: "unit", timeoutMs: 0 } });
   const id = JSON.parse(started.content[0].text).id as string;
   expect(id).toMatch(/^vfy-/);
   // Before, the wait found the record running, not this process's, and ran the verify again in capcomd mcp, where only
   // the built-in judges listen: it passed while the plugin was still being asked.
-  const waited: any = await mcp.callTool({ name: "capcomd_await", arguments: { runId: run, ops: [id], timeoutMs: 15_000 } });
-  const body = JSON.parse(waited.content[0].text);
-  expect(body.pending).toEqual([id]);
-  expect(body.ops).toEqual([]);
-  await until(() => asked("verify.judging", run).length === 1);
+  try {
+    const waited: any = await mcp.callTool({ name: "capcomd_await", arguments: { runId: run, ops: [id], timeoutMs: 15_000 } });
+    const body = JSON.parse(waited.content[0].text);
+    expect(body.pending).toEqual([id]);
+    expect(body.ops).toEqual([]);
+    await until(() => asked("verify.judging", run).length === 1);
+  } finally {
+    control({ "verify.judging": "allow", "merge.landing": "allow" });
+    const settled = await tool("capcomd_verify", { runId: run, id });
+    expect(settled.body.state).toBe("passed");
+  }
 }, 300_000);
 
 test("the one-call tokens the front doors made for these calls are gone after them", async () => {
+  const run = await newRun("tokens");
+  const ref = await done(run, "tokens");
+  expect((await verify(run, ref, "tokens")).state).toBe("passed");
   const { loadClients } = await import("../../src/api/clients");
   expect(loadClients().filter((c) => c.frontDoor)).toEqual([]);
 }, 30_000);

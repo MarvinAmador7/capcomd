@@ -104,14 +104,15 @@ struct SearchView: View {
     .modifier(SearchWindowChrome(on: inWindow))
     .environment(\.colorScheme, .dark)
     .onChange(of: height, initial: true) { _, h in onHeight(h) }
-    .onAppear { focused = true }
+    // Built ahead and hidden (`PaletteWarmer`), it leaves the keyboard where it is until it opens.
+    .onAppear { if model.paletteOpen { focused = true } }
     .onChange(of: model.paletteOpen) { _, open in if open { focused = true } }
     .accessibilityElement(children: .contain).accessibilityLabel("Search")
   }
 }
 
 /// The query: a 22 pt field with no box, after the magnifying glass.
-private struct SearchField: View {
+struct SearchField: View {
   static let identifier = "capcomd.search.field"
   /// The field's AppKit view in a window, by its accessibility identifier.
   @MainActor static func find(in w: NSWindow) -> NSTextField? {

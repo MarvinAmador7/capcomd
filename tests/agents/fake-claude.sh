@@ -13,6 +13,9 @@
 #   [quiet:N] edit, then say nothing, change nothing and run nothing for N s (stalled, to the watchdog)
 #   [spend] edit, then keep working for ~10s, each message reporting 100k output tokens (live spend)
 #   [spin] or [spin:N] edit, then make the same Read call N times (default 30, 0.15s apart), then finish normally (stuck: spinning)
+#           [spin-checkpoint:K]: after the Kth call, wait (up to 30 s) until the supervisor has made a checkpoint (its
+#           outbox says so), as the spinning notice at K repeats asks for one, so a stop that comes K calls later can't
+#           kill it first however slow the machine
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
@@ -101,9 +104,13 @@ case "$prompt" in *"[steps]"*)
 esac
 case "$prompt" in *"[spin"*)
   n=$(printf '%s' "$prompt" | sed -n 's/.*\[spin:\([0-9]*\)\].*/\1/p')
+  k=$(printf '%s' "$prompt" | sed -n 's/.*\[spin-checkpoint:\([0-9]*\)\].*/\1/p')
   for i in $(seq 1 "${n:-30}"); do sleep 0.15
     emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"s$i\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/sum.ts\"}}]}}"
     emit "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"s$i\",\"content\":\"export const sum = 1\"}]}}"
+    if [ "$i" = "${k:-}" ]; then
+      for _ in $(seq 1 300); do grep -q '"type":"checkpoint"' ../outbox.jsonl 2>/dev/null && break; sleep 0.1; done
+    fi
   done;;
 esac
 case "$prompt" in *"[failing"*)

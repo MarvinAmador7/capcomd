@@ -506,12 +506,14 @@ struct LimitBar: View {
 
 /// View › Needs You and View › Next Ask (⌘J).
 package struct NeedsYouCommands: Commands {
-  let model: DeskModel
-  package init(model: DeskModel) { self.model = model }
+  /// The model an item acts on, looked up when it is chosen (DeskCommands.current).
+  let current: @MainActor () -> DeskModel?
+  package init(model: DeskModel) { current = { model } }
+  package init(current: @escaping @MainActor () -> DeskModel?) { self.current = current }
   package var body: some Commands {
     CommandGroup(before: .toolbar) {
-      Button("Needs You") { model.toggleNeedsReel() }
-      Button("Next Ask") { model.nextAsk() }.keyboardShortcut("j", modifiers: .command)
+      Button("Needs You") { current()?.toggleNeedsReel() }
+      Button("Next Ask") { current()?.nextAsk() }.keyboardShortcut("j", modifiers: .command)
       Divider()
     }
   }

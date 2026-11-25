@@ -9,11 +9,19 @@ on:
     types: [checks_requested]
   workflow_dispatch:
 
+# A new revision of the same PR supersedes its previous results.
+concurrency:
+  group: capcomd-ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -43,11 +51,20 @@ jobs:
       - name: src/context/limits.gen.ts matches docs/evidence/context
         run: bun scripts/gen-context-limits.ts --check
 
+      # The budget is 5 s (about 3 s on a normal runner). Going over it is a warning, not a failure: a slow runner
+      # once took just over 5 s and failed a release PR. Only a hang (60 s) fails the step.
       - name: Type check
-        run: bun run typecheck
+        run: |
+          start=$(date +%s%N)
+          timeout 60s bun run typecheck
+          ms=$(( ($(date +%s%N) - start) / 1000000 ))
+          echo "typecheck took ${ms} ms"
+          if [ "$ms" -gt 5000 ]; then
+            echo "::warning title=Typecheck over its 5 s budget::bun run typecheck took ${ms} ms"
+          fi
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
-        run: bun run test:fast
+        run: bun run test:fast --parallel="$(nproc)"
 
       - name: The canvas and the TUI (apps/canvas, apps/tui)
         run: bun run test:apps
@@ -56,6 +73,7 @@ jobs:
   # sub-agents, the primitives, the agent adapters (fake CLIs) and the merge paths (local bare repos, a fake GitHub
   # and forge): `bun run test:scenarios`. Over 35 minutes on one runner, so it runs as seven shards balanced by
   # tests/scenario-timings.json (per-file times measured on this runner; a file missing from it gets an estimate).
+  # Within a shard, run isolated files in parallel across the available runner cores.
   # Each shard uploads the times it measured (scenario-timings-N): `bun scripts/scenario-timings.ts <run id>` merges
   # a run's into the file. `--isolate` (in the script) gives every file a fresh global, environment and preload.
   scenarios:
@@ -67,6 +85,9 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -79,7 +100,7 @@ jobs:
       - name: Scenario suite, shard ${{ matrix.shard }} of 7 (regression gate)
         run: |
           cp tests/scenario-timings.json "$RUNNER_TEMP/scenario-timings.json"
-          bun run test:scenarios --shard=${{ matrix.shard }}/7 --timings="$RUNNER_TEMP/scenario-timings.json" --update-timings
+          bun run test:scenarios --parallel="$(nproc)" --shard=${{ matrix.shard }}/7 --timings="$RUNNER_TEMP/scenario-timings.json" --update-timings
 
       - name: Upload the times this shard measured
         if: always()
@@ -95,10 +116,17 @@ jobs:
   evals:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [primitives, recipe-parity, context]
     env:
       CAPCOMD_NO_CONFIG: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -108,15 +136,18 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Primitives eval
+        if: matrix.suite == 'primitives'
         run: bun evals/primitives/run.ts --report-latency
 
       - name: Recipe parity eval
+        if: matrix.suite == 'recipe-parity'
         run: bun evals/recipe-parity/run.ts
 
       # ADR-025 §12: the context eval's harness on the fake sandbox with its scripted agent (every runnable arm, every
       # task chain, the hidden checkers through `capcomd check`, the metrics); --expect fails on any verdict the fake
       # agent's policy doesn't produce. The live baselines per model are in docs/evidence/context/.
       - name: Context eval (fake sandbox and agent)
+        if: matrix.suite == 'context'
         run: bun scripts/eval-context.ts --seed 1 --expect --port 6571 --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered,index-noskills
 
   # @capcomd/plugin as it would be published (packages/plugin/scripts/pack.ts): installed from its tarball into a fresh
@@ -129,6 +160,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -156,6 +190,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -176,6 +213,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

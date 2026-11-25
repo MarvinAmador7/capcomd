@@ -33,7 +33,7 @@ same PR. Behaviour conflicts go to the owner.
 | Split or close a pane (⌘D, ⇧⌘D, ⌘W) | first frame ≤ 50 ms | Each pane is the reel's AppKit column (`NativeColumnView`, pane style) laid out by frame in `PaneDeckView`; a split adds one column view (a closed one is kept for the next), the others are only re-framed; the new pane opens on its thread's foot (`split-open`). |
 | Move the focus between panes (⌃← ⌃→, a click) | first frame ≤ 50 ms; no thread renders | Focus, "one of several" and "expanded" are a small observable per pane (`PaneState`): a focus change re-renders the two headers and strokes it touches (`split-focus`). A thread item re-renders its own pane only (`split-burst`). |
 | Expand or collapse a pane (⇧⌘↩, Esc) | first frame ≤ 50 ms; no thread rebuilt | The expanded pane is the same view re-framed to the window, the others hidden, the sidebar hidden; laid out once at the final frames, and each pane keeps its thread's distance from the foot across any resize (`pane-expand`, `expand-switch`). Not met yet on a loaded machine: re-laying a long thread at the new width costs about as much as building it (see the PR's numbers). |
-| Search ⌘K | open: first frame ≤ 50 ms; a keystroke's results within a frame (16.7 ms) with 250+ items | Titles only, folded once per source change; a keystroke compares integer arrays and narrows from the last query; at most 24 rows a group in a lazy list. Bench: `palette-open`, `palette-type`, `palette-keys` on the `search` fixture. |
+| Search ⌘K | open: first frame ≤ 50 ms; a keystroke's results within a frame (16.7 ms) with 250+ items | Titles only, folded once per source change; a keystroke compares integer arrays and narrows from the last query; at most 24 rows a group in a lazy list. The palette is built hidden once the window has drawn, so the first ⌘K only shows it; then AppKit's first key equivalent (the menus filled) and the first text field taking the keyboard are done ahead, at rest, without showing anything or moving the keyboard (`desk.prewarm`). Not met yet on the first ⌘K: it still costs about a frame more than a later ⌘K, the code that moves the keyboard into the field and renders the palette running for the first time in the process (cold method caches); laying the hidden palette out ahead didn't change it. Bench: `palette-first`, `palette-open`, `palette-type`, `palette-keys` on the `search` fixture. |
 | Markdown | no parsing on the main thread | The daemon's `blocks/1` tree is already parsed; views only lay it out. |
 
 Measure with Instruments (SwiftUI + Animation Hitches) on a 17-agent fake-host run (live-app-testing recipe) before a
@@ -256,10 +256,11 @@ the window is the sidebar and one agent's pane, on the reel's dark ground (#0E0E
   centred 800 pt reading column with code, tables, diffs and tool results 1060 pt (12 pt top, 32 pt sides, 20 pt foot);
   the ask bar is 800 pt, #1D1B17, 12 pt corners, the 1 pt amber ring, 20 pt above the foot (the pane itself has no
   ring), and the message box is 800 pt too. Esc or arrows-in (or ⌃⌘S) brings back exactly the panes it came from; each
-  pane's thread keeps its distance from the foot. Picking another agent while expanded (⌘K, ⌘J, ⌃1–9) keeps it
-  expanded: the agent shows in the expanded pane, or the pane that shows it is the one expanded. ⌘K and ⌘J work while
-  expanded; the hand, Home (+, ⌘0), the Needs you reel and folding the sidebar end it. Expansion isn't kept across
-  launches.
+  pane's thread keeps its distance from the foot. The keyboard is in the expanded pane (its message box or thread if it
+  was there) and stays in that pane when it collapses. Picking another agent while expanded (⌘K, ⌘J, ⌃1–9) keeps it
+  expanded: the agent shows in the expanded pane, or the pane that shows it is the one expanded. ⌘K and ⌘J work
+  while expanded; the hand, Home (+, ⌘0), the Needs you reel and folding the sidebar end it. Expansion isn't kept
+  across launches.
 - **Which agent**: the open project's focused agent (the reel's focus, so folding shows the same column), else its
   first. A click on a row of another project opens that project (a project switch); nothing animates. Follow never
   moves the opened pane: an ask shows in Needs you instead.
