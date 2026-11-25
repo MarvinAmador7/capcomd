@@ -4,6 +4,13 @@
 # inside its VM with in-VM capcomd, verifies and merges each child's branch, and reports. Workers checkpoint every
 # 5 s: their checkpoint refs must reach GitHub and be deleted when their work merges. Prints the tree, rollups and
 # timings.
+# ADR-026 (durable agents), after the planner's turn ends: each worker's machine was destroyed when that worker ended
+# (sampled every 10 s while the planner worked); the planner's machine is parked (boxd hibernated, delete-after about
+# the parked retention, still hibernated 2 minutes later); a message continues it on the same machine (woken, its
+# session not restored) and parks it again; a parked machine deleted by hand gives one "was gone" line and a fresh
+# machine on the next message (CAPCOMD_E2E_GONE_PARKED=0 skips it); archiving the run deletes the parked machine and
+# keeps the saved session. The parked checks are boxd-only and skipped (with a note) on another provider
+# (CAPCOMD_E2E_SANDBOX).
 # The GitHub repo is NOT deleted (inspect it; the delete command is printed at the end).
 # Needs: bun, gh (logged in), a boxd key (BOXD_API_KEY, or the one `capcomd setup` keeps in the keychain),
 # working claude + codex logins (capcomd auth status).
@@ -38,7 +45,7 @@ P="${CAPCOMD_PLANNER_SPEC:-$DEF_P}"; C="${CAPCOMD_CLAUDE_WORKER_SPEC:-$DEF_C}"; 
 printf '{"schema":"capcomd.agents/v1","agents":{"planner":%s,"claude-worker":%s,"codex-worker":%s,"reviewer":%s}}\n' "$P" "$C" "$X" "$R" > "$AGENTS"
 export CAPCOMD_AGENTS_FILE="$AGENTS"
 
-export CAPCOMD_SANDBOX=boxd
+export CAPCOMD_SANDBOX="${CAPCOMD_E2E_SANDBOX:-boxd}"
 # No project template for the throwaway repository: it would be a boxd snapshot (8 GB or more) that nothing deletes.
 # Templates have their own tests; CAPCOMD_PROJECT_TEMPLATES=auto runs this with one.
 export CAPCOMD_PROJECT_TEMPLATES="${CAPCOMD_PROJECT_TEMPLATES:-off}"
@@ -63,7 +70,12 @@ echo "== 0a. env snapshot (capcomd env build: idempotent, no VM when the snapsho
 # The throwaway repo does not exist yet (and is private): bake CLIs only. Repo is not part of the env hash.
 env -u CAPCOMD_REPO bun src/cli/index.ts env build || die "capcomd env build failed"
 echo "== 0b. doctor --strict (aborts on any ✗: claude and codex must both be usable)"
-bun src/cli/index.ts doctor --strict || die "doctor reported a failure (see ✗ above); fix it before spawning agents"
+# CAPCOMD_E2E_DOCTOR=warn: report doctor's failures and go on (when the profiles above don't use a failing login, e.g.
+# CAPCOMD_CODEX_WORKER_SPEC runs the codex worker as Claude); the per-profile preflight below still aborts.
+if ! bun src/cli/index.ts doctor --strict; then
+  [ "${CAPCOMD_E2E_DOCTOR:-strict}" = warn ] || die "doctor reported a failure (see ✗ above); fix it before spawning agents"
+  echo "   doctor reported a failure; going on (CAPCOMD_E2E_DOCTOR=warn: the profiles' own logins are checked next)"
+fi
 echo "== 0. preflight (credentials checked, never printed)"
 for a in planner claude-worker codex-worker reviewer; do CAPCOMD_AGENT=$a bun scripts/preflight.ts >/dev/null || die "preflight failed for $a (capcomd auth status)"; done
 
@@ -94,7 +106,8 @@ start_engine() {
 }
 # Every process under serve (its engine host, rivet-engine, …), deepest first.
 tree_pids() { local p c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done; echo "$1"; }
-cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
+MWATCH=""
+cleanup() { [ -z "$MWATCH" ] || kill "$MWATCH" 2>/dev/null || true; pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 start_engine
 
@@ -138,6 +151,9 @@ echo "== 3. planner (run $RUN)"
 T_RUN0=$(date +%s)
 ROOT=$($C spawn "$RUN" --profile planner --task "$GOAL" --key planner --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).agentId)')
 echo "   planner $ROOT"
+# ADR-026: sample the run's agents and their machines at boxd every 10 s, until the run is archived (step 9).
+bun scripts/e2e-machines.ts watch "$RUN" "$WORK/machines.ndjson" 10000 >"$WORK/machines-watch.log" 2>&1 &
+MWATCH=$!
 if [ "${CAPCOMD_E2E_RESTART:-}" = 1 ]; then
   # Wait (up to 10 min) for a worker to be running, give it a few seconds of work, then crash the engine.
   for _ in $(seq 1 120); do
@@ -197,11 +213,98 @@ echo "== 8. integration suite (the whole goal: every test green once all branche
 FINAL="$WORK/final"
 if git clone -q --branch integration "https://github.com/$REPO.git" "$FINAL" 2>/dev/null && (cd "$FINAL" && bun test >"$WORK/final-test.log" 2>&1); then SUITE=pass; else SUITE=fail; fi
 sed 's/^/   /' "$WORK/final-test.log" 2>/dev/null | grep -E '(pass|fail)$|^ *\(fail\)' | head -10 || true
+PSTATUS=$(bun -e 'try { const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(j.agents?.[0]?.status ?? "unknown") } catch { console.log("unknown") }' "$WORK/await.json")
+
+# ADR-026: machines after the planner's turn. Each check's verdict is ok, fail or skipped (another provider, or
+# CAPCOMD_E2E_VIA=run, where the run id isn't known while the workers run).
+M="bun scripts/e2e-machines.ts"
+verdict() { case $1 in 0) echo ok;; 3) echo skipped;; *) echo fail;; esac; }
+# Pattern counts in the planner's log (all attempts), to tell what one message's turn added.
+logcount() { $C logs "$RUN" "$ROOT" --tail 5000 2>/dev/null | grep -c -- "$1" || true; }
+PARK_LINE='its machine is parked until'; NOTHING='nothing to restore'; RESTORED='session: restored'
+PICKED="Picked up from the thread"; FRESH='a fresh one, its conversation restored'
+mjson() { $M machine "$RUN" "$ROOT" 2>/dev/null | tail -1 || true; }
+mfield() { bun -e 'try { const j=JSON.parse(process.argv[1]); const v=process.argv[2].split(".").reduce((o,k)=>o?.[k],j); console.log(v ?? "") } catch { console.log("") }' "$1" "$2"; }
+# Send the planner a message and wait for that turn to end; sets SENT_JSON and TURN_STATUS.
+message_planner() {
+  SENT_JSON=$($C send "$RUN" "$ROOT" "$1" --json 2>&1 | tr -d '\n') || true
+  echo "   sent: $SENT_JSON"
+  set +e; $C await "$RUN" "$ROOT" --timeout-ms 900000 --json > "$WORK/await-msg.json"; set -e
+  TURN_STATUS=$(bun -e 'try { const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const a=j.agents[0]; console.log(a.status) } catch { console.log("unknown") }' "$WORK/await-msg.json")
+  bun -e 'try { const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const a=j.agents[0]; console.log("   turn ended:", a.status, "·", String(a.result?.summary ?? a.result?.error ?? "").slice(0, 200)) } catch (e) { console.log("   (no await result)") }' "$WORK/await-msg.json"
+}
+WORKERVMS=skipped PARKED=skipped WOKE=skipped GONEPARK=skipped ARCHIVED=skipped SESSION=skipped
+if [ "$VIA" = run ]; then
+  echo "== 9a-9e. machine checks skipped (CAPCOMD_E2E_VIA=run: the run id isn't known while its workers run)"
+else
+echo "== 9a. worker machines: each destroyed when its agent ended (sampled every 10 s while the planner worked)"
+set +e; $M workers "$RUN" "$WORK/machines.ndjson" "$ROOT"; WORKERVMS=$(verdict $?); set -e
+
+echo "== 9b. planner's machine parked: hibernated, delete-after about the retention, nothing pings it for 2 min"
+set +e; $M parked "$RUN" "$ROOT" 120 | tee "$WORK/parked-1.txt"; RCP=${PIPESTATUS[0]}; PARKED=$(verdict "$RCP"); set -e
+if [ "$PARKED" != skipped ]; then
+  P1=$(mjson); VM1=$(mfield "$P1" vmId); EP1=$(mfield "$P1" epoch)
+  echo "   planner machine $VM1 (epoch $EP1); log says: $($C logs "$RUN" "$ROOT" --tail 5000 2>/dev/null | grep -- "$PARK_LINE" | tail -1 | sed 's/^ *//')"
+
+  echo "== 9c. message the planner: same machine, woken, session not restored; parked again"
+  N0=$(logcount "$NOTHING"); R0=$(logcount "$RESTORED"); K0=$(logcount "$PICKED"); F0=$(logcount "$FRESH")
+  T_MSG0=$(date +%s)
+  message_planner "Reply with the word ok and end your turn. Don't spawn, verify, merge or change anything."
+  echo "   turn took $(( $(date +%s) - T_MSG0 ))s"
+  P2=$(mjson); VM2=$(mfield "$P2" vmId); EP2=$(mfield "$P2" epoch)
+  N1=$(logcount "$NOTHING"); R1=$(logcount "$RESTORED"); K1=$(logcount "$PICKED"); F1=$(logcount "$FRESH")
+  SEEN=$(bun -e 'const [f, run, root, from] = process.argv.slice(1); const s = new Set(); for (const l of require("fs").readFileSync(f, "utf8").trim().split("\n")) { try { const j = JSON.parse(l); if (j.t >= Number(from) * 1000) for (const m of j.machines?.[root] ?? []) s.add(`${m.id}=${m.state}`) } catch {} } console.log([...s].join(" ") || "(none sampled)")' "$WORK/machines.ndjson" "$RUN" "$ROOT" "$T_MSG0")
+  echo "   epoch $EP1 -> $EP2, machine $VM1 -> $VM2; boxd states sampled during the turn: $SEEN"
+  echo "   log lines this turn: nothing-to-restore +$((N1 - N0)), session restored +$((R1 - R0)), picked-up-from-thread +$((K1 - K0)), fresh machine +$((F1 - F0))"
+  $C logs "$RUN" "$ROOT" --tail 5000 2>/dev/null | grep -E -- "$NOTHING|parked machine|$PARK_LINE" | tail -4 | sed 's/^ */   | /' || true
+  set +e; $M parked "$RUN" "$ROOT" 30 | tee "$WORK/parked-2.txt"; RCP=${PIPESTATUS[0]}; PARKED2=$(verdict "$RCP"); set -e
+  WHY=""
+  echo "$SENT_JSON" | grep -q '"continued": *true' || WHY="$WHY send-not-continued"
+  [ "$TURN_STATUS" = done ] || WHY="$WHY turn=$TURN_STATUS"
+  [ -n "$VM1" ] && [ "$VM1" = "$VM2" ] || WHY="$WHY machine-changed($VM1->$VM2)"
+  [ "${EP2:-0}" -gt "${EP1:-0}" ] 2>/dev/null || WHY="$WHY epoch-not-advanced"
+  [ "$((N1 - N0))" -ge 1 ] || WHY="$WHY no-nothing-to-restore-line"
+  [ "$((R1 - R0 + K1 - K0 + F1 - F0))" = 0 ] || WHY="$WHY session-restored-or-fresh"
+  [ "$PARKED2" = ok ] || WHY="$WHY not-parked-again"
+  [ -z "$WHY" ] && WOKE=ok || { WOKE=fail; echo "   9c failed:$WHY"; }
+
+  if [ "${CAPCOMD_E2E_GONE_PARKED:-1}" = 1 ]; then
+    echo "== 9d. parked machine deleted by hand: a message gives one 'was gone' line and a fresh machine"
+    P3=$(mjson); VM3=$(mfield "$P3" vmId)
+    G0=$(logcount "parked machine"); F0=$(logcount "$FRESH")
+    $M remove "$VM3" 2>&1 | sed 's/^/   /' || true
+    message_planner "Reply with the word ok again and end your turn. Don't spawn, verify, merge or change anything."
+    P4=$(mjson); VM4=$(mfield "$P4" vmId)
+    G1=$(logcount "parked machine"); F1=$(logcount "$FRESH")
+    echo "   machine $VM3 (removed) -> $VM4; 'a fresh one' lines this turn: +$((F1 - F0))"
+    $C logs "$RUN" "$ROOT" --tail 5000 2>/dev/null | grep -E -- "parked machine|$RESTORED|$PICKED" | tail -3 | sed 's/^ */   | /' || true
+    set +e; $M parked "$RUN" "$ROOT" 0 | tee "$WORK/parked-3.txt"; RCP=${PIPESTATUS[0]}; PARKED3=$(verdict "$RCP"); set -e
+    WHY=""
+    [ "$TURN_STATUS" = done ] || WHY="$WHY turn=$TURN_STATUS"
+    [ -n "$VM4" ] && [ "$VM4" != "$VM3" ] || WHY="$WHY no-fresh-machine($VM3->$VM4)"
+    [ "$((F1 - F0))" = 1 ] || WHY="$WHY fresh-lines=$((F1 - F0))"
+    [ "$PARKED3" = ok ] || WHY="$WHY not-parked-again"
+    [ -z "$WHY" ] && GONEPARK=ok || { GONEPARK=fail; echo "   9d failed:$WHY"; }
+  else
+    echo "== 9d. skipped (CAPCOMD_E2E_GONE_PARKED=0)"
+  fi
+
+  echo "== 9e. archive the run: the parked machine is deleted, the saved session stays"
+  $C run archive "$RUN" 2>&1 | sed 's/^/   /' || true
+  set +e; $M gone "$RUN" "$ROOT" 180; GONE=$(verdict $?); set -e
+  [ "$GONE" = ok ] && ARCHIVED=ok || ARCHIVED=fail
+  SESSIONS="$(bun -e 'const { stateDir } = await import("./src/utils/home.ts"); console.log(stateDir())')/sessions/$RUN/$ROOT"
+  if [ -d "$SESSIONS" ] && [ -n "$(find "$SESSIONS" -type f 2>/dev/null | head -1)" ]; then
+    SESSION=ok; echo "   saved session kept: $SESSIONS ($(find "$SESSIONS" -type f | wc -l | tr -d ' ') file(s), $(du -sh "$SESSIONS" | cut -f1))"
+  else SESSION=fail; echo "   saved session missing: $SESSIONS"; fi
+fi
+fi
+[ -z "$MWATCH" ] || { kill "$MWATCH" 2>/dev/null; wait "$MWATCH" 2>/dev/null; MWATCH=""; } || true
+
 echo "== 9. VM cleanup"
 bun scripts/vm-cleanup-check.ts "$RUN" && VMS=clean || { [ $? = 1 ] && VMS=leaked || VMS=unchecked; }
 REVIEWERS=$($C tree "$RUN" --json 2>/dev/null | bun -e 'const walk=(n)=>[n,...(n.children??[]).flatMap(walk)]; try { const t=JSON.parse(await Bun.stdin.text()); console.log(t.tree.flatMap(walk).filter((n)=>n.profile==="reviewer"&&n.status==="done").length) } catch { console.log(0) }')
 echo "   reviewers done: $REVIEWERS"
-PSTATUS=$(bun -e 'try { const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(j.agents?.[0]?.status ?? "unknown") } catch { console.log("unknown") }' "$WORK/await.json")
 echo
 echo "timings: total $(( $(date +%s) - T0 ))s, planner run ${T_RUN}s"
 echo "artifacts: $WORK   (engine log, traces, await.json, budget.json, agents.json, final-test.log)"
@@ -217,5 +320,11 @@ FAILS=""
 [ "${CKPTS:-0}" -ge 1 ] || FAILS="$FAILS checkpoints=0"
 [ "$LEFT" = 0 ] || FAILS="$FAILS checkpoint-refs-left=$LEFT"
 [ "${CAPCOMD_E2E_RESTART:-}" != 1 ] || [ "${RESTARTED:-}" = 1 ] || FAILS="$FAILS restart=not-done"
+for c in WORKERVMS PARKED WOKE GONEPARK ARCHIVED SESSION; do [ "${!c}" != fail ] || FAILS="$FAILS $(echo "$c" | tr 'A-Z' 'a-z')=fail"; done
+echo "machine checks: worker-machines=$WORKERVMS parked=$PARKED message-same-machine=$WOKE gone-parked=$GONEPARK archive-deletes=$ARCHIVED session-kept=$SESSION"
 if [ -n "$FAILS" ]; then echo "E2E FAIL:$FAILS"; exit 1; fi
-echo "E2E PASS: planner done, 3/3 reviewed and merged, integration suite green, checkpoints pushed and cleaned up, no VMs left"
+PARKNOTE="worker machines destroyed as each ended, planner parked (hibernated, ~24 h delete-after, untouched 2 min), a message continued it on the same machine and parked it again"
+[ "$GONEPARK" = ok ] && PARKNOTE="$PARKNOTE, a hand-deleted parked machine gave a fresh one"
+PARKNOTE="$PARKNOTE, archive deleted it and kept the session"
+[ "$PARKED" = skipped ] && PARKNOTE="parked-machine checks skipped (provider $CAPCOMD_SANDBOX)"
+echo "E2E PASS: planner done, 3/3 reviewed and merged, integration suite green, checkpoints pushed and cleaned up, $PARKNOTE, no VMs left"
