@@ -36,6 +36,15 @@ function agentsChanged(c: any): void {
 function messagesChanged(c: any, to: string[]): void {
   try { c.broadcast("messagesChanged", { at: Date.now(), to: [...new Set(to)] }); } catch { /* no connections: nothing to tell */ }
 }
+/** Capability events.wait (ADR-026 §3): tell connected waiters the log grew, up to `seq` (sent after the transaction that
+ *  appended it committed, so a read on hearing it sees the event). Only a "look now": a waiter still reads the log. */
+function eventsChanged(c: any, seq: number): void {
+  try { c.broadcast("eventsChanged", { at: Date.now(), seq }); } catch { /* no connections: nothing to tell */ }
+}
+const APPENDED = Symbol("capcomd.scope.appended");
+/** The highest seq a transaction appended to scope_events (0: none), noted by every insert into it. */
+const appendedIn = (tx: RawAccess): number => ((tx as any)[APPENDED] as number | undefined) ?? 0;
+const noteAppended = (tx: RawAccess, seq: number) => { (tx as any)[APPENDED] = Math.max(appendedIn(tx), seq); };
 /** Tell connected awaiters that a verify or merge changed state (started, finished, parked, decided): waits on ops look again. */
 function opsChanged(c: any, opId: string): void {
   try { c.broadcast("opsChanged", { at: Date.now(), opId }); } catch { /* no connections: nothing to tell */ }
@@ -514,6 +523,7 @@ async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, d
     "INSERT INTO scope_events (seq, at, type, agent_id, data, idem_key) VALUES (?, ?, ?, ?, ?, ?)",
     seq, Date.now(), type, agentId, JSON.stringify(data), idemKey
   );
+  noteAppended(tx, seq);
   // ADR-026 §3: every armed wake this event satisfies fires in this same transaction (src/actors/wakes.ts).
   await matchWakes(tx, { seq, type, agentId, data: data as Record<string, any> }, addEvent as AddEvent);
   // ADR-026 §4: a cancelled agent's question is withdrawn (nobody would read its answer as one).
@@ -522,10 +532,12 @@ async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, d
 
 /**
  * A scope transaction (c.db.transaction), after which the runners of the agents a wake woke in it are told their
- * mailbox changed (ADR-026 §3 push delivery): a wake fires in whatever transaction appends the event it waits on.
+ * mailbox changed (ADR-026 §3 push delivery): a wake fires in whatever transaction appends the event it waits on. Every
+ * append to the event log is made in one, so its commit is where events.wait's waiters hear of it (eventsChanged).
  */
 async function txn(c: any, fn: (tx: RawAccess) => Promise<unknown>, opts?: { name: string }): Promise<void> {
   let woken: string[] = [];
+  let appended = 0;
   const continued: string[] = [];
   await c.db.transaction(async (tx: RawAccess) => {
     await fn(tx);
@@ -533,7 +545,9 @@ async function txn(c: any, fn: (tx: RawAccess) => Promise<unknown>, opts?: { nam
     // ADR-026 §3 schedules: a check-in that fires for an idle agent (its turn ended, its CLI gone) continues it, as a
     // message to it would.
     for (const id of new Set(woken)) if (await continueIfUnread(tx, id)) continued.push(id);
+    appended = appendedIn(tx);
   }, opts);
+  if (appended) eventsChanged(c, appended);
   if (woken.length) messagesChanged(c, woken);
   if (continued.length) {
     agentsChanged(c);
@@ -1400,6 +1414,7 @@ export const scopeActor = actor({
         seq = Number(last[0]?.s ?? 0) + 1;
         await tx.execute("INSERT INTO scope_events (seq, at, type, agent_id, data, idem_key, entity, text) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)",
           seq, Date.now(), params.type, JSON.stringify(params.data), params.key, params.entity, params.text);
+        noteAppended(tx, seq);
       }, { name: "scopePluginEvent" });
       return { seq };
     },
