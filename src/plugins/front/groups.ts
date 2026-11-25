@@ -74,12 +74,13 @@ export const FRONT_ENV = kernelGroup({
 
 export const FRONT_SETUP = kernelGroup({
   name: "front-setup",
-  description: "The CLI's setup: guided setup and its check, the engine's background service, upgrades, harness.v1 API clients and the web UI.",
+  description: "The CLI's setup: guided setup and its check, the engine's background service, updates, harness.v1 API clients and the web UI.",
   load: async () => (await import("../../cli/groups/setup")).COMMANDS,
   commands: [
     { name: "setup", summary: "Guided setup (accounts, project, agent, service), or check what's configured" },
     { name: "service", summary: "The engine as a background service: install, uninstall, status" },
-    { name: "upgrade", summary: "Replace this capcomd with the latest release" },
+    { name: "update", summary: "Update capcomd to the latest release, however it was installed, and restart its engine service" },
+    { name: "upgrade", summary: "The same as update" },
     { name: "clients", summary: "harness.v1 API tokens: add, pair an app, list, revoke" },
     { name: "ui", summary: "Launch the web UI" },
   ],

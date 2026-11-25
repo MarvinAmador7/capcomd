@@ -49,7 +49,7 @@ capcomd plugin (MCP tools and skills; verified live from Claude Code), the skill
 | `capcomd run "<goal>"` with a planner agent (`--planner P`; on boxd the `planner` profile setup writes): the run gets the project's gates, the planner splits, verifies and merges, and the command shows each agent's status; the built-in recipe's placeholder planner is for offline runs (`--recipe`) | Built, verified live 2026-10-24 | `tests/scenarios/run-planner.test.ts`, `CAPCOMD_E2E_VIA=run scripts/mac-subagents-e2e.sh` |
 | `capcomd logs <run> <agt> [--follow]`: a line per tool call, failed call, message and result of a working agent | Built | `tests/subagents/liveness.test.ts` |
 | Checks: on the host without the operator's credentials; a merge reuses verify's pass for the same tree and command instead of a second run (and checks VM) | Built | `tests/merge/host-checks.test.ts` |
-| Single executable (`install.sh`, Homebrew tap `MarvinAmador7/tap`, `capcomd upgrade`), built for macOS and Linux, x64 and arm64 | Built; linux-x64 and darwin-arm64 driven in CI and locally; the other two first run in the next release | `tests/cli/binary.test.ts`, `scripts/release-smoke.sh`, CI `binary` job |
+| Single executable (`install.sh`, Homebrew tap `MarvinAmador7/tap`, `capcomd update`), built for macOS and Linux, x64 and arm64 | Built; linux-x64 and darwin-arm64 driven in CI and locally; the other two first run in the next release | `tests/cli/binary.test.ts`, `scripts/release-smoke.sh`, CI `binary` job |
 
 **Live end-to-end:** `scripts/mac-subagents-e2e.sh` runs a planner agent that splits a three-file fix across
 two Claude workers and one Codex worker, verifies each against its own named check in a boxd checks VM, has a

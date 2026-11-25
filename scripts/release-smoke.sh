@@ -85,8 +85,8 @@ else
   SB=$(capcomd service install --dry-run --json | jget 'j.body')
   echo "$SB" | grep -q "$HOME/.capcomd/bin/capcomd" && ! echo "$SB" | grep -q "index.ts" && pass "the service runs the binary" || fail "the service definition doesn't run the binary"
   [ -x "$HOME/.capcomd/bin/$(capcomd --version --json | jget 'j.version')/rivet-engine" ] && pass "engine extracted to ~/.capcomd/bin/<version>" || fail "no extracted engine in ~/.capcomd/bin"
-  UP=$(capcomd upgrade --to "$V" --dry-run --json | jget 'j.dryRun')
-  [ "$UP" = "true" ] && pass "upgrade --dry-run knows it's a binary install" || fail "upgrade --dry-run: '$UP'"
+  UP=$(capcomd update --to "$V" --dry-run --json | jget 'j.kind')
+  [ "$UP" = "binary" ] && pass "update --dry-run knows it's a binary install" || fail "update --dry-run: '$UP'"
 fi
 
 echo "== where state went"

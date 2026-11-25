@@ -418,7 +418,7 @@ Binaries: the workflow builds the single executable for darwin-arm64, darwin-x64
 Linux runner (`scripts/build-binary.ts --target T`), then installs each with `install.sh` and drives it without Bun
 on a runner of its own platform (`scripts/release-smoke.sh dist/capcomd-T X.Y.Z`; on macOS arm64 it also installs
 the Homebrew formula from a throwaway tap). They go on the release with their `.sha256` files, which is where
-`install.sh` and `capcomd upgrade` download from. Last, for a non-prerelease, it commits `Formula/capcomd.rb`
+`install.sh` and `capcomd update` download from. Last, for a non-prerelease, it commits `Formula/capcomd.rb`
 (`scripts/homebrew-formula.ts`) to MarvinAmador7/homebrew-tap with the `HOMEBREW_TAP_DEPLOY_KEY` secret (the private
 half of an SSH deploy key with write access to that repository only); without the secret it warns and skips that
 step.
