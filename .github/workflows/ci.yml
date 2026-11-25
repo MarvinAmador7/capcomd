@@ -18,7 +18,14 @@ on:
       - "docs/events.md"
       - "docs/harness-contract.md"
       - "docs/evidence/context/**"
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
+
+# A new revision of the same PR supersedes its previous results.
+concurrency:
+  group: capcomd-ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -233,3 +240,29 @@ jobs:
       - name: The single executable, installed and driven (scripts/release-smoke.sh)
         if: ${{ !cancelled() }}
         run: scripts/release-smoke.sh dist/capcomd-linux-x64 "$(bun -e 'console.log(require("./package.json").version)')"
+
+  # Keep a stable required check on both PRs and merge groups. The queue also
+  # exercises the macOS app on the exact candidate commit.
+  merge-queue-menubar:
+    if: github.event_name == 'merge_group'
+    uses: ./.github/workflows/menubar.yml
+
+  gate:
+    name: CI gate
+    if: always()
+    needs: [test, scenarios, evals, install-smoke, merge-queue-menubar]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every applicable job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          jq -e --arg event "$EVENT" '
+            to_entries | all(
+              if .key == "merge-queue-menubar" and $event != "merge_group"
+              then .value.result == "skipped"
+              else .value.result == "success"
+              end
+            )
+          ' <<< "$RESULTS"
