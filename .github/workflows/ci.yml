@@ -34,7 +34,7 @@ jobs:
       # The Docker provider's conformance suite (tests/providers) needs a Docker daemon: opt-in, and this runner has one.
       CAPCOMD_TEST_DOCKER: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -100,7 +100,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -118,7 +118,7 @@ jobs:
 
       - name: Upload the times this shard measured
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scenario-timings-${{ matrix.shard }}
           path: tests/scenario-timings.json
@@ -136,7 +136,7 @@ jobs:
     env:
       CAPCOMD_NO_CONFIG: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -199,7 +199,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -220,7 +220,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun install --frozen-lockfile
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: ${{ !cancelled() }}
         with:
           node-version: 20
