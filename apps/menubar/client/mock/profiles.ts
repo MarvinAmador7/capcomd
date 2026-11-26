@@ -46,17 +46,19 @@ function fields(r: Row) {
   const inherits = r.applied.some((a: any) => a.as === "extends");
   const f = (id: string, type: string, label: string, value: string | null, display: string, extra: object = {}) =>
     ({ id, type, label, help: null, value, display, choices: [], source: value === null ? "unset" : "profile", from: value === null ? null : r.applied.length - 1, editable: type !== "info", untrusted: false, ...extra });
+  // A profile that extends another (an installed one) sets its title, tags and time itself and inherits the rest.
+  const up = inherits ? { source: "inherited", from: 0 } : {};
   const out = [
     f("identity.title", "text", "Title", r.title, r.title ?? "Its name", { untrusted: true }),
     f("description", "text", "Description", null, "None", { untrusted: true }),
     f("tags", "list", "Tags", r.tags.length ? JSON.stringify(r.tags) : null, r.tags.length ? r.tags.join(", ") : "None"),
-    f("harness.provider", "choice", "Agent", r.provider, r.provider === "codex" ? "Codex" : "Claude Code", { choices: [{ value: "claude", label: "Claude Code" }, { value: "codex", label: "Codex" }] }),
-    f("harness.model", "text", "Model", r.model, r.model ?? "The agent's default"),
+    f("harness.provider", "choice", "Agent", r.provider, r.provider === "codex" ? "Codex" : "Claude Code", { ...up, choices: [{ value: "claude", label: "Claude Code" }, { value: "codex", label: "Codex" }] }),
+    f("harness.model", "text", "Model", r.model, r.model ?? "The agent's default", up),
     f("harness.effort", "choice", "Effort", r.effort, r.effort ? r.effort[0].toUpperCase() + r.effort.slice(1) : "The agent's default",
-      { choices: ["low", "medium", "high", "xhigh"].map((e) => ({ value: e, label: e[0].toUpperCase() + e.slice(1) })) }),
+      { ...up, choices: ["low", "medium", "high", "xhigh"].map((e) => ({ value: e, label: e[0].toUpperCase() + e.slice(1) })) }),
     f("sandbox.provider", "choice", "Runs on", "boxd", "Cloud · boxd", { source: "inherited", from: 0, choices: [{ value: "docker", label: "This Mac · Docker" }, { value: "boxd", label: "Cloud · boxd" }] }),
     f("tools.mode", "choice", "Works by", r.toolMode, r.toolMode === "orchestrate" ? "Orchestrating: sees everything, runs nothing" : "Executing: edits and runs code",
-      { choices: [{ value: "execute", label: "Executing: edits and runs code" }, { value: "orchestrate", label: "Orchestrating: sees everything, runs nothing" }] }),
+      { ...up, choices: [{ value: "execute", label: "Executing: edits and runs code" }, { value: "orchestrate", label: "Orchestrating: sees everything, runs nothing" }] }),
     f("permissions.report", "toggle", "May answer with a report", null, "Yes"),
     f("limits.maxTurns", "number", "Turns", "40", "40 turns", inherits ? { source: "inherited", from: 0 } : {}),
     f("limits.timeoutMs", "number", "Time limit", "1800000", "30 min"),

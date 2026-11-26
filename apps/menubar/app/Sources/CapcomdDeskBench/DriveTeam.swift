@@ -71,7 +71,11 @@ import PerfLoopKit
       if !ok { notes.append("open#\(i): team \(d.model.team.isOpen), selected \(d.model.team.selectedKey ?? "-")") }
       opened = opened && ok
       if i == opens - 1 { break }   // ends open, for the snapshot
-      await run.click(at: teamButton(d), ink: [d.sidebarRegion], name: "close#\(i)", until: { !d.model.team.isOpen && d.paneView() != nil })
+      let tc = run.now
+      // Cheap to ask every frame (a walk of the window's views isn't): the agents' list drew again.
+      await run.click(at: teamButton(d), ink: [d.sidebarRegion], name: "close#\(i)", until: {
+        !d.model.team.isOpen && d.bodies.contains { $0.view == "SidebarList" && $0.t >= tc }
+      })
       let back = !d.model.team.isOpen && d.paneView() != nil
       if !back { notes.append("close#\(i): team \(d.model.team.isOpen), agent pane \(d.paneView()?.agent ?? "none")") }
       closed = closed && back

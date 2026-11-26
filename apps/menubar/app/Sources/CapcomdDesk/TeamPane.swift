@@ -22,8 +22,8 @@ struct TeamDeck: View {
     let m = expanded ? 0 : PaneMetrics.inset
     return HStack(spacing: PaneMetrics.gap) {
       ForEach(panes) { p in
+        // A pane keeps its views when its profile changes (a row, ↑ ↓): only what differs is drawn again.
         TeamPaneView(pane: p, focused: p.id == t.focused, split: t.panes.count > 1, expanded: expanded)
-          .id("\(p.id)|\(p.key)")
       }
     }
     .padding(.top, m).padding(.trailing, m).padding(.bottom, m)
@@ -279,6 +279,7 @@ struct TeamLauncher: View {
     .onTapGesture { focused = true }
     .animation(.easeOut(duration: 0.18), value: focused)
     .onChange(of: slice.start) { _, st in if case .started? = st { goal = "" } }
+    .onChange(of: slice.key) { _, _ in goal = "" }   // another profile in this pane: a fresh task
     .accessibilityElement(children: .contain).accessibilityLabel("Give \(slice.title) a task")
   }
 

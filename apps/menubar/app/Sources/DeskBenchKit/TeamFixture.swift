@@ -72,22 +72,23 @@ public final class TeamFixtureDaemon: ProfilesPort, DaemonInfoFetching, KnownPro
   /// A profile's rows as the daemon serves them, in its order.
   static func detail(_ r: ProfileRow, rev: Int) -> ProfileDetail {
     let inherits = (r.applied ?? []).contains { $0.as == "extends" }
-    let own = "profile"
+    // A profile that extends another (an installed one) sets its title, tags and time itself and inherits the rest.
+    let own = "profile", harness = inherits ? "inherited" : own, at: Int? = 0
     var fields: [ProfileField] = [
       ProfileField(id: "identity.title", type: "text", label: "Title", value: r.title, display: r.title ?? "Its name", source: r.title == nil ? "unset" : own, editable: true, untrusted: true),
       ProfileField(id: "description", type: "text", label: "Description", value: nil, display: "None", source: "unset", editable: true, untrusted: true),
       ProfileField(id: "tags", type: "list", label: "Tags", value: (r.tags ?? []).isEmpty ? nil : ProfileField.encodeList(r.tags ?? []),
                    display: (r.tags ?? []).isEmpty ? "None" : (r.tags ?? []).joined(separator: ", "), source: (r.tags ?? []).isEmpty ? "unset" : own, editable: true),
       ProfileField(id: "harness.provider", type: "choice", label: "Agent", value: r.provider, display: r.provider == "codex" ? "Codex" : "Claude Code",
-                   choices: [.init(value: "claude", label: "Claude Code"), .init(value: "codex", label: "Codex")], source: own, from: inherits ? 0 : 0, editable: true),
-      ProfileField(id: "harness.model", type: "text", label: "Model", value: r.model, display: r.model ?? "The agent's default", source: own, editable: true),
+                   choices: [.init(value: "claude", label: "Claude Code"), .init(value: "codex", label: "Codex")], source: harness, from: at, editable: true),
+      ProfileField(id: "harness.model", type: "text", label: "Model", value: r.model, display: r.model ?? "The agent's default", source: harness, from: at, editable: true),
       ProfileField(id: "harness.effort", type: "choice", label: "Effort", value: r.effort, display: r.effort.map { $0.capitalized } ?? "The agent's default",
-                   choices: ["low", "medium", "high", "xhigh"].map { .init(value: $0, label: $0.capitalized) }, source: r.effort == nil ? "unset" : own, editable: true),
+                   choices: ["low", "medium", "high", "xhigh"].map { .init(value: $0, label: $0.capitalized) }, source: r.effort == nil ? "unset" : harness, from: at, editable: true),
       ProfileField(id: "sandbox.provider", type: "choice", label: "Runs on", value: "boxd", display: "Cloud · boxd",
                    choices: [.init(value: "docker", label: "This Mac · Docker"), .init(value: "boxd", label: "Cloud · boxd")], source: "inherited", from: 0, editable: true),
       ProfileField(id: "tools.mode", type: "choice", label: "Works by", value: r.toolMode, display: r.orchestrates ? "Orchestrating: sees everything, runs nothing" : "Executing: edits and runs code",
                    choices: [.init(value: "execute", label: "Executing: edits and runs code"), .init(value: "orchestrate", label: "Orchestrating: sees everything, runs nothing")],
-                   source: r.orchestrates ? own : "unset", editable: true),
+                   source: r.orchestrates ? own : inherits ? "inherited" : "unset", from: at, editable: true),
       ProfileField(id: "permissions.report", type: "toggle", label: "May answer with a report", value: "true", display: "Yes", source: "unset", editable: true),
       ProfileField(id: "limits.maxTurns", type: "number", label: "Turns", value: "40", display: "40 turns", source: inherits ? "inherited" : own, from: 0, editable: true),
       ProfileField(id: "limits.timeoutMs", type: "number", label: "Time limit", value: "1800000", display: "30 min", source: own, editable: true),

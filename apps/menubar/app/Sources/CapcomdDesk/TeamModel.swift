@@ -27,6 +27,8 @@ package final class TeamModel {
   package internal(set) var roster: [TeamGroup] = [] { didSet { Mutations.record("TeamModel.roster") } }
   /// The roster was read at least once.
   package internal(set) var loaded = false { didSet { Mutations.record("TeamModel.loaded") } }
+  /// Team has shown once: from then on its panes stay built while it is closed.
+  package internal(set) var everOpened = false { didSet { Mutations.record("TeamModel.everOpened") } }
   /// Left to right; the focused one is the selected profile.
   package internal(set) var panes: [TeamPane] = [] { didSet { Mutations.record("TeamModel.panes") } }
   package internal(set) var focused = 0 { didSet { Mutations.record("TeamModel.focused") } }
@@ -112,6 +114,7 @@ extension DeskModel {
     collapsePane()
     needs.close(restore: false)
     leaveHome()
+    if !team.everOpened { team.everOpened = true }
     team.isOpen = true
     if !nav.sidebarOpen { setSidebar(open: true) }
     nav.focusList()

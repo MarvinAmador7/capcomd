@@ -336,17 +336,26 @@ struct PaneArea: View {
   var body: some View {
     DeskProbe.body("PaneArea")
     let open = model.nav.sidebarOpen
-    return Group {
-      if open, model.team.isOpen {
-        TeamDeck()   // Team: the selected profile (and its splits) in the pane's place
-      } else if open, model.needs.isOpen {
-        NeedsReelScreen()   // the hand or the Needs you heading: the reel takes the pane's place
-      } else if open, let np = model.newProject {
-        HomeView(np: np)
-      } else if open, model.openRunId == nil, model.unreachable {
-        Unreachable()
-      } else {
-        Color.clear
+    let team = open && model.team.isOpen
+    return ZStack {
+      Group {
+        if team {
+          Color.clear
+        } else if open, model.needs.isOpen {
+          NeedsReelScreen()   // the hand or the Needs you heading: the reel takes the pane's place
+        } else if open, let np = model.newProject {
+          HomeView(np: np)
+        } else if open, model.openRunId == nil, model.unreachable {
+          Unreachable()
+        } else {
+          Color.clear
+        }
+      }
+      // Team: the selected profile (and its splits) in the pane's place. Built on its first open and kept, so opening
+      // Team again only shows it (as the opened layer keeps the sidebar and the panes); hidden, it takes no click and no
+      // keyboard.
+      if model.team.everOpened {
+        TeamDeck().opacity(team ? 1 : 0).allowsHitTesting(team).disabled(!team).accessibilityHidden(!team)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
