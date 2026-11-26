@@ -22,6 +22,8 @@ import PerfLoopProbe
   let store: CapcomdStore
   let model: DeskModel
   let thread: FixtureThread
+  /// The Team fixture's daemon (its profile routes), on the `team` fixture only.
+  let teamDaemon: TeamFixtureDaemon?
   var bodies: [(t: Double, view: String, id: String?)] = []
   var events: [(t: Double, name: String, value: Int)] = []
   /// Sequence numbers for events the scenarios make up (asks, decisions): never reused, the store drops duplicate ids.
@@ -37,7 +39,9 @@ import PerfLoopProbe
     guard let w = Desk.world(run.fixture.name) else { throw DeskError(Fixtures.problem(run.fixture.name) ?? "unknown fixture '\(run.fixture.name)'") }
     world = w
     thread = FixtureThread(w)
-    store = CapcomdStore(thread: thread, clientId: "deskbench")
+    // The Team fixture's store has a daemon with the profile routes (and only that one: every other fixture has none).
+    teamDaemon = w.spec.team == true ? TeamFixtureDaemon() : nil
+    store = CapcomdStore(daemonInfo: teamDaemon, thread: thread, clientId: "deskbench")
     w.load(into: store)
     model = DeskModel(store: store)
     DeskProbe.sink = self

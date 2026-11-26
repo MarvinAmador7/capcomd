@@ -24,7 +24,8 @@ public enum BenchCatalog {
   public static let probes = ["AgentRow", "Column", "ColumnComposer", "ColumnHead", "ColumnThread", "CrewTab", "DecisionBar", "EntryRow", "FoldedDeck",
                                "LimitBar", "NeedsReel", "NothingNeedsYou", "OpenGroup", "Pane", "PaneArea", "PaneComposer", "PaneEntryRow", "PaneHead",
                                "PaneThread", "ProjectLabel", "Rail", "Reel", "RootView", "SearchView", "SectionHeading", "Sidebar", "SidebarList",
-                               "TitleBar"]
+                               "TitleBar", "TeamDeck", "TeamFieldRows", "TeamPane", "TeamPaneHead", "TeamProfileBody", "TeamRoster", "TeamRow",
+                               "TeamSheet", "TeamWork"]
 
   /// The frame metrics a scenario may not make worse beyond their band, whatever it climbs on; a replayed gesture's
   /// smoothness too (`swipe`).

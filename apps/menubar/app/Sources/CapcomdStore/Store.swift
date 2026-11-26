@@ -120,6 +120,9 @@ public final class CapcomdStore {
   var branchesAsked: String?
   /// Renaming agents (`agents.title`; AgentTitle.swift): a rename on its way or why the last one failed, per agent.
   let titler: AgentTitling?
+  /// The profile routes (Team.swift): the live daemon adapter's, or a port of a test's or the bench's own.
+  let profilesPort: ProfilesPort?
+  var teamStore: TeamStore?
   public internal(set) var titleActions: [String: TitleAction] = [:]
   /// Restoring archived runs (capability runs.archive; AgentLife.swift): Restore on its way, or why it failed, per run.
   public internal(set) var restoreStates: [String: RestoreState] = [:]
@@ -152,7 +155,7 @@ public final class CapcomdStore {
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
               starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil, thread: ThreadFetching? = nil,
-              projects: ProjectSettingUp? = nil, goals: GoalBranchActing? = nil, titles: AgentTitling? = nil,
+              projects: ProjectSettingUp? = nil, goals: GoalBranchActing? = nil, titles: AgentTitling? = nil, profiles: ProfilesPort? = nil,
               prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
     self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
     self.messenger = messenger; self.daemonInfo = daemonInfo; self.threadSource = thread; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
@@ -160,6 +163,7 @@ public final class CapcomdStore {
     self.projectSetter = projects ?? (daemonInfo as? ProjectSettingUp)
     self.goalActor = goals ?? (daemonInfo as? GoalBranchActing)
     self.titler = titles ?? (messenger as? AgentTitling)
+    self.profilesPort = profiles
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 

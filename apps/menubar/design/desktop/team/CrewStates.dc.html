@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Crew: states and flows</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./affect-tokens.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#0c0c0d}
+a{color:#4fb0fe;text-decoration:none}a:hover{color:#8ccaff}
+.cs-h1{font-size:24px;line-height:32px;font-weight:500;margin:0}
+.cs-h1s{font-size:13px;line-height:20px;color:var(--t2);margin:6px 0 0;max-width:1100px}
+.cs-grid{display:grid;grid-template-columns:repeat(3,736px);column-gap:32px;row-gap:40px;align-items:start}
+.cs-cap{font-size:15px;line-height:20px;font-weight:500;color:var(--t1);margin:0 0 4px}
+.cs-capn{font-size:13px;line-height:20px;color:var(--t2);margin:0 0 12px}
+.cs-box{border-radius:10px;background:var(--panel);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.1);overflow:hidden;--bgc:var(--panel);padding:24px 28px;display:flex;flex-direction:column;gap:12px}
+.cs-box.dim{background:rgba(0,0,0,.35);padding:40px 48px;align-items:center}
+.cs-hd{display:flex;align-items:center;gap:12px}
+.cs-bot{width:44px;height:44px;flex:0 0 44px;border-radius:10px;background:var(--surface);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.1);display:inline-flex;align-items:center;justify-content:center}
+.cs-bot img{width:30px;height:30px;image-rendering:pixelated;display:block}
+.cs-bot.sm{width:32px;height:32px;flex-basis:32px;border-radius:8px}
+.cs-bot.sm img{width:22px;height:22px}
+.cs-ti{font-size:17px;line-height:24px;font-weight:500;color:var(--t1)}
+.cs-su{font-size:12px;line-height:16px;color:var(--t3)}
+.cs-ban{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;background:var(--card);box-shadow:var(--sh-card)}
+.cs-ban .cs-bt{flex:1;min-width:0;font-size:13px;line-height:18px;color:var(--t2)}
+.cs-ban .cs-bt b{color:var(--warn);font-weight:500}
+.cs-g{border-radius:10px;background:var(--card);box-shadow:var(--sh-card);display:flex;flex-direction:column;--bgc:var(--card)}
+.cs-r{display:flex;align-items:center;gap:10px;min-height:40px;padding:6px 12px;white-space:nowrap;font-size:13px}
+.cs-r+.cs-r{box-shadow:inset 0 .5px 0 var(--line)}
+.cs-r .cs-a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--t1)}
+.cs-r .cs-a i{font-style:normal;color:var(--t3)}
+.cs-r .cs-w{font-size:12px;color:var(--t3);display:inline-flex;align-items:center;gap:6px}
+.cs-r .cs-w.need{color:var(--warn);font-weight:500}
+.cs-lb{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.cs-lb .cs-sub{font-size:12px;line-height:16px;color:var(--t3)}
+.cs-lb .cs-sub b{color:var(--t2);font-weight:500}
+.cs-pop{all:unset;box-sizing:border-box;height:24px;padding:0 6px 0 10px;border-radius:5px;background:var(--seg);color:var(--t1);font-size:12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap}
+.cs-pop svg{color:var(--t3)}
+.cs-num{display:inline-flex;align-items:center;height:24px;border-radius:5px;background:var(--seg);font-size:12px;color:var(--t1);overflow:hidden}
+.cs-num span{padding:0 10px;font-variant-numeric:tabular-nums}
+.cs-num button{all:unset;width:20px;height:24px;display:inline-flex;align-items:center;justify-content:center;color:var(--t3);box-shadow:inset .5px 0 0 rgba(255,255,255,.1);cursor:pointer}
+.cs-sheet{width:560px;border-radius:12px;background:var(--pop);box-shadow:var(--sh-pop);display:flex;flex-direction:column;overflow:hidden;--bgc:var(--pop)}
+.cs-sb{padding:20px 20px 16px;display:flex;flex-direction:column;gap:14px}
+.cs-st{font-size:15px;line-height:20px;font-weight:500;color:var(--t1);margin:0}
+.cs-ss{font-size:13px;line-height:20px;color:var(--t2);margin:0}
+.cs-sf{display:flex;align-items:center;gap:8px;padding:12px 20px;box-shadow:inset 0 .5px 0 var(--line)}
+.cs-diff{border-radius:7px;background:var(--code);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.08);font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-size:12px;line-height:20px;padding:6px 0;color:var(--t2)}
+.cs-diff div{padding:0 12px;white-space:pre}
+.cs-diff .p{background:rgba(125,207,159,.08);color:var(--t1)}
+.cs-diff .m{background:rgba(255,107,95,.08);color:var(--t2)}
+.cs-diff .h{color:var(--t4)}
+.cs-fld{display:flex;flex-direction:column;gap:6px}
+.cs-fld label{font-size:12px;line-height:16px;color:var(--t2)}
+.cs-in{all:unset;box-sizing:border-box;height:28px;padding:0 10px;border-radius:6px;background:var(--card);box-shadow:inset 0 0 0 .5px var(--hair);font-size:13px;color:var(--t1)}
+.cs-in.mono{font-size:12px}
+.cs-pick{display:flex;flex-direction:column;border-radius:10px;background:var(--card);box-shadow:var(--sh-card)}
+.cs-pk{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;min-height:44px;padding:6px 12px;font-size:13px;color:var(--t1);cursor:pointer}
+.cs-pk+.cs-pk{box-shadow:inset 0 .5px 0 var(--line)}
+.cs-pk.sel{background:rgba(79,176,254,.16);box-shadow:inset 0 0 0 1px rgba(79,176,254,.5);border-radius:8px}
+.cs-pk .cs-lb .cs-sub{color:var(--t3)}
+.cs-ic{width:16px;flex:0 0 16px;display:inline-flex;justify-content:center;color:var(--t3)}
+.cs-menu{width:300px;border-radius:10px;background:var(--pop);box-shadow:var(--sh-pop);padding:5px;display:flex;flex-direction:column}
+.cs-mh{font-size:11px;line-height:16px;font-weight:500;color:var(--t3);padding:6px 8px 4px}
+.cs-mi{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:5px;font-size:13px;color:var(--t1);white-space:nowrap}
+.cs-mi.sel{background:var(--info);color:#fff}
+.cs-mi .cs-mr{margin-left:auto;font-size:12px;color:var(--t3)}
+.cs-mi.sel .cs-mr{color:rgba(255,255,255,.8)}
+.cs-mi.off{color:var(--t3)}
+.cs-sep{height:.5px;background:var(--line);margin:5px 8px}
+.cs-hc{width:300px;border-radius:10px;background:var(--pop);box-shadow:var(--sh-pop);padding:12px;display:flex;flex-direction:column;gap:10px}
+.cs-ph{display:flex;align-items:center;gap:8px;height:44px;padding:0 14px;border-radius:10px;background:var(--panel);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.1);white-space:nowrap;width:100%}
+.cs-ph .cs-pt{font-weight:500;color:var(--t1)}
+.cs-ph .cs-pp{color:var(--t1);text-decoration:underline;text-decoration-color:rgba(255,255,255,.3);text-underline-offset:3px}
+.cs-tgb{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;height:36px;width:100%;cursor:pointer;color:var(--t1);--bgc:#151517}
+.cs-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.cs-cv{color:var(--t3);display:inline-flex}
+</style>
+</helmet>
+<div class="ax" style="width: 2368px; height: 1560px; padding: 48px; display: flex; flex-direction: column; gap: 32px; background: var(--page); overflow: hidden">
+<div>
+<h1 class="cs-h1">Crew · states and flows</h1>
+<p class="cs-h1s">Native sheets and menus, the affect pass's tokens. Amber only where a decision is yours and something waits on it (a changed skill holds that profile's spawns back). Every edit says where the value comes from and where it will be saved.</p>
+</div>
+<div class="cs-grid">
+
+<section>
+<p class="cs-cap">1 · A skill changed: the profile needs you</p>
+<p class="cs-capn">The project's <span class="mono">threat-model</span> skill changed in a pull. Until you trust it, no agent of this profile starts (a spawn is refused <span class="mono">untrusted</span>). The roster row shows the amber dot; the Needs you count includes it only while a run is waiting on it.</p>
+<div class="cs-box">
+<div class="ph" style="margin: -24px -28px 0"><span class="av s24"><img src="/_blob/0dc133e51637dbd0dae2c2fba37bec46" alt=""></span><span class="pt">Security critic</span><span class="pp">reviews</span><span class="ps need">· needs you</span><span class="sp"></span><span class="ctl"><button class="ib s24" aria-label="More"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></span></div>
+<div class="cs-ban"><span class="cs-ic" style="color: var(--warn)"><span class="dot"></span></span><span class="cs-bt"><b>Needs you</b> · <span class="mono">threat-model</span> changed since you trusted it. Its agents won't start until you review it.</span><button class="btn sm">Review…</button></div>
+<div class="cs-g">
+<div class="cs-r"><span class="cs-a"><span class="mono" style="font-size: 12px">threat-model</span> <i>· from the package</i></span><span class="cs-w need"><span class="dot"></span>changed · not trusted</span></div>
+<div class="cs-r"><span class="cs-a"><span class="mono" style="font-size: 12px">owasp-top-10</span> <i>· yours</i></span><span class="cs-w">no trust needed</span></div>
+</div>
+</div>
+</section>
+
+<section>
+<p class="cs-cap">2 · Review and trust (a sheet)</p>
+<p class="cs-capn">What <span class="mono">capcomd profiles trust</span> asks in the terminal, as a sheet: each changed file with its diff, trusted once per content hash. Cancel leaves the profile held back.</p>
+<div class="cs-box dim">
+<div class="cs-sheet">
+<div class="cs-sb">
+<p class="cs-st">Trust the changes to Security critic?</p>
+<p class="cs-ss">Skills and personas are text its agents read as instructions. Trust a file once; a later change asks again.</p>
+<div class="cs-g">
+<div class="cs-r"><span class="cs-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h10.5L19 8v11.5H5z"></path><path d="M9 11h6M9 15h4"></path></svg></span><span class="cs-a mono" style="font-size: 12px">skills/threat-model/SKILL.md</span><span class="cs-w"><span style="color: var(--ok)">+6</span><span style="color: var(--bad)">−2</span></span></div>
+</div>
+<div class="cs-diff"><div class="h">@@ Check for @@</div><div>- Injection in SQL and shell calls</div><div class="m">- Secrets in logs</div><div class="p">+ Secrets in logs, traces and error messages</div><div class="p">+ Tokens passed on a URL</div><div class="p">+ Rate limits that a missing key bypasses</div><div class="h">  … 3 more lines</div></div>
+<p class="cs-su mono">sha256:9f2c…e41a → 41ab…07d3 · changed in 7c1d2e0 by marvinamador7</p>
+</div>
+<div class="cs-sf"><button class="btn ghost">Open in editor</button><span class="sp"></span><button class="btn">Cancel</button><button class="btn pri">Trust<span class="kbd">↵</span></button></div>
+</div>
+</div>
+</section>
+
+<section>
+<p class="cs-cap">3 · The settings row, opened</p>
+<p class="cs-capn">One row of stacked icons under SOUL.md, like a thread's tool group; a click opens every setting in place. A value set elsewhere says where, with a Reset.</p>
+<div class="cs-box" style="background: #151517">
+<button class="tg cs-tgb" aria-expanded="true"><span class="stk"><span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#e0805a" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6 6 18"></path></svg></span><span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"></path><circle cx="12" cy="12" r="2.8"></circle></svg></span><span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5a8 8 0 1 1 15 0"></path><path d="m12 13 3.5-4"></path></svg></span><span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h10.5L19 8v11.5H5z"></path><path d="M9 11h6M9 15h4"></path></svg></span></span><span class="cs-sum">Opus 5.5 · high · Cloud · read-only · alone · 40 turns · 30 min · 2 skills</span><span class="cs-cv"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></span></button>
+<div class="cs-g">
+<div class="cs-r"><div class="cs-lb">Model</div><button class="cs-pop">Claude Code<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button><button class="cs-pop">Opus 5.5<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button><button class="cs-pop">High<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button></div>
+<div class="cs-r"><div class="cs-lb">Runs on</div><button class="cs-pop">Cloud · boxd<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button><button class="cs-pop">default<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button></div>
+<div class="cs-r"><div class="cs-lb">Works</div><button class="cs-pop">Read-only, reports<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button><button class="cs-pop">Leads no one<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button></div>
+<div class="cs-r"><div class="cs-lb">Skills</div><span class="cs-w"><span class="mono t1">threat-model</span>·<span class="mono t1">owasp-top-10</span></span><button class="btn sm ghost">Add</button></div>
+<div class="cs-r"><div class="cs-lb">Turns<span class="cs-sub">from <b>reviewer</b></span></div><span class="cs-num" role="group" aria-label="Turns"><span>40</span><button aria-label="Less">−</button><button aria-label="More">+</button></span></div>
+<div class="cs-r"><div class="cs-lb">Time<span class="cs-sub">this project · <a href="#">Reset</a></span></div><span class="cs-num" role="group" aria-label="Time"><span>30 min</span><button aria-label="Less">−</button><button aria-label="More">+</button></span></div>
+<div class="cs-r"><div class="cs-lb">Spend</div><button class="cs-pop">No limit<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button></div>
+</div>
+</div>
+</section>
+
+<section>
+<p class="cs-cap">4 · New profile (+)</p>
+<p class="cs-capn">Start from one you have (it <span class="mono">extends</span> it, so it keeps getting the parent's changes), or install one. Name and title only; everything else is the page, in Edit.</p>
+<div class="cs-box dim">
+<div class="cs-sheet">
+<div class="cs-sb">
+<p class="cs-st">New profile</p>
+<div class="cs-pick">
+<button class="cs-pk"><span class="cs-bot sm"><img src="/_blob/19abdf49bc171da273764dc7efe875d1" alt=""></span><span class="cs-lb">Builds, like Worker<span class="cs-sub">edits and tests on its own branch</span></span></button>
+<button class="cs-pk sel"><span class="cs-bot sm"><img src="/_blob/6c54988eef395af5989193b1b8ed14a8" alt=""></span><span class="cs-lb">Reviews, like Reviewer<span class="cs-sub">read-only, answers with a verdict</span></span></button>
+<button class="cs-pk"><span class="cs-bot sm"><img src="/_blob/be43c9a3e2cbc7fae8b51fe00a5ecaa1" alt=""></span><span class="cs-lb">Leads, like Lead<span class="cs-sub">splits a part among helpers</span></span></button>
+<button class="cs-pk"><span class="cs-ic" style="width: 32px; flex-basis: 32px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"></path></svg></span><span class="cs-lb">Install from GitHub…<span class="cs-sub">a profile someone shared</span></span></button>
+</div>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+<div class="cs-fld"><label for="cs-t">Title</label><input id="cs-t" class="cs-in" value="Accessibility critic"></div>
+<div class="cs-fld"><label for="cs-n">Name</label><input id="cs-n" class="cs-in mono" value="accessibility-critic"></div>
+</div>
+<div style="display: flex; align-items: center; gap: 8px"><span class="cs-su">Keep it in</span><span class="seg"><button class="on">This project</button><button>Yours, every project</button></span></div>
+</div>
+<div class="cs-sf"><span class="sp"></span><button class="btn">Cancel</button><button class="btn pri">Create<span class="kbd">↵</span></button></div>
+</div>
+</div>
+</section>
+
+<section>
+<p class="cs-cap">5 · Install from GitHub</p>
+<p class="cs-capn">The package is shown before it is copied: who it is, which files it brings, what will need your trust. No code runs: profiles are text and settings.</p>
+<div class="cs-box dim">
+<div class="cs-sheet">
+<div class="cs-sb">
+<p class="cs-st">Install a profile</p>
+<div class="cs-fld"><label for="cs-src">Repository</label><input id="cs-src" class="cs-in mono" value="acme/capcomd-profiles#security-critic"></div>
+<div class="cs-g">
+<div class="cs-r" style="padding: 10px 12px"><span class="cs-bot sm"><img src="/_blob/0dc133e51637dbd0dae2c2fba37bec46" alt=""></span><div class="cs-lb">Security critic<span class="cs-sub">Reviews a change for security regressions and reports a verdict.</span></div><span class="badge">MIT</span></div>
+<div class="cs-r"><span class="cs-a"><span class="mono" style="font-size: 12px">profile.yaml</span> <i>· extends reviewer</i></span><span class="cs-w">settings</span></div>
+<div class="cs-r"><span class="cs-a"><span class="mono" style="font-size: 12px">SOUL.md</span> <i>· persona</i></span><span class="cs-w">you'll trust it once</span></div>
+<div class="cs-r"><span class="cs-a"><span class="mono" style="font-size: 12px">skills/threat-model</span> <i>· skill</i></span><span class="cs-w">you'll trust it once</span></div>
+</div>
+<div style="display: flex; align-items: center; gap: 8px"><span class="cs-su">Install for</span><span class="seg"><button class="on">You, every project</button><button>This project</button></span></div>
+</div>
+<div class="cs-sf"><span class="cs-su mono">main @ 3f2a1c4</span><span class="sp"></span><button class="btn">Cancel</button><button class="btn pri">Install<span class="kbd">↵</span></button></div>
+</div>
+</div>
+</section>
+
+<section>
+<p class="cs-cap">6 · Where profiles meet you outside Crew</p>
+<p class="cs-capn">A pane header's role word opens its profile (hover shows a small card). The Home composer's driver menu lists every profile that can plan, with why one isn't ready.</p>
+<div class="cs-box" style="gap: 16px">
+<div class="cs-ph"><span class="av s24"><img src="/_blob/0dc133e51637dbd0dae2c2fba37bec46" alt=""></span><span class="cs-pt">review invoice rounding</span><span class="cs-pp">security-critic</span><span class="mono t3" style="font-size: 12px">7c1d</span><span class="t3">· working</span></div>
+<div style="display: flex; gap: 24px; align-items: flex-start">
+<div class="cs-hc">
+<div class="cs-hd"><span class="cs-bot sm"><img src="/_blob/0dc133e51637dbd0dae2c2fba37bec46" alt=""></span><div><div style="font-weight: 500">Security critic</div><div class="cs-su">Opus 5.5 · high · read-only</div></div></div>
+<div class="cs-su" style="font-size: 13px; line-height: 18px; color: var(--t2)">Reviews a change for security regressions and reports a verdict.</div>
+<div style="display: flex"><span class="sp"></span><button class="btn sm">Open profile</button></div>
+</div>
+<div class="cs-menu" role="menu" aria-label="Driver">
+<div class="cs-mh">Plans this run</div>
+<div class="cs-mi sel" role="menuitem"><span class="av"><img src="/_blob/92fe4410fe708ce6968e19b09b4fae03" alt=""></span>Planner<span class="cs-mr">Opus 5.5</span></div>
+<div class="cs-mi" role="menuitem"><span class="av"><img src="/_blob/be43c9a3e2cbc7fae8b51fe00a5ecaa1" alt=""></span>Lead<span class="cs-mr">Sonnet 5.5</span></div>
+<div class="cs-mi off" role="menuitem"><span class="av" style="opacity: .55"><img src="/_blob/401ca716ed12ea1d10d8d0338cb53a47" alt=""></span>Codex planner<span class="cs-mr">not logged in</span></div>
+<div class="cs-sep"></div>
+<div class="cs-mi" role="menuitem">Open Crew…</div>
+</div>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2368,"height":1560}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

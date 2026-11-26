@@ -160,7 +160,7 @@ extension DeskModel {
   }
 
   /// The panes show (the sidebar is open, a project is open, and neither Home nor the Needs you reel has their place).
-  package var panesShown: Bool { nav.sidebarOpen && openRunId != nil && newProject == nil && !needs.isOpen && !panes.isEmpty }
+  package var panesShown: Bool { nav.sidebarOpen && openRunId != nil && newProject == nil && !needs.isOpen && !team.isOpen && !panes.isEmpty }
 
   // MARK: splits (⌘D, ⇧⌘D, ⌘W, ⌘-click, ⌘↩ in the palette)
 
@@ -191,6 +191,7 @@ extension DeskModel {
   /// takes the focus from. Opened only, with a project's panes showing and not expanded; no room or no agent left:
   /// the system beep.
   package func split(down: Bool, agent: String? = nil) {
+    if team.isOpen, agent == nil { return down ? beep() : splitTeam() }
     guard panesShown, !nav.expanded else { return }
     guard let a = agent ?? nextAgentForSplit(), roomToSplit(down: down) else { return beep() }
     var p = panes
@@ -248,6 +249,7 @@ extension DeskModel {
   package func toggleExpand() { if nav.expanded { collapsePane() } else { expandPane() } }
 
   package func expandPane(_ id: Int? = nil) {
+    if team.isOpen { return expandTeamPane(team.focused) }
     guard panesShown else { return }
     if let id { focusPane(id) }
     if !nav.expanded { nav.expanded = true }

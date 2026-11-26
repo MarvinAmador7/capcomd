@@ -35,7 +35,8 @@ struct SidebarView: View {
     DeskProbe.body("Sidebar")
     return VStack(spacing: 0) {
       SidebarHeader()
-      SidebarList()
+      // Team pressed: the roster by project (TeamSidebar.swift) in the agents' place.
+      if model.team.isOpen { TeamRosterList() } else { SidebarList() }
       SidebarFooter()
     }
     .padding(.horizontal, 8).padding(.bottom, 6)
@@ -71,8 +72,9 @@ struct SidebarFooter: View {
   var body: some View {
     HStack(spacing: 2) {
       SideButton(glyph: AnyView(HouseGlyph().stroke(style: StrokeStyle(lineWidth: 1.3, lineJoin: .round)).frame(width: 15, height: 15)),
-                 on: model.homeShown, help: "Home (⌘0)", label: "Home") { model.toggleHome() }
+                 on: model.homeShown && !model.team.isOpen, help: "Home (⌘0)", label: "Home") { model.toggleHome() }
       Spacer(minLength: 0)
+      TeamButton()
       HistoryButton(size: Theme.Desk.Side.button)
       SettingsButton(size: Theme.Desk.Side.button)
     }

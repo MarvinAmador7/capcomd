@@ -18,6 +18,7 @@ extension DeskModel {
   package func setSidebar(open: Bool) {
     guard nav.sidebarOpen != open else { return }
     if !open { collapsePane() }
+    if !open, team.isOpen { team.isOpen = false }   // Team lives in the opened sidebar
     if open {
       refreshSidebar(all: true)
       // The pane shows the open project's focused agent; with none yet, the one that asks, else its planner.

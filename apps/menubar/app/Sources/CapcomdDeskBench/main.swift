@@ -22,6 +22,7 @@ let drivers: [String: ScenarioBody] = [
   "pane-expand": DriveSplits.paneExpand, "expand-switch": DriveSplits.expandSwitch,
   "needs-open": NeedsDrive.needsOpen, "needs-answer": NeedsDrive.needsAnswer, "needs-arrive": NeedsDrive.needsArrive,
   "needs-step": NeedsDrive.needsStep, "needs-empty": NeedsDrive.needsEmpty, "needs-swipe": NeedsDrive.needsSwipe,
+  "team-open": DriveTeam.teamOpen, "team-switch": DriveTeam.teamSwitch, "team-settings": DriveTeam.teamSettings,
 ]
 
 let bench = MainActor.assumeIsolated {

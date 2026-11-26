@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Crew: notes</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./affect-tokens.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#0c0c0d}
+a{color:#4fb0fe;text-decoration:none}a:hover{color:#8ccaff}
+.cn-h1{font-size:24px;line-height:32px;font-weight:500;margin:0}
+.cn-h2{font-size:15px;line-height:20px;font-weight:500;margin:0 0 8px;color:var(--t1)}
+.cn-p{font-size:13px;line-height:20px;color:var(--t2);margin:0}
+.cn-l{font-size:13px;line-height:20px;color:var(--t2);margin:0;padding-left:18px}
+.cn-l li{margin-bottom:6px}
+.cn-l b{color:var(--t1)}
+.cn-l .mono{font-size:12px;color:var(--t1)}
+</style>
+</helmet>
+<div class="ax" style="width: 900px; height: 1560px; padding: 48px; display: flex; flex-direction: column; gap: 28px; background: var(--page); overflow: hidden">
+<div>
+<h1 class="cn-h1">Crew · notes and open choices</h1>
+<p class="cn-p" style="margin-top: 6px">A profile drawn as a crew member, not a settings form: who it is, what it knows, how it works, what it has done, where it comes from. Settings rows appear only in Edit.</p>
+</div>
+<section>
+<p class="cn-h2">Chosen: A</p>
+<ul class="cn-l">
+<li><b>The roster beside the pane</b>, by project, rows named by each profile's own name. B (the grid) was dropped.</li>
+</ul>
+</section>
+<section>
+<p class="cn-h2">Served by the daemon today: no server work</p>
+<ul class="cn-l">
+<li><span class="mono">GET /v1/profiles</span> (per project with <span class="mono">repo</span>): title, description, the daemon's <b>does</b> and <b>fit</b> sentences, tags, provider, model, effort, cost, tool mode, who it leads, whether it reports, readiness, skills with trust, an untrusted persona or sandbox file, version, layer, and the chain of files that made it.</li>
+<li><span class="mono">GET/PUT /v1/profiles/{name}</span>: every value as a typed row with the file that sets it. That is the page's live controls (board 3), including the conflict when the file changed underneath.</li>
+<li><span class="mono">profile.changed</span> on the daemon stream keeps the page live. <span class="mono">GET /v1/run-options</span> <span class="mono">planners</span> is the driver menu (board 6).</li>
+<li><b>By project</b>: <span class="mono">GET /v1/profiles?repo=</span> per project the app knows, plus the user layer once as "All projects".</li>
+</ul>
+</section>
+<section>
+<p class="cn-h2">Needs daemon work (ADR-024 lists most as not built)</p>
+<ul class="cn-l">
+<li><b>One face per profile</b>: the avatar seed on <span class="mono">GET /v1/profiles</span> rows and <span class="mono">agent.spawned</span>, so its agents wear the profile's bot everywhere. Small.</li>
+<li><b>Recent work</b>: a per-profile query over agents (counts this week and the last few, with outcome). Medium. Without it the section is left out, not faked.</li>
+<li><b>Trust from the app</b>: a route that trusts the hashes shown, as <span class="mono">capcomd profiles trust</span> does. The diff needs the text you last trusted; today only its hash is kept. Medium.</li>
+<li><b>New, Remove, Install</b>: <span class="mono">PUT</span> of a new name (with <span class="mono">extends</span>), <span class="mono">DELETE</span>, <span class="mono">POST /v1/profiles/install</span> with a preview before copying. The CLI has all three; the routes wait for a client.</li>
+<li><b>SOUL.md inline</b>: a route that reads and writes a profile's persona text. Today the API never serves prompt text (by design), and a project's persona edited here must be trusted again, as any change to it is. Medium.</li>
+<li><b>Save to</b> (board 3): <span class="mono">PUT</span> writes the profile's own file today; writing a project's <span class="mono">override.yaml</span> instead is new.</li>
+</ul>
+</section>
+<section>
+<p class="cn-h2">Open choices (yours)</p>
+<ul class="cn-l">
+<li><b>Roster</b>: decided, by project, with "All projects" last for yours that apply everywhere.</li>
+<li><b>Recent work</b> on the page, or leave history to History when it exists?</li>
+<li><b>Needs you</b>: a changed skill shows amber on Crew always, and counts in Needs you only while a run waits on it (drawn). Or count it always?</li>
+<li><b>Crew's shortcut</b>: ⌘1–9 open projects and ⌘0 is Home. ⇧⌘C, or none?</li>
+</ul>
+</section>
+<section>
+<p class="cn-h2">How it would ship</p>
+<ul class="cn-l">
+<li><b>1 · App only</b>: Crew in the sidebar's foot (beside Home, History, Settings), the sidebar listing the profiles, the profile as a pane you edit in place, the role word opening a profile, the driver menu. All on today's routes.</li>
+<li><b>2 · Daemon, then app</b>: avatar seed, trust sheet, New / Remove / Install, recent work.</li>
+</ul>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":900,"height":1560}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

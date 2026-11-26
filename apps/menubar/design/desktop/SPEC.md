@@ -34,6 +34,7 @@ same PR. Behaviour conflicts go to the owner.
 | Move the focus between panes (⌃← ⌃→, a click) | first frame ≤ 50 ms; no thread renders | Focus, "one of several" and "expanded" are a small observable per pane (`PaneState`): a focus change re-renders the two headers and strokes it touches (`split-focus`). A thread item re-renders its own pane only (`split-burst`). |
 | Expand or collapse a pane (⇧⌘↩, Esc) | first frame ≤ 50 ms; no thread rebuilt | The expanded pane is the same view re-framed to the window, the others hidden, the sidebar hidden; laid out once at the final frames, and each pane keeps its thread's distance from the foot across any resize (`pane-expand`, `expand-switch`). Not met yet on a loaded machine: re-laying a long thread at the new width costs about as much as building it (see the PR's numbers). |
 | Search ⌘K | open: first frame ≤ 50 ms; a keystroke's results within a frame (16.7 ms) with 250+ items | Titles only, folded once per source change; a keystroke compares integer arrays and narrows from the last query; at most 24 rows a group in a lazy list. The palette is built hidden once the window has drawn, so the first ⌘K only shows it; then AppKit's first key equivalent (the menus filled) and the first text field taking the keyboard are done ahead, at rest, without showing anything or moving the keyboard (`desk.prewarm`). Not met yet on the first ⌘K: it still costs about a frame more than a later ⌘K, the code that moves the keyboard into the field and renders the palette running for the first time in the process (cold method caches); laying the hidden palette out ahead didn't change it. Bench: `palette-first`, `palette-open`, `palette-type`, `palette-keys` on the `search` fixture. |
+| Open Team, switch profile, open the settings row (§2.2) | first frame ≤ 50 ms | The roster and each profile are small observables of their own (`TeamModel`, `TeamProfileSlice`), fed by the store's `TeamStore`, which reports its own changes: a profile loading or a value written never wakes a column, the agents' list or the menu bar, and a run's change never re-renders Team. Roster rows and settings rows are Equatable (`team-open`, `team-switch`, `team-settings`). |
 | Markdown | no parsing on the main thread | The daemon's `blocks/1` tree is already parsed; views only lay it out. |
 
 Measure with Instruments (SwiftUI + Animation Hitches) on a 17-agent fake-host run (live-app-testing recipe) before a
@@ -45,9 +46,9 @@ One window, folded (the default) or opened (§2.1). Folded, it has three parts: 
 
 - **Rail** (C folded: `leftnav/NavC`, `rex/RexStates` "Folded"; 60 pt wide, under the title bar): the **Needs you** hand
   (SF `hand.raised`; the normal icon colour with an amber count badge while anything needs you, grey with none at
-  zero; a click opens the Needs you reel, §2.1), **Home** (the prototype's house; pressed while Home shows; ⌘0), **Crew**
-  and **History** (no screens yet: shown, disabled), and **Settings** at its foot (the app's Settings window). 34 pt
-  buttons, 9 pt corners, 6 pt apart.
+  zero; a click opens the Needs you reel, §2.1), **Home** (the prototype's house; pressed while Home shows; ⌘0), **Team**
+  (opens the sidebar on Team, §2.2; disabled on a daemon without `profiles`) and **History** (no screen yet: shown,
+  disabled), and **Settings** at its foot (the app's Settings window). 34 pt buttons, 9 pt corners, 6 pt apart.
 - **Title bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content): traffic lights, then the **sidebar button**
   (SF `sidebar.left`, 30 pt, at x 84 pt: where the opened sidebar has it too, so it never moves; ⌃⌘S), then the **projects**, then on the right **Follow**, **Actions ⌘K**, **+**. Boards:
   `ReelStack`, `ReelTabs`, `Home`, `rex/RexStates`. (Home moved to the rail.)
@@ -234,7 +235,7 @@ the window is the sidebar and one agent's pane, on the reel's dark ground (#0E0E
   - Once the list outgrows the window, projects you aren't looking at fold to one 28 pt line (chevron, place, name, up
     to three heads); the selected one and anything in Needs you never fold; a click (or → / Return) unfolds one and it
     stays unfolded.
-  - The footer (40 pt): Home on the left; History (disabled: no screen yet) and Settings on the right.
+  - The footer (40 pt): Home on the left; Team (§2.2), History (disabled: no screen yet) and Settings on the right.
 - **Pane** (8 pt from the window's top, right and bottom; 11 pt corners; .5 pt white 9 % ring, the 1 pt amber ring
   while it asks): the reel's AppKit column in its pane style. Its 44 pt header: the head (24 pt), the title (13 pt
   semibold; a double-click renames it), the profile (lowercase), the short ID (the last 4 of the agent's id, mono 11.5
@@ -275,6 +276,67 @@ the window is the sidebar and one agent's pane, on the reel's dark ground (#0E0E
 - **Keyboard** in the list (it takes the keyboard when the sidebar opens, or on a click): ↑ ↓ move the cursor (the
   system focus ring) over rows, folded projects and Finished; Return shows the agent (or unfolds); → unfolds, ← folds
   the project (or Finished).
+
+## 2.2 Team
+
+Boards: `team/CrewProfile.dc.html` (the design; the boards say Crew, the app says Team), `team/CrewStates.dc.html` (only
+inset 3, the settings row opened, is built; the trust banner and sheet, New profile, Install and the hover card and
+driver menu are not), `team/CrewNotes.dc.html` (daemon facts and phasing). Where the boards and this section differ on a
+measurement, the boards win. Labels and values only: no sentence explains anything.
+
+- **The Team button**: in the opened sidebar's foot (Home on the left; Team, History, Settings on the right; SF
+  `person.2`, 28 pt) and on the folded rail (34 pt), where it opens the sidebar first. Pressed while Team shows; again,
+  Team closes (back to the open project's panes, else Home). Home (⌘0, +), the Needs you hand, a project (a deck,
+  ⌘1–9, Search ⌘K) and folding the sidebar leave it. Disabled on a daemon without capability `profiles`.
+- **The roster** (CrewProfile's `.sb`), in the agents' list's place: one quiet project label per project the app knows
+  (`GET /v1/projects/known`; the agents sidebar's 24 pt label, folder glyph, 2 pt above the first and 14 pt above the
+  next), its own profiles under it (`GET /v1/profiles?repo=<checkout>`, the project layer only), then **All projects**
+  (`square.3.layers.3d`) for the user's own (`GET /v1/profiles`, the user layer; an unknown layer is the user's;
+  capcomd's bundled profiles aren't listed). No project picker. A row is the sidebar's 28 pt line: the profile's bot (14
+  pt in an 18 pt box; at 55 % when its login isn't there), its name (`title` when it has one, else the profile's name,
+  13 pt), and its role word on the right (11.5 pt, tertiary): **plans** (`toolMode` orchestrate, or tagged plan),
+  **leads** (`canLead`), **reviews** (read-only (`fit` starts "read-only") and `canReport`, or tagged review), else
+  **builds**. Selected: the pill; shown in another split: the faint tint. ⌘-click opens it beside the focused pane. ↑ ↓
+  move the selection.
+- **The pane**: the reel's pane (8 pt from the window's top, right and bottom; 11 pt corners; the column's fill and .5 pt
+  ring; in a split the focused one has the blue 1 pt ring). Its 44 pt header as an agent's: the bot (24 pt), the name
+  (13 pt medium), the role word, "· ready" (or the daemon's `readiness`), then split right (⌘D: the next profile no pane
+  shows, refused under 340 pt), ••• (Copy Profile Name, Show in Finder) and expand (⇧⌘↩: the pane takes the window, 52
+  pt header in the title bar's band with the Needs you hand and arrows-in; Esc back). Another split's controls: × and
+  expand. No Edit button, no version in the header.
+- **The body**: a centred 680 pt column, 36 pt above, 40 pt below, the bottom fading from 88 %.
+  - The bot (64 pt box, 14 pt corners, #1C1C1E, a .5 pt ring; its face 44 pt) beside the title (22/30 pt medium,
+    edited in place: a hairline ring on hover and while editing; Return or leaving the field writes `identity.title`,
+    emptied it goes back to the name). A click on the bot gives it a new face: a new `identity.avatar.seed` (capability
+    `profiles.avatar`; without it the bot is the app's own, from the profile's name and role, and doesn't change).
+  - The launcher, 22 pt under: Home's composer card and tool row (the same views: `ComposerCard`, the folder chip, the
+    goal, +, This Mac / Cloud, the model chip, the mic, send). The chip is the profile's project (the user's own: the
+    composer's project, + to choose one). "Give <name> a task…". The model chip shows the profile's harness, model and
+    effort; its menu changes them in the profile's file. Send (Return) starts a run of the profile: `POST /v1/runs`
+    `profile` for one that doesn't plan, `planner` for one that plans where the daemon has `runs.planner` (else no
+    send); the run opens once the feed lists it. A refusal shows the daemon's sentence under the goal.
+  - The sheet, tucked 14 pt under the card's bottom edge, 10 pt in from its sides (#151517, 14 pt bottom corners, a .5 pt
+    ring, 18/16/6 inside): **SOUL.md** (capability `profiles.persona`, `GET /v1/profiles/{name}/persona`; absent
+    without it or without a persona): its file's name (11.5 pt mono), two 13/20 lines fading out, the expand button,
+    which opens it in place for editing (`PUT …/persona {text, rev}`, written as typing pauses and on close; no Save).
+    Then **one settings row**, the thread's call group (`GroupTile` stacks): 40 pt, a hairline on top, the tiles
+    (harness, place, read-only, limits, skills), the summary at 12.5 pt ("Opus 5.5 · high · Cloud · read-only · alone ·
+    40 turns · 30 min · 2 skills": only what the profile says) and the chevron. A click opens it in place (0.2 s
+    ease-out, opacity and a 4 pt rise; Reduce Motion: a fade) into the rows of `GET /v1/profiles/{name}` (capability
+    `profiles.edit`) in one card (CrewStates inset 3: 40 pt rows at 6/12, hairlines): the label (13 pt) with its source
+    under it ("from reviewer" for an inherited value, "this project" / "yours" for an override) and Reset (`null`) where
+    its own file overrides an inherited value; then its control: a choice a pop-up (24 pt, 5 pt corners, #2C2C2F), a
+    number − / + (turns by 5, times by 5 min), a toggle a mini switch, text a field, a list its tags and Add, anything
+    else read-only. Every change is written at once (`PUT /v1/profiles/{name}` with the `rev` it was read at; changes
+    made meanwhile go together after it); a 409 reads it again and sends the change once more; a 403 makes the rows
+    read-only; a 422 shows the daemon's sentence. The title, the bot and the persona aren't rows (they are above).
+  - **Recent work** (capability `profiles.work`, `GET /v1/profiles/{name}/work?limit=5`; absent without it): 28 pt
+    above, an 11 pt medium uppercase header, then a card of 40 pt rows: the profile's bot, the agent's title and " ·
+    project", the outcome word (only the word coloured: ok for merged and passed, bad for found issues and failed) and
+    how long ago. A row opens that agent.
+  - The foot, 24 pt above (12 pt tertiary): "Installed from <source> · version N" and Check for updates (an installed
+    profile: its `sharing.source` row; `capcomd profiles update <name> --dry-run` in Terminal), and Show in Finder for
+    any profile with a file.
 
 # 3. Follow, overview, zoom
 

@@ -46,6 +46,7 @@ extension DeskModel {
     menuOpen = false; paletteOpen = false; stopAsked = false
     collapsePane()   // Home takes the pane's place beside the sidebar
     needs.close(restore: false)
+    if team.isOpen { team.isOpen = false }
     if let np = newProject { if focus { np.focusSerial += 1 }; return }
     let np = newProjectDraft ?? NewProjectModel()
     newProjectDraft = nil
@@ -305,6 +306,8 @@ extension DeskModel {
   /// ⌘W: Home goes back to the open project; else the open project folds into its deck (it keeps running), or a
   /// finished one is removed from the title bar.
   package func foldShortcut() {
+    // Team: ⌘W closes the focused profile's split; with one left, Team closes.
+    if team.isOpen { if team.panes.count > 1 { closeTeamPane(team.focused) } else { closeTeam() }; return }
     if newProject != nil { closeNewProject(); return }
     // Opened with splits: ⌘W closes the focused pane; with one pane left it folds the project, as approved.
     if panesShown, panes.count > 1 { closePane(panes.focused); return }
@@ -384,6 +387,11 @@ enum SetupTerminal {
       echo
       echo "When you're logged in, go back to capcomd."
       """)
+  }
+  @discardableResult
+  static func profileUpdate(name: String, project: String?) -> Bool {
+    let q = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+    return script(name: "profile-update", (project.map { "cd \(q($0)) || exit 1\n" } ?? "") + "capcomd profiles update \(q(name))\(project != nil ? " --project" : "") --dry-run")
   }
   @discardableResult
   static func setUpProject(in folder: String) -> Bool {

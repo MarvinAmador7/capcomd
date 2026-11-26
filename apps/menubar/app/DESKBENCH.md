@@ -111,6 +111,13 @@ its run when the median is over it; the frame budgets are information.
   a real Esc), `needs-swipe`), on `needs5` (their default; `needs20` for twenty across eight). Each rep starts with
   every fixture ask asking and the reel closed. Ink: the reel.
 
+- Team (SPEC §2.2), on `team` (their default): `team-open` (the Team button in the sidebar's foot clicked, a real
+  click, then again: the frame with the roster and the profile's pane header, 50 ms; checks `opened`, `roster`,
+  `closed`), `team-switch` (roster rows clicked across projects and All projects: the frame with that profile's header,
+  50 ms; checks `switched`, `isolation`: no reel or agent pane body), `team-settings` (an installed profile's settings
+  row opened and closed in place, then Turns + written through PUT; checks `summary`, `rows`, `written`). Ink: the
+  sidebar and the pane's place (`team-pane`).
+
 A scenario whose data isn't `crew17`'s has its own fixture (`palette-*`: `search`, `needs-*`: `needs5`): the manifest
 says so (`scenarios[].fixture`), and perfloop, which always passes `--fixture`, passes that one unless you name another.
 
@@ -137,7 +144,9 @@ it isn't).
 
 `list` names them; `fixture NAME` says what one builds. `solo` (1 agent), `trio` (3), `crew17` (SPEC's 17-agent
 reference, the default), `crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32), `crew`
-(the family sweeps vary), `search` (60 projects, Search ⌘K's), `needs5` and `needs20` (the Needs you reel's asks).
+(the family sweeps vary), `search` (60 projects, Search ⌘K's), `needs5` and `needs20` (the Needs you reel's asks), `team` (two small runs, and a
+daemon with the profile routes: `DeskBenchKit/TeamFixture.swift`, two projects' profiles and the user's own, as
+`client/mock/profiles.ts` serves them to the app).
 Same name, same bytes, every time (a seeded generator: markdown with headings/lists/code/tables, tool calls with diffs,
 thinking, handoffs, errors, images as attachments, asks). Generated worlds are made once per process; every rep loads
 its own copy into a fresh store.

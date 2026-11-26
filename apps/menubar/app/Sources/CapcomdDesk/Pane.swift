@@ -337,7 +337,9 @@ struct PaneArea: View {
     DeskProbe.body("PaneArea")
     let open = model.nav.sidebarOpen
     return Group {
-      if open, model.needs.isOpen {
+      if open, model.team.isOpen {
+        TeamDeck()   // Team: the selected profile (and its splits) in the pane's place
+      } else if open, model.needs.isOpen {
         NeedsReelScreen()   // the hand or the Needs you heading: the reel takes the pane's place
       } else if open, let np = model.newProject {
         HomeView(np: np)
