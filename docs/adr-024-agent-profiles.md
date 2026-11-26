@@ -299,25 +299,34 @@ model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it 
   has), `POST /v1/profiles/install`, each with `Idempotency-Key`. A write is a `profile.changed` event on the `daemon`
   stream (entity `profile:<name>`, text daemon-written: "Profile reviewer changed: limits.maxTurns 20 → 40."). This is
   capability `profiles` in `/v1/health` (and `profiles.edit` for `GET` and `PUT /v1/profiles/{name}`). **Built:** `GET
-  /v1/profiles`, `GET /v1/profiles/{name}` and `PUT /v1/profiles/{name}` on an existing profile (404 for another name). **Not built:** creating a profile with
-  `PUT`, `DELETE /v1/profiles/{name}` and `POST /v1/profiles/install` (no client yet; §9, steps 6 and 7).
+  /v1/profiles`, `GET /v1/profiles/{name}` and `PUT /v1/profiles/{name}` on an existing profile (404 for another name).
+  For a profile's page in the app (2026-11-26): `GET /v1/profiles/{name}/work` (capability `profiles.work`: its latest
+  agents across the listed runs, or a project's, each with a daemon-written outcome read from its state and its
+  verify, review and merge results; one small scope query per run, `src/api/profile-work.ts`) and `GET`/`PUT
+  /v1/profiles/{name}/persona` (capability `profiles.persona`: the one route that serves a persona's text; a PUT writes
+  it in the profile's own directory, giving a profile without one a `SOUL.md` and moving a single `<name>.yaml` to
+  `<name>/profile.yaml` first, bumps its version and is audited by `profile.changed` without the text; an installed
+  package, an agents.json entry and a persona an override sets are read-only there; a project persona so changed waits
+  for trust again, `src/profiles/persona-edit.ts`). **Not built:** creating a profile with `PUT`, `DELETE
+  /v1/profiles/{name}` and `POST /v1/profiles/install` (no client yet; §9, steps 6 and 7).
 - **App.** Settings › Crew (the owner's word for the team) lists profiles grouped by project, each with its avatar,
   title, provider mark, tags and readiness (login present, environment built, sandbox up), with the resolved values
   and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
   setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
   profile that can plan, not only the one named `planner` (`planners`, each with its readiness; done 2026-11-07, spec
   1.0.47). **Not built:** Settings › Crew (the onboarding's Crew step shows logins, not profiles) and a picker over
-  `planners` (no approved mockup for either), and starting a run with another planner from the API: `POST /v1/runs` has
-  no `planner` (only `capcomd run --planner <name>` does), so `planners` is a readout for now. `GET /v1/profiles`
+  `planners` (no approved mockup for either). `POST /v1/runs` takes `planner` (capability `runs.planner`, 2026-11-26),
+  one of `planners`, as `capcomd run --planner <name>` does. `GET /v1/profiles`
   `ready` is the login only today (for the daemon's own sandbox); a profile's environment and `lifecycle` readiness are
   in `planners`, for the profiles that can plan (§8). `GET /v1/profiles` rows carry what §4 gives the planner (`title`,
   `fit`, `cost`, `canReport`) and the skills each is pinned with and their trust (`untrustedSkills`), so the app and a
   planner see that a spawn would wait on the operator's trust before it is refused.
 - **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
   across runs of the same profile (bot-avatar memory: "agent id + role + size → SVG"; the seed becomes the profile's
-  when it sets one). **Built:** `profile`, `profileVersion` and `profileSource` (spec 1.0.18). **Not built:** the avatar
-  seed: `identity.avatar.seed` is checked and kept on the resolved profile, but no event, `Agent` field or `GET
-  /v1/profiles` row carries it yet.
+  when it sets one). **Built:** `profile`, `profileVersion` and `profileSource` (spec 1.0.18), and the avatar seed
+  (capability `profiles.avatar`, 2026-11-26): `avatarSeed` (`identity.avatar.seed`, or null) on `GET /v1/profiles`
+  rows, and as it was at spawn on `agent.spawned` and `Agent`; `PUT /v1/profiles/{name}` sets it as the row
+  `identity.avatar.seed`. Like `identity.title`, it isn't inherited.
 
 ## 6. Mapping today's profiles onto v2
 

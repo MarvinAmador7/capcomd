@@ -662,6 +662,8 @@ export async function spawnAgent(o: SpawnOpts) {
     ...(persona ? { personaText: persona.text } : {}),
     // ADR-024 §2.4: the version of the profile it runs with and where it came from, beside the spec they pinned.
     profileVersion: resolved.profile?.version ?? null, profileSource: resolved.profile?.source ?? null,
+    // Capability profiles.avatar: its profile's bot face, so every agent of it looks the same.
+    avatarSeed: resolved.avatarSeed ?? null,
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
     // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.

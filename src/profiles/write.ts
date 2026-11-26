@@ -129,6 +129,24 @@ export function v1Field(path: string[]): string[] | null {
   return field ? [field] : null;
 }
 
+/**
+ * A v2 profile file's text (`file` is its path, `old` its text) with `edit` laid on it and its version bumped, as
+ * editProfile writes one (a YAML file keeps its comments and layout).
+ */
+export function editedManifest(file: string, old: string, edit: ProfileEdit): { text: string; version: number } {
+  const edits = editPaths(edit);
+  if (file.endsWith(".json")) {
+    const doc = applyToObject(JSON.parse(old) as ProfileDoc, edits);
+    const version = (typeof doc.version === "number" ? doc.version : 1) + 1;
+    return { text: JSON.stringify(withVersion(doc, version), null, 2) + "\n", version };
+  }
+  const doc = parseDocument(old);
+  applyToYaml(doc, edits);
+  const cur = doc.get("version"), version = (typeof cur === "number" ? cur : 1) + 1;
+  yamlVersion(doc, version);
+  return { text: String(doc), version };
+}
+
 /** The paths of an edit an agents.json entry can't hold (`extends`, `tags`, `identity.title`, …): `add` writes a
  *  profile file for them. */
 export function onlyInProfileFile(edit: ProfileEdit): string[] {
@@ -191,7 +209,7 @@ function defaultMoved(name: string, layer: string, edits: Array<[string[], unkno
 }
 
 /** The profiles as they are, or a write's refusal saying why they can't be read. */
-function current(path: string, source: Env): ProfileSet {
+export function current(path: string, source: Env): ProfileSet {
   try { return readProfiles(path, source); } catch (e) {
     if (e instanceof AgentConfigError) throw new ProfileWriteError("invalid", `the profiles can't be read, so nothing was changed: ${e.message}`);
     throw e;
@@ -203,7 +221,7 @@ function current(path: string, source: Env): ProfileSet {
  * as a candidate's is (spec §7.1): a write needs one this process or the running daemon has. One `before` already had
  * doesn't stop a change to something else.
  */
-function checked(path: string, source: Env, overlay: ProfileOverlay, before: ProfileSet): ProfileSet {
+export function checked(path: string, source: Env, overlay: ProfileOverlay, before: ProfileSet): ProfileSet {
   let after: ProfileSet;
   try { after = readProfiles(path, source, BUNDLED_PROFILES, overlay); } catch (e) {
     if (e instanceof AgentConfigError) throw new ProfileWriteError("invalid", `the change would leave the profiles unreadable, so nothing was changed: ${e.message}`);

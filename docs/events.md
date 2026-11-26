@@ -294,6 +294,13 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         null
       ]
     },
+    "avatarSeed": {
+      "description": "Capability profiles.avatar. Its profile's `identity.avatar.seed` (Agent.avatarSeed): draw its bot from this seed, so every agent of a profile has one face. null when its profile sets none (draw it from its id). Absent from older daemons",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "budget": {},
     "limits": {},
     "agent": {
@@ -4004,6 +4011,29 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "clientId": {
       "type": "string",
       "description": "The API client that changed it (cli-…)"
+    },
+    "persona": {
+      "description": "Capability profiles.persona. Set when the change was its persona's (PUT /v1/profiles/{name}/persona): which file and its new hash, never its text; `changes` is then [{path: identity.persona, from: null, to: null}] and `path` the persona's file",
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "The persona's file as the profile names it (SOUL.md)"
+        },
+        "hash": {
+          "type": "string",
+          "description": "sha256:<hex> of its new text (GET /v1/profiles/{name}/persona `hash`)"
+        },
+        "created": {
+          "type": "boolean",
+          "description": "The profile had no persona of its own before"
+        }
+      },
+      "required": [
+        "file",
+        "hash",
+        "created"
+      ]
     }
   },
   "required": [
@@ -4016,7 +4046,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "clientId"
   ],
   "additionalProperties": {},
-  "description": "Capability profiles.edit. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client changed a profile with PUT /v1/profiles/{name}. `entity` is profile:<name>; the envelope text is daemon-written and names each value that changed, with the values only where capcomd wrote them (numbers, toggles, choices, names): \"Profile reviewer changed: limits.maxTurns 20 → 40, description changed.\" A change made by editing the file, or with `capcomd profiles set`, isn't an event"
+  "description": "Capability profiles.edit. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client changed a profile with PUT /v1/profiles/{name}, or its persona with PUT /v1/profiles/{name}/persona (capability profiles.persona: `persona` is set). `entity` is profile:<name>; the envelope text is daemon-written and names each value that changed, with the values only where capcomd wrote them (numbers, toggles, choices, names): \"Profile reviewer changed: limits.maxTurns 20 → 40, description changed.\" A change made by editing the file, or with `capcomd profiles set`, isn't an event"
 }
 ```
 
@@ -5103,6 +5133,13 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "user",
               "bundled",
               null
+            ]
+          },
+          "avatarSeed": {
+            "description": "Capability profiles.avatar. Its profile's `identity.avatar.seed` as it was when it was spawned: draw its bot from this seed, so every agent of a profile has one face (GET /v1/profiles `avatarSeed` is the profile's now). null: its profile sets none, it has no profile, or it was spawned before capcomd recorded it: draw it from its id, as before. Older daemons don't send it",
+            "type": [
+              "string",
+              "null"
             ]
           },
           "status": {

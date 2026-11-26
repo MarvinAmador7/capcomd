@@ -3,10 +3,11 @@
 import { HARNESS_MODELS } from "../config/models";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, AgentStatus, Attachment, BrainProposal, BrainProposalOutcome, BrainProposals, BrainProposalsSent, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Profiles, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, BrainProposal, BrainProposalOutcome, BrainProposals, BrainProposalsSent, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, ProfileWork, Profiles, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { Principal } from "../../packages/plugin/src/shapes";
 import type { WorkspaceFile } from "./run-files";
-import type { ProfileLookup, ProfileUpdate } from "./profiles";
+import type { PersonaLookup, PersonaUpdate, ProfileLookup, ProfileUpdate } from "./profiles";
+import { profileWork, workResult, type WorkRow } from "./profile-work";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
 import { runTitle } from "./run-title";
@@ -31,6 +32,8 @@ type O<T extends z.ZodType> = z.infer<T>;
 export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: ListedProvider;
 	/** Capability runs.options.models: the planner's model, one of its driver's `models`. */
 	model?: string;
+	/** Capability runs.planner: the profile that plans the run (`capcomd run --planner`), one of run-options' `planners`. */
+	planner?: string;
 	/** Capability runs.goal_branch: the base the goal branch is cut from, and its name (false: no goal branch). */
 	base?: string; goalBranch?: string | false;
 	/** Capability plugins.config: the run's per-run plugin settings, already checked (src/plugins/run-config.ts). */
@@ -108,6 +111,13 @@ export interface HarnessSource {
 	profile(name: string, repo?: string): Promise<ProfileLookup>;
 	/** PUT /v1/profiles/{name}: change it in its own file; the event to record when something changed. */
 	updateProfile(name: string, repo: string | undefined, body: { values: Record<string, string | null>; rev: string }): Promise<ProfileUpdate>;
+	/** GET /v1/profiles/{name}/work (capability profiles.work): its newest agents, with `repo` in that project's runs
+	 *  only (throws CreateRunError, a 422, when it isn't a project). */
+	profileWork(name: string, repo: string | undefined, limit: number): Promise<O<typeof ProfileWork>>;
+	/** GET /v1/profiles/{name}/persona (capability profiles.persona): its persona's text; `repo` as profiles(). */
+	persona(name: string, repo?: string): Promise<PersonaLookup>;
+	/** PUT /v1/profiles/{name}/persona: write it in the profile's own directory; the event to record when it changed. */
+	updatePersona(name: string, repo: string | undefined, body: { text: string; rev: string }): Promise<PersonaUpdate>;
 	/** GET /v1/logins: claude then codex, each in docker then boxd; with `provider`, that AI's only (fx's only so).
 	 *  Local state only; never a credential. */
 	logins(provider?: O<typeof Login>["provider"]): Promise<O<typeof Login>[]>;
@@ -515,6 +525,14 @@ export function memorySource(seed: Partial<{
 		profiles: async () => seed.profiles ?? { file: "/nonexistent/.capcomd/agents.json", layers: [], default: null, profiles: [], warnings: [], error: null },
 		profile: async (name) => ({ ok: false, status: 404, code: "not_found", message: `profile "${name}" not found` }),
 		updateProfile: async (name) => ({ ok: false, status: 404, code: "not_found", message: `profile "${name}" not found` }),
+		// Capability profiles.work over the seeded runs (`repo`: the run's repo) and agents, as the scopes answer it.
+		profileWork: async (name, repo, limit) => profileWork(name, runs.filter((r) => repo === undefined || r.repo === repo).map((r) => ({ runId: r.id, repo: r.repo })), async (runId, profile, n) =>
+			(seed.agents?.[runId] ?? []).filter((a) => a.profile === profile).map((a): WorkRow => {
+				const at = Date.parse(a.updatedAt ?? "") || 0;
+				return { agentId: a.id, status: a.status, titleState: null, taskHead: a.task ?? "", title: a.title ?? null, ...workResult(a.result), updatedAt: at, endedAt: ["done", "failed", "cancelled"].includes(a.status) ? at : null };
+			}).sort((x, y) => y.updatedAt - x.updatedAt).slice(0, n), limit),
+		persona: async (name) => ({ ok: false, status: 404, code: "not_found", message: `profile "${name}" not found` }),
+		updatePersona: async (name) => ({ ok: false, status: 404, code: "not_found", message: `profile "${name}" not found` }),
 		logins: loginsOf,
 		...surface,
 		environments: async () => seed.environments ?? LISTED_PROVIDERS.map((sandbox) => ({ sandbox, status: "missing" as const, name: null, versions: {}, builtAt: null, command: `capcomd env build --sandbox ${sandbox}` })),

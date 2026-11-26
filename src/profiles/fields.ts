@@ -49,9 +49,13 @@ export interface ProfileFieldSpec {
 const minutes = (ms: number) => (ms % 60_000 === 0 ? `${ms / 60_000} min` : ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`);
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** The row of a profile's bot face (capability profiles.avatar): `identity.avatar.seed`, written as the `identity.avatar` block. */
+export const AVATAR_SEED = "identity.avatar.seed";
+
 /** The rows, in the order a details screen shows them. */
 export const PROFILE_FIELDS: readonly ProfileFieldSpec[] = [
   { id: "identity.title", type: "text", label: "Title", help: "What the app calls it; its name when unset", unset: "Its name", untrusted: true },
+  { id: "identity.avatar.seed", type: "text", label: "Bot", help: "Any text: its agents' bot face is drawn from it, so they all look the same; unset: each agent's own", unset: "Each agent's own", untrusted: true },
   { id: "description", type: "text", label: "Description", help: "What it is for, in your words: a planner reads it when it picks a profile", unset: "None", untrusted: true },
   { id: "tags", type: "list", label: "Tags", help: "Lowercase words a planner matches on (review, security)", unset: "None" },
   { id: "extends", type: "info", label: "Extends", help: "The profile it is laid over; change it in its file", unset: "Nothing" },
@@ -87,14 +91,18 @@ export const PROFILE_FIELDS: readonly ProfileFieldSpec[] = [
 const BY_ID = new Map(PROFILE_FIELDS.map((f) => [f.id, f]));
 /** Lists of named things a row outside the catalog shows by their names only. */
 const BY_NAME = new Set(["tools.mcp", "context.providers"]);
-/** Said by the profile's summary row, not as a field. */
-const NOT_A_ROW = new Set(["name", "version", "default"]);
+/** Said by the profile's summary row, not as a field; `identity.avatar` is the identity.avatar.seed row. */
+const NOT_A_ROW = new Set(["name", "version", "default", "identity.avatar"]);
 
+const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** A value by its row id: `block.key`, or `identity.avatar.seed` one level further down. */
 const get = (doc: Record<string, unknown>, path: string): unknown => {
-  const [a, b] = path.split(".") as [string, string?];
-  const v = doc[a];
-  return b === undefined ? v : v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>)[b] : undefined;
+  let v: unknown = doc;
+  for (const k of path.split(".")) v = isMap(v) ? v[k] : undefined;
+  return v;
 };
+/** The SetBy key of a row: a value is recorded by its block and key (`identity.avatar` for identity.avatar.seed). */
+const setByKey = (id: string) => id.split(".").slice(0, 2).join(".");
 
 /** A value as a row shows it. */
 function displayOf(f: ProfileFieldSpec, v: unknown, choices: ProfileField["choices"]): string {
@@ -153,7 +161,7 @@ export function profileFields(p: ResolvedProfile): ProfileField[] {
   const own = p.applied.findIndex((a) => a.as === "profile");
   const writable = own >= 0 && p.applied[own]!.path !== null;
   const row = (f: ProfileFieldSpec, v: unknown): ProfileField => {
-    const from = p.setBy[f.id] ?? null;
+    const from = p.setBy[setByKey(f.id)] ?? null;
     const as = from === null ? null : p.applied[from]?.as;
     const choices = f.choices?.(p) ?? [];
     let editable = f.type !== "info" && writable && holds(p, f.id) && !(from !== null && from > own);
@@ -219,8 +227,16 @@ export function editOf(p: ResolvedProfile, values: Record<string, string | null>
         edit[id] = v;
         break;
       }
-      default: edit[id] = raw;
+      default:
+        // The avatar block is `{ seed }` (ADR-024 §2.2): the row sets or removes it whole.
+        if (id === AVATAR_SEED) {
+          if (!raw.trim()) return { field: id, message: `${id}: must not be blank (null removes it)` };
+          edit["identity.avatar"] = { seed: raw };
+          continue;
+        }
+        edit[id] = raw;
     }
   }
+  if (Object.hasOwn(edit, AVATAR_SEED)) { edit["identity.avatar"] = edit[AVATAR_SEED]; delete edit[AVATAR_SEED]; }
   return { edit };
 }

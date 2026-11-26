@@ -394,7 +394,7 @@ export function rivetSource(): HarnessSource & { eventListeners(runId?: string):
 				const inl = inlineOrAttach(redactShapes(String(a.task ?? "")));
 				return {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile),
-					profileVersion: a.profileVersion ?? null, profileSource: a.profileSource ?? null, status: a.status,
+					profileVersion: a.profileVersion ?? null, profileSource: a.profileSource ?? null, avatarSeed: a.avatarSeed ?? null, status: a.status,
 					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: activityOf(a),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
 					...agentRuntime(a.spec), createdAt: a.createdAt ? isoTs(a.createdAt) : null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
@@ -470,6 +470,21 @@ export function rivetSource(): HarnessSource & { eventListeners(runId?: string):
 		profiles: async (repo) => (await import("./profiles")).profilesFor(repo),
 		profile: async (name, repo) => (await import("./profiles")).profileFor(name, repo),
 		updateProfile: async (name, repo, body) => (await import("./profiles")).updateProfileFor(name, repo, body),
+		// Capability profiles.work: one `profileWork` query per listed run (with `repo`, that project's runs only).
+		profileWork: async (name, repo, limit) => {
+			const W = await import("./profile-work");
+			let rows = runsIndex();
+			if (repo !== undefined) {
+				const { launchContext } = await import("./create-run");
+				rows = W.projectRuns(rows, repo, launchContext(repo).repo);
+			}
+			return W.profileWork(name, rows, async (runId, profile, n) => {
+				const s = await existingScope(runId);
+				return s ? ((await s.profileWork({ profile, limit: n })) as import("./profile-work").WorkRow[]) : null;
+			}, limit);
+		},
+		persona: async (name, repo) => (await import("./profiles")).personaFor(name, repo),
+		updatePersona: async (name, repo, body) => (await import("./profiles")).updatePersonaFor(name, repo, body),
 		skill: (name) => readSkill(name),
 		logins: async (provider) => (await import("./settings")).logins(process.env, undefined, provider),
 		environments: async () => (await import("./settings")).environments(),

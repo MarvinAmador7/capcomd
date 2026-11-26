@@ -86,6 +86,7 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 	if (input.profile && input.driver) throw new CreateRunError("profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
 	if (input.profile && input.effort) throw new CreateRunError("profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
 	if (input.profile && input.model) throw new CreateRunError("profile and model can't be combined: model is the planner agent's (the driver's), and profile picks the worker of a run without one");
+	if (input.profile && input.planner) throw new CreateRunError("profile and planner can't be combined: planner runs a planner agent, which picks its own workers; send one of them", "planner");
 	const ctx = launchContext(input.repo, o.env ?? process.env, o.cwd ?? process.cwd(), { ...(input.sandbox ? { sandbox: input.sandbox } : {}) });
 	if (input.sandbox) {
 		const s = await (o.sandboxCheck ?? sandboxAvailable)(input.sandbox, ctx.env);
@@ -96,7 +97,7 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 	const off = await (await import("../plugins/forges")).inactiveForge(forgeNamed(ctx.env));
 	if (off) throw new CreateRunError(`${off.message}. ${off.hint}`);
 	const [cmd, ...args] = selfArgv("run", "--detach", "--json", "--run-id", input.runId,
-		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []),
+		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []), ...(input.planner ? [`--planner=${input.planner}`] : []),
 		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.model ? [`--planner-model=${input.model}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []),
 		...(input.base !== undefined ? [`--base=${input.base}`] : []), ...(input.goalBranch === false ? ["--no-goal-branch"] : input.goalBranch !== undefined ? [`--goal-branch=${input.goalBranch}`] : []),
 		...(input.plugins ? (await import("../plugins/run-config")).pluginConfigFlags(input.plugins) : []), "--", input.goal);
@@ -115,7 +116,8 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 	if (code === 0 && j?.ok && j.runId === input.runId) return { repo: ctx.repo, log: typeof j.log === "string" ? j.log : null };
 	const e = j?.error as { code?: string; message?: string; hint?: string; reason?: string } | undefined;
 	// A refusal about the base or the goal branch names the body field it's about (the setup screen shows it there).
-	const field = e?.reason === "base" || e?.reason === "goalBranch" ? e.reason : undefined;
+	// A refusal of the chosen planner (it can't plan, its login, its trust) names it (capability runs.planner).
+	const field = e?.reason === "base" || e?.reason === "goalBranch" ? e.reason : input.planner && e?.message?.includes(`profile ${input.planner} `) ? "planner" : undefined;
 	if (e?.code && REFUSALS.has(e.code)) throw new CreateRunError(`${e.message ?? "capcomd run refused the run"}${e.hint && !e.hint.includes("--help") ? ` ${e.hint}` : ""}`, field);
 	throw new Error(`capcomd run failed to start the run (exit ${code}): ${(e?.message ?? (stderr.trim() || stdout.trim())).slice(-500)}`);
 }

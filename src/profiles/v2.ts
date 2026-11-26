@@ -273,7 +273,7 @@ export function inheritable(base: ProfileDoc): ProfileDoc {
 export type SetBy = Record<string, number>;
 /** What a profile that extends `base` keeps of its SetBy: as inheritable does with the values. */
 export function inheritableSetBy(setBy: SetBy): SetBy {
-  return Object.fromEntries(Object.entries(setBy).filter(([p]) => !OWN.has(p.split(".")[0]!)));
+  return Object.fromEntries(Object.entries(setBy).filter(([p]) => { const [a, b] = p.split("."); return !OWN.has(a!) && !(a === "identity" && b !== undefined && OWN_IDENTITY.has(b)); }));
 }
 
 const dropNulls = (m: Record<string, unknown>) => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== null));
