@@ -51,7 +51,8 @@ public final class TeamFixtureDaemon: ProfilesPort, DaemonInfoFetching, KnownPro
           p("warden", "project", fit: "read-only; answers with a report", skills: ["review-checklist"], repo: a)] + mine + bundled,
       b: [p("beacon", "project", mode: "orchestrate", fit: "orchestrates: sees everything, runs nothing", repo: b),
           p("pixel", "project", model: "gpt-5-codex", effort: nil, repo: b, provider: "codex"),
-          p("quill", "project", tags: ["docs"], model: "claude-sonnet-5-5", repo: b)] + mine + bundled,
+          // fx (the third harness): drives no run, so its model chip lists no models; its levels are its effort row's.
+          p("quill", "project", tags: ["docs"], model: "zai/glm-5.3", repo: b, provider: "fx")] + mine + bundled,
       "": mine + bundled,
     ]
     for (scope, rows) in profilesByScope {
@@ -79,11 +80,12 @@ public final class TeamFixtureDaemon: ProfilesPort, DaemonInfoFetching, KnownPro
       ProfileField(id: "description", type: "text", label: "Description", value: nil, display: "None", source: "unset", editable: true, untrusted: true),
       ProfileField(id: "tags", type: "list", label: "Tags", value: (r.tags ?? []).isEmpty ? nil : ProfileField.encodeList(r.tags ?? []),
                    display: (r.tags ?? []).isEmpty ? "None" : (r.tags ?? []).joined(separator: ", "), source: (r.tags ?? []).isEmpty ? "unset" : own, editable: true),
-      ProfileField(id: "harness.provider", type: "choice", label: "Agent", value: r.provider, display: r.provider == "codex" ? "Codex" : "Claude Code",
-                   choices: [.init(value: "claude", label: "Claude Code"), .init(value: "codex", label: "Codex")], source: harness, from: at, editable: true),
+      ProfileField(id: "harness.provider", type: "choice", label: "Agent", value: r.provider, display: Provider(wire: r.provider)?.harnessName ?? r.provider ?? "Not set",
+                   choices: [.init(value: "claude", label: "Claude Code"), .init(value: "codex", label: "Codex"), .init(value: "fx", label: "fx")], source: harness, from: at, editable: true),
       ProfileField(id: "harness.model", type: "text", label: "Model", value: r.model, display: r.model ?? "The agent's default", source: harness, from: at, editable: true),
       ProfileField(id: "harness.effort", type: "choice", label: "Effort", value: r.effort, display: r.effort.map { $0.capitalized } ?? "The agent's default",
-                   choices: ["low", "medium", "high", "xhigh"].map { .init(value: $0, label: $0.capitalized) }, source: r.effort == nil ? "unset" : harness, from: at, editable: true),
+                   choices: (r.provider == "fx" ? ["none", "minimal", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh"]).map { .init(value: $0, label: $0.capitalized) },
+                   source: r.effort == nil ? "unset" : harness, from: at, editable: true),
       ProfileField(id: "sandbox.provider", type: "choice", label: "Runs on", value: "boxd", display: "Cloud · boxd",
                    choices: [.init(value: "docker", label: "This Mac · Docker"), .init(value: "boxd", label: "Cloud · boxd")], source: "inherited", from: 0, editable: true),
       ProfileField(id: "tools.mode", type: "choice", label: "Works by", value: r.toolMode, display: r.orchestrates ? "Orchestrating: sees everything, runs nothing" : "Executing: edits and runs code",

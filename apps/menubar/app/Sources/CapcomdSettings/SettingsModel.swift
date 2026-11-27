@@ -82,7 +82,7 @@ package final class SettingsModel {
   /// Search over every row, the logins and the places the store holds.
   package var searchEntries: [SettingsSearch.Entry] {
     _ = revision
-    let providers = SettingsRows.providers.map { (id: $0, name: PlaceNames.provider($0)) }
+    let providers = SettingsRows.providers(store.logins?.value).map { (id: $0, name: PlaceNames.provider($0)) }
     let places = store.runOptions.sandboxes.map { (name: $0.name, title: placeTitle($0.name)) }
     return SettingsSearch.entries(providers: providers, places: places, boxd: store.runOptions.sandboxes.contains { $0.name == "boxd" })
   }
@@ -208,6 +208,8 @@ package final class SettingsModel {
   // MARK: Accounts
 
   package var accountPlaces: [String] { _ = revision; return SettingsRows.accountPlaces(store.runOptions, store.logins?.value) }
+  /// Claude, Codex, then fx (capability logins.fx) and any other AI the daemon lists logins for.
+  package var accountProviders: [String] { _ = revision; return SettingsRows.providers(store.logins?.value) }
   package var loginRows: [LoginRow] {
     _ = revision
     return SettingsRows.logins(store.logins, options: store.runOptions, capabilities: store.capabilities, places: accountPlaces)
@@ -356,10 +358,10 @@ package enum PlaceNames {
   package static func menu(_ s: SandboxInfo) -> String {
     switch s.name { case "docker": "Local · Docker"; case "boxd": "Cloud · boxd"; default: "\(s.label) · \(s.name)" }
   }
-  /// An AI by its CLI's name, as Accounts heads its logins: "Claude Code", "Codex".
-  package static func provider(_ p: String) -> String { p == "claude" ? "Claude Code" : Provider(wire: p)?.displayName ?? p }
+  /// An AI by its CLI's name, as Accounts heads its logins: "Claude Code", "Codex", "fx" (another by its name).
+  package static func provider(_ p: String) -> String { Provider(wire: p)?.harnessName ?? p }
   /// Whose plan a subscription login uses.
-  package static func plan(_ p: String) -> String { p == "codex" ? "ChatGPT" : "Claude" }
+  package static func plan(_ p: String) -> String? { p == "codex" ? "ChatGPT" : p == "claude" ? "Claude" : nil }
   /// "No boxd API key (run capcomd setup)" → "No boxd API key": the row's button is the way to fix it.
   package static func reason(_ r: String?) -> String? {
     guard let r else { return nil }

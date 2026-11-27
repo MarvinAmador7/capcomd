@@ -341,6 +341,8 @@ public protocol DaemonInfoFetching: Sendable {
   /// `GET /v1/logins`, `/v1/environments`, `/v1/service` (Settings). `DetailUnavailable.unsupported` on daemons
   /// without them.
   func logins() async throws -> [LoginInfo]
+  /// `GET /v1/logins?provider=` (capability `logins.fx`): only that AI's logins; fx's are listed only when asked so.
+  func logins(provider: String) async throws -> [LoginInfo]
   func environments() async throws -> [EnvironmentInfo]
   func service() async throws -> ServiceInfo
   /// `GET /v1/sandboxes`, `/v1/sandboxes/{name}` (capability `sandboxes`) and `…/resources`, `…/resources/{id}`
@@ -378,6 +380,7 @@ extension DaemonInfoFetching {
   public func runOptions(repo: String?) async throws -> RunOptions { RunOptions() }
   public func health() async throws -> DaemonHealth { DaemonHealth(version: nil, capabilities: try await capabilities()) }
   public func logins() async throws -> [LoginInfo] { throw DetailUnavailable.unsupported }
+  public func logins(provider: String) async throws -> [LoginInfo] { throw DetailUnavailable.unsupported }
   public func environments() async throws -> [EnvironmentInfo] { throw DetailUnavailable.unsupported }
   public func service() async throws -> ServiceInfo { throw DetailUnavailable.unsupported }
   public func sandboxes() async throws -> [SandboxDescriptor] { throw DetailUnavailable.unsupported }

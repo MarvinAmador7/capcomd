@@ -70,7 +70,7 @@ public enum TraceShape {
     switch s.name {
     case "agent.run":
       return (a["agent.profile"]?.string ?? "agent", .agent)
-    case "agent.claude_code", "agent.codex", "model.generate":
+    case "agent.claude_code", "agent.codex", "agent.fx", "model.generate":
       return ("model call", .model)
     case "sandbox.ensure": return ("sandbox up", .sandbox)
     case "sandbox.waitReady": return ("wait for sandbox", .sandbox)

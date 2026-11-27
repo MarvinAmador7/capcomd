@@ -287,6 +287,11 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
   }
   /// `GET /v1/logins` (capability `logins`).
   public func logins() async throws -> [LoginInfo] { let d = try await settingsGet("/v1/logins"); return try decoded(SettingsWire.logins(d)) }
+  /// `GET /v1/logins?provider=` (capability `logins.fx`): fx's logins, which the plain list leaves out.
+  public func logins(provider: String) async throws -> [LoginInfo] {
+    let q = provider.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? provider
+    let d = try await settingsGet("/v1/logins?provider=\(q)"); return try decoded(SettingsWire.logins(d))
+  }
   /// `GET /v1/environments` (capability `environments`).
   public func environments() async throws -> [EnvironmentInfo] { let d = try await settingsGet("/v1/environments"); return try decoded(SettingsWire.environments(d)) }
   /// `GET /v1/service` (capability `service`).

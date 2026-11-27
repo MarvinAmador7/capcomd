@@ -294,7 +294,8 @@ struct PlaceMark: View {
   }
 }
 
-/// A provider's mark before its name: Claude's spark in its coral, Codex's glyph.
+/// A provider's mark before its name: Claude's spark in its coral; Codex's glyph, fx's monogram and a generic mark for
+/// an AI the app doesn't know, in the secondary colour.
 struct ProviderHeaderMark: View {
   let provider: String
   var body: some View {
