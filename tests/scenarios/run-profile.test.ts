@@ -13,7 +13,7 @@ afterAll(async () => { await w?.stop(); });
 const lines = (out: string) => out.trim().split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
 
 test("capcomd run --profile: one agent does the goal; its work is verified, lands on the goal branch, and the goal is ready", async () => {
-  const env = { ...w.env, CAPCOMD_SCRIPT_WORKER: `FILE=src/solo.txt CONTENT=solo SUMMARY="wrote solo" ${worker}`, PWD: w.dir };
+  const env = { ...w.env, CAPCOMD_SCRIPT_WORKER: `SLEEP=6 FILE=src/solo.txt CONTENT=solo SUMMARY="wrote solo" ${worker}`, PWD: w.dir };
   const r = await capcomd(["run", "write solo", "--profile", "worker", "--json"], env);
   if (r.code !== 0) console.log(r.stdout.slice(-3000), r.stderr.slice(-2000));
   expect(r.code).toBe(0);
@@ -21,6 +21,10 @@ test("capcomd run --profile: one agent does the goal; its work is verified, land
   const types = ls.map((l) => l.type);
   expect(types).toEqual(expect.arrayContaining(["run.started", "agent.spawned", "agent.status", "verify.passed", "run.completed", "run.result"]));
   expect(types).not.toContain("planner.spawned");
+  // Its statuses as they changed: a wait that ran out (it works for more than one 5 s wait) is never shown as one.
+  const statuses = ls.filter((l) => l.type === "agent.status").map((l) => l.status);
+  expect(statuses).not.toContain("timeout");
+  expect(statuses.at(-1)).toBe("done");
   const runId = ls[0].runId;
   expect(ls[0]).toMatchObject({ type: "run.started", agent: "worker", recipe: "agent" });
   const done = ls.find((l) => l.type === "run.completed");

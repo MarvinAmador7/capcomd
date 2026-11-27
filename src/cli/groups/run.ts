@@ -143,7 +143,7 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
       const name = R.sandboxName(process.env);
       const where = R.isListedProvider(name) ? { name, label: R.PROVIDER_LABEL[name] } : undefined;
       const c = credentialReady(spec.provider, spec.auth, process.env, where);
-      if (!c.ready) throw new RelayError("config", `profile ${agentFlag} can't start: ${c.reason}`, "Log its agent in for this sandbox (or set its API key), or pick another profile.");
+      if (!c.ready) throw new RelayError("config", `profile ${agentFlag} can't start: ${(c.reason ?? "no login").replace(/\.?$/, ".")}`, "Log its agent in for this sandbox (or set its API key), or pick another profile.");
     }
   }
   // Without a planner agent the run is recipe-hierarchical's (--recipe, --legacy, CAPCOMD_RUN_PATH): once its flags are

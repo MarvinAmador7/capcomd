@@ -54,7 +54,8 @@ export async function runWithAgent(opts: RunOptions & { profile: string; budget?
   let ag: any;
   for (;;) {
     const r: any = await awaitAgents(runId, [agentId], { timeoutMs: 5000 });
-    ag = r.agents[0];
+    // A wait that ran out says "timeout", not the agent's status: read that from the scope.
+    ag = r.timeout ? (await client().scope.getOrCreate([runId]).listAgents({})).find((x: any) => x.agentId === agentId) ?? r.agents[0] : r.agents[0];
     if (ag.status !== last) { last = ag.status; emit("agent.status", { agentId, parent: null, profile: ref.name, status: ag.status }, `  ${agentId} ${ref.name}: ${ag.status}`); }
     if (TERMINAL_AGENT.has(ag.status)) break;
   }

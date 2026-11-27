@@ -394,7 +394,7 @@ describe("capcomd run --planner-provider / --sandbox (checked before the engine 
 		expect(docker.error).toMatchObject({ code: "engine_unreachable" });
 		expect(boxd.error).toMatchObject({ code: "engine_unreachable" });
 		expect(noSnapshot.error).toMatchObject({ code: "config", message: expect.stringContaining("no capcomd env snapshot") });
-		expect(noLogin.error).toMatchObject({ code: "config", message: "profile worker can't start: Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)" });
+		expect(noLogin.error).toMatchObject({ code: "config", message: "profile worker can't start: Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)." });
 		expect(unknown.code).not.toBe(0);
 		expect(JSON.stringify(unknown.error)).toContain("nobody");
 		expect(withPlanner.error).toMatchObject({ code: "usage", message: expect.stringContaining("a planner agent picks its own workers") });
