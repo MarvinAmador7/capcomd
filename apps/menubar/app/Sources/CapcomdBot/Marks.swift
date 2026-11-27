@@ -23,6 +23,51 @@ public let menuBarMark: [String] = [
   "................",
 ]
 
+/// The Antenna mark (Settings › General › App Icon): the dome with a two-cell antenna on top. `ANTENNA_MARK` in
+/// packages/bot-avatar/src/marks.ts.
+public let antennaMark: [String] = {
+  var r = menuBarMark
+  r[0] = ".......##......."
+  r[1] = ".......##......."
+  return r
+}()
+
+/// The Ring mark (Settings › General › App Icon): the original capcomd ring with its centre dot. `RING_MARK` in
+/// packages/bot-avatar/src/marks.ts.
+public let ringMark: [String] = [
+  "................",
+  ".....######.....",
+  "...##########...",
+  "..###......###..",
+  ".###........###.",
+  ".##..........##.",
+  ".##....##....##.",
+  ".##...####...##.",
+  ".##...####...##.",
+  ".##....##....##.",
+  ".##..........##.",
+  ".###........###.",
+  "..###......###..",
+  "...##########...",
+  ".....######.....",
+  "................",
+]
+
+/// Which mark the menu bar shows (Settings › General › App Icon › Menu bar). Dome is the approved mark and the default.
+public enum MenuBarMark: String, CaseIterable, Sendable {
+  case dome, antenna, ring
+
+  /// The mark with its eyes open: 16 rows of "#" (opaque) and "." (clear).
+  public var rows: [String] {
+    switch self { case .dome: menuBarMark; case .antenna: antennaMark; case .ring: ringMark }
+  }
+  public var title: String {
+    switch self { case .dome: "Dome"; case .antenna: "Antenna"; case .ring: "Ring" }
+  }
+  /// A stored value, else the default (Dome).
+  public init(stored: String?) { self = stored.flatMap(MenuBarMark.init(rawValue:)) ?? .dome }
+}
+
 /// The mark's faces for the daemon's state.
 public enum MenuBarFace: CaseIterable, Sendable {
   /// Nothing running: sleepy eyes.
@@ -32,20 +77,39 @@ public enum MenuBarFace: CaseIterable, Sendable {
   /// An approval is waiting: eyes open and a mitt raised at the top right.
   case approval
 
-  /// 16 rows of "#" (opaque) and "." (clear).
-  public var rows: [String] {
-    var r = menuBarMark
+  /// The Dome mark's face: 16 rows of "#" (opaque) and "." (clear).
+  public var rows: [String] { rows(.dome) }
+
+  /// This face on `mark`. The dome marks close their eyes to a line when idle; the Ring's centre dot shrinks to a bar.
+  /// Every mark raises the same mitt at the top right for an approval (the antenna stays: it is in the middle).
+  public func rows(_ mark: MenuBarMark) -> [String] {
+    var r = mark.rows
     switch self {
     case .idle:
-      r[6] = ".##..........##."
-      r[7] = ".##.###..###.##."
+      switch mark {
+      case .dome, .antenna:
+        r[6] = ".##..........##."
+        r[7] = ".##.###..###.##."
+      case .ring:
+        r[6] = ".##..........##."
+        r[9] = ".##..........##."
+      }
     case .working:
       break
     case .approval:
-      r[0] = ".............##."
-      r[1] = ".............##."
+      r[0] = Self.mitt(r[0])
+      r[1] = Self.mitt(r[1])
     }
     return r
+  }
+
+  public func mask(_ mark: MenuBarMark) -> BotMask { BotMask(rows: rows(mark)) }
+
+  /// A row with the mitt's two cells (columns 13 and 14) set.
+  private static func mitt(_ row: String) -> String {
+    var c = Array(row)
+    c[13] = "#"; c[14] = "#"
+    return String(c)
   }
 
   public var mask: BotMask { BotMask(rows: rows) }

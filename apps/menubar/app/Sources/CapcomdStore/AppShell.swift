@@ -55,6 +55,28 @@ public enum Presence {
   /// Stored values with both off (`defaults write`, say) read as the menu bar item on.
   public static func showsInMenuBar(keepInDock: Bool, showInMenuBar: Bool) -> Bool { showInMenuBar || !keepInDock }
 
+  /// Settings › General › Show app icon: one choice in place of the two switches, so both can't be off. It is stored
+  /// as the two switches were (Keep in Dock, Show in menu bar), so nothing has to be chosen again.
+  public enum ShowAppIcon: String, CaseIterable, Sendable {
+    /// The Dock icon always (Keep in Dock) and the menu bar item.
+    case dockAndMenuBar
+    /// The Dock icon always, no menu bar item.
+    case dockOnly
+    /// The menu bar item; the Dock icon only while a window is open (the default).
+    case menuBarOnly
+
+    public var title: String {
+      switch self { case .dockAndMenuBar: "Dock and menu bar"; case .dockOnly: "Dock only"; case .menuBarOnly: "Menu bar only" }
+    }
+    /// What the two stored switches say.
+    public init(keepInDock: Bool, showInMenuBar: Bool) {
+      let menuBar = Presence.showsInMenuBar(keepInDock: keepInDock, showInMenuBar: showInMenuBar)
+      self = keepInDock ? (menuBar ? .dockAndMenuBar : .dockOnly) : .menuBarOnly
+    }
+    public var keepInDock: Bool { self != .menuBarOnly }
+    public var showInMenuBar: Bool { self != .dockOnly }
+  }
+
   /// What the app does before it shows an Open panel (the window's Choose Project Folder…): a panel begun while the app
   /// isn't active is ordered behind the frontmost app's windows (a click in the window while another app is in front
   /// gets there), and one in an accessory app is cancelled by the first click in it. So the app becomes regular when
@@ -62,6 +84,34 @@ public enum Presence {
   public static func beforeOpenPanel(regular: Bool, active: Bool) -> OpenPanelSteps {
     OpenPanelSteps(becomeRegular: !regular, activate: !regular || !active, orderFront: true)
   }
+}
+
+/// Settings › Interface › Reel: how the reel lays out its columns and crew tabs, and whether Follow starts on. Stored in
+/// the app's defaults under `desk.*` (the desk reads them; Settings writes them).
+public enum InterfacePrefs {
+  public static let columnsKey = "desk.columnsAcross", crewTabsKey = "desk.crewTabs", followKey = "desk.followAtLaunch"
+
+  /// Columns across: fit the window (the reel's own rule) or a fixed count.
+  public enum Columns: Hashable, Sendable, CaseIterable {
+    case fit, one, two, three
+    public var count: Int? { switch self { case .fit: nil; case .one: 1; case .two: 2; case .three: 3 } }
+    public var title: String { switch self { case .fit: "Fit the window"; case .one: "1"; case .two: "2"; case .three: "3" } }
+    /// The stored integer (0: fit).
+    public var stored: Int { count ?? 0 }
+    public init(stored: Int) { self = stored == 1 ? .one : stored == 2 ? .two : stored == 3 ? .three : .fit }
+  }
+  /// How many columns the reel shows across `width`: the fixed count, else 3 from 1280 pt, 2 from 900, else 1.
+  public static func across(_ width: Double, _ c: Columns) -> Int { c.count ?? (width >= 1280 ? 3 : width >= 900 ? 2 : 1) }
+
+  /// Crew tabs: the bot and the agent's title, or the bot alone.
+  public enum CrewTabs: String, CaseIterable, Sendable {
+    case botAndTitle, botOnly
+    public var title: String { switch self { case .botAndTitle: "Bot and title"; case .botOnly: "Bot only" } }
+    public init(stored: String?) { self = stored.flatMap(CrewTabs.init(rawValue:)) ?? .botAndTitle }
+  }
+
+  /// Follow asks and failures at launch: on unless turned off (a missing value is on).
+  public static func followAtLaunch(_ stored: Any?) -> Bool { (stored as? Bool) ?? true }
 }
 
 /// `Presence.beforeOpenPanel`'s answer.

@@ -36,10 +36,13 @@ let package = Package(
     // CapcomdOnboarding: Home's mark is the onboarding bot's head.
     .target(name: "CapcomdDesk", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", "CapcomdOnboarding", .product(name: "CapcomdClient", package: "client"),
                                                 .product(name: "PerfLoopProbe", package: "perfloop")]),
+    // The Settings window (design/desktop/settings) as a library: its model, pages, section icons, the Dock icon and the
+    // menu bar mark choices, so the app and the bench host the same views. macOS only (an empty module on Linux).
+    .target(name: "CapcomdSettings", dependencies: ["CapcomdStore", "CapcomdUI", "CapcomdBot", "CapcomdDesk", "CapcomdLive"]),
     // The app: the window (CapcomdDesk) with the menu bar item and its panel, and Settings, in one Dock app. Every view
     // is behind `#if canImport(SwiftUI)`; on Linux this builds to a stub.
     // Fonts/: the onboarding's League Spartan, Figtree and Geist Mono (SIL OFL 1.1, each with its license).
-    .executableTarget(name: "CapcomdApp", dependencies: ["CapcomdDesk", "CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", "CapcomdOnboarding"],
+    .executableTarget(name: "CapcomdApp", dependencies: ["CapcomdDesk", "CapcomdSettings", "CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", "CapcomdOnboarding"],
                       resources: [.copy("Fonts")]),
     // The bench's parts that need no window: fixtures (generated and captured), the scenarios, guards and probes as
     // PerfLoopHost registers them (BenchCatalog), tested without a window. PerfLoopKit: the trace environment's
@@ -49,7 +52,7 @@ let package = Package(
     // The bench: hosts the desktop window in-process against fixture data and measures it, a PerfLoopHost bench
     // (DESKBENCH.md). PerfLoopStamp embeds the commit, dirty flag and build time, so a copied binary still says what it
     // was built from.
-    .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI",
+    .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdSettings", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI",
                                                               .product(name: "PerfLoopProbe", package: "perfloop"), .product(name: "PerfLoopHost", package: "perfloop"),
                                                               .product(name: "PerfLoopKit", package: "perfloop"), .product(name: "CapcomdClient", package: "client")],
                       plugins: [.plugin(name: "PerfLoopStamp", package: "perfloop")]),

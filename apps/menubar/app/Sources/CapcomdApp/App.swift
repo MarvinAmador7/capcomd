@@ -6,11 +6,13 @@ import CapcomdLive
 import CapcomdClient
 import CapcomdBot
 import CapcomdDesk
+import CapcomdSettings
 
 /// The capcomd app: the window (CapcomdDesk's `DeskWindowContent`, the same views the bench hosts), the menu bar item
 /// and its panel, and Settings. They're two views of one app on one store (AppSession's): what's in focus in the window
 /// is marked in the panel, and every panel row (and notification) opens the window there. The menu bar item is the
-/// app's home; the Dock icon shows while a window is open (AppPresence).
+/// app's home; the Dock icon shows while a window is open, or always when Settings › General › Show app icon says so
+/// (AppPresence, CapcomdSettings).
 @main
 struct CapcomdApp: App {
   @NSApplicationDelegateAdaptor private var delegate: AppDelegate
@@ -30,6 +32,8 @@ struct CapcomdApp: App {
     let m = AppModel.live(session: s)
     // A panel row, a notification: the window on that run, at that agent's column.
     m.openInWindow = { [weak d] rid, aid in MainWindow.show(); d?.show(run: rid, agent: aid) }
+    // Settings › Interface sets the window's layout and Follow on this desk.
+    m.settings.desk = d
     _session = State(initialValue: s); _desk = State(initialValue: d); _model = State(initialValue: m)
     // The first-run onboarding (design/onboarding): decided at launch (AppDelegate), held to the main window meanwhile.
     OnboardFonts.register()
@@ -64,14 +68,15 @@ struct CapcomdApp: App {
     MenuBarExtra(isInserted: menuBarInserted) {
       PanelView().environment(model)
     } label: {
-      MenuBarLabel(badge: model.badgeCount, face: model.menuBarFace)
+      MenuBarLabel(badge: model.badgeCount, face: model.menuBarFace, mark: model.menuBarMark)
     }
     .menuBarExtraStyle(.window)
 
     // ⌘, (the app menu's Settings…) and the composer's + menu open it (design/settings).
     Settings {
-      SettingsView().environment(model)
+      SettingsWindowView(model: model.settings)
     }
+    .windowResizability(.contentSize)
   }
 }
 
@@ -92,48 +97,6 @@ struct CapcomdApp: App {
   }
 }
 
-/// The Dock icon follows the windows: shown while one is open (the main window or Settings, minimized included), hidden
-/// when the last closes, unless Keep in Dock (or the menu bar item is off). The rules are `Presence` (AppShell.swift).
-@MainActor enum AppPresence {
-  static let keepInDockKey = "capcomd.keepInDock", showInMenuBarKey = "capcomd.showInMenuBar"
-  static var keepInDock: Bool { UserDefaults.standard.bool(forKey: keepInDockKey) }
-  static var showInMenuBar: Bool {
-    Presence.showsInMenuBar(keepInDock: keepInDock, showInMenuBar: UserDefaults.standard.object(forKey: showInMenuBarKey) as? Bool ?? true)
-  }
-
-  /// A window of the app's own: not the menu bar item, its panel or the development panel host (off screen).
-  static func counts(_ w: NSWindow) -> Bool {
-    let kind = String(describing: type(of: w))
-    return (w.isVisible || w.isMiniaturized) && w.canBecomeMain && w.frame.minX > -10_000
-      && !kind.contains("StatusBar") && !kind.contains("MenuBarExtra")
-  }
-
-  /// Sets the activation policy for the windows open now (`closing` is on its way out).
-  static func update(closing: NSWindow? = nil) {
-    let open = NSApp.windows.contains { $0 !== closing && counts($0) }
-    let dock = Presence.showsInDock(windowOpen: open, keepInDock: keepInDock, showInMenuBar: showInMenuBar)
-    let policy: NSApplication.ActivationPolicy = dock ? .regular : .accessory
-    if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
-  }
-
-  /// A window is about to show: be a regular app first, so it can come to the front with ⌘-Tab and the Dock icon.
-  static func windowOpening() {
-    if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
-    NSApp.activate()
-  }
-
-  static func observe() {
-    let nc = NotificationCenter.default
-    for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification, NSWindow.didMiniaturizeNotification] {
-      nc.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { update() } }
-    }
-    nc.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { n in
-      let w = n.object as? NSWindow
-      MainActor.assumeIsolated { update(closing: w) }
-    }
-  }
-}
-
 /// The menu bar item is the app's home: closing the last window keeps the app there (and hides the Dock icon); the Dock
 /// icon, while it shows, brings the window back.
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -141,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     MainActor.assumeIsolated {
       AppPresence.windowOpening()   // the window opens at launch; `swift run` starts .prohibited
       AppPresence.observe()
+      // Settings › General › App Icon › Dock: the look chosen last time.
+      OnboardingController.shared.map { DockIcon.applyStored($0.app.store.prefs) }
       OnboardingController.shared?.launched()
     }
   }
@@ -171,11 +136,12 @@ enum Preferences {
 struct MenuBarLabel: View {
   let badge: Int
   let face: MenuBarFace
+  var mark: MenuBarMark = .dome
   var body: some View {
     HStack(spacing: 2) {
       // The approved mark (the dome bot head, no antenna): a 1-bit template image, so macOS tints it for light, dark
       // and highlighted bars. Its face says what's going on; the amber dot and count stay the one number.
-      Image(nsImage: MarkImages.image(face))
+      Image(nsImage: MarkImages.image(face, mark: mark))
       if badge > 0 {
         Image(systemName: "circle.fill").foregroundStyle(Theme.amber).font(.system(size: 6))
         Text(verbatim: "\(badge)").monospacedDigit()
@@ -190,14 +156,6 @@ struct MenuBarLabel: View {
 struct CaptureOpener: ViewModifier {
   @Environment(\.openWindow) private var openWindow
   func body(content: Content) -> some View { content.onAppear { MainWindow.opener = openWindow } }
-}
-/// The three faces, built once.
-@MainActor enum MarkImages {
-  private static var images: [MenuBarFace: NSImage] = [:]
-  static func image(_ f: MenuBarFace) -> NSImage {
-    if let i = images[f] { return i }
-    let i = BotImages.template(f.mask); images[f] = i; return i
-  }
 }
 #else
 // Linux / non-SwiftUI build: the views are macOS-only. This keeps `swift build` green for the store and live targets.

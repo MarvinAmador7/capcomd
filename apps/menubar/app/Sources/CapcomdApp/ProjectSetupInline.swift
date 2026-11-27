@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import CapcomdStore
+import CapcomdSettings
 
 // The composer's inline project setup (design/setup/InlineSetup, InlineAttention, InlinePublish; setup-spec.md): a
 // picked folder that isn't a set-up capcomd project swaps the tool row for its next steps, inside the composer card.
