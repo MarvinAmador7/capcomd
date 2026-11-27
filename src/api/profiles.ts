@@ -2,11 +2,12 @@
 // can use, as `capcomd profiles list --json` lists them: where each was found and the files laid together to make it,
 // what it does, and whether its login is there. GET and PUT /v1/profiles/{name} (capability profiles.edit; ADR-024 §3,
 // §7 step 6): one profile as the rows a client edits, and a change to them in the profile's own file (./write.ts).
-// Local files only.
+// GET and PUT /v1/profiles/{name}/persona (capability profiles.persona): its persona's text, the one route that serves
+// it (src/profiles/persona-edit.ts). Local files only.
 import type { z } from "zod";
-import { AgentConfigError, agentsFilePath, editOf, editProfile, PROFILE_FIELDS, profileFacts, profileFields, profileLayers, profileRev, profileRow, profileRows, ProfileWriteError, readProfiles, skillRows, untrustedPersona, untrustedSandbox, type ProfileChange, type ProfileSet, type ResolvedProfile } from "../profiles";
+import { AgentConfigError, agentsFilePath, avatarSeed, AVATAR_SEED, editOf, editProfile, PROFILE_FIELDS, profileFacts, profileFields, profileLayers, profileRev, profileRow, profileRows, ProfileWriteError, personaView, readProfiles, skillRows, untrustedPersona, untrustedSandbox, writePersona, type ProfileChange, type ProfileSet, type ResolvedProfile } from "../profiles";
 import { readiness } from "../cli/commands/profiles";
-import type { ProfileDetail, Profiles, ProfileSummary, ProfileWritten } from "./contract";
+import type { ProfileDetail, ProfilePersona, ProfilePersonaWritten, Profiles, ProfileSummary, ProfileWritten } from "./contract";
 
 type Env = Record<string, string | undefined>;
 
@@ -21,6 +22,8 @@ function summaryOf(set: ProfileSet, p: ResolvedProfile, source: Env): z.infer<ty
 		ready: ready.ready, readiness: ready.detail, applied: r.applied,
 		title: facts.title, fit: facts.fit, cost: facts.cost, canReport: facts.canReport, skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name),
 		untrustedPersona: untrustedPersona(p.persona, source), untrustedSandbox: untrustedSandbox(p.machineFiles, p.runtime.sandboxProvider, source),
+		// Capability profiles.avatar: one face for every agent of it.
+		avatarSeed: avatarSeed(p),
 	};
 }
 
@@ -82,7 +85,10 @@ function encoded(path: string, v: unknown): string | null {
 	if (!f || f.prompt || v === undefined || v === null) return null;
 	return typeof v === "string" ? v : JSON.stringify(v);
 }
-export const changesOf = (changes: ProfileChange[]) => changes.map((c) => ({ path: c.path, from: encoded(c.path, c.from), to: encoded(c.path, c.to) }));
+/** The avatar block (`identity.avatar: {seed}`) as its row, identity.avatar.seed, which is what PUT names it by. */
+const seedOf = (v: unknown) => (v && typeof v === "object" && typeof (v as { seed?: unknown }).seed === "string" ? (v as { seed: string }).seed : undefined);
+const asRow = (c: ProfileChange): ProfileChange => (c.path === "identity.avatar" ? { path: AVATAR_SEED, from: seedOf(c.from), to: seedOf(c.to) } : c);
+export const changesOf = (changes: ProfileChange[]) => changes.map(asRow).map((c) => ({ path: c.path, from: encoded(c.path, c.from), to: encoded(c.path, c.to) }));
 
 /** A value the event's text may say: capcomd's own words (a number, a toggle, a choice) or a name; never a file's free text. */
 const SAYABLE = /^[A-Za-z0-9][A-Za-z0-9._:@\[\]*-]{0,63}$/;
@@ -99,7 +105,7 @@ function say(path: string, v: unknown): string | null {
 export function profileChangedText(name: string, changes: ProfileChange[]): string {
 	// The file changed and no value did: it now sets what it inherited, or no longer sets a value it inherits the same.
 	if (!changes.length) return `Profile ${name}'s file changed; its values are the same.`;
-	const parts = changes.slice(0, 5).map((c) => { const a = say(c.path, c.from), b = say(c.path, c.to); return a !== null && b !== null ? `${c.path} ${a} → ${b}` : `${c.path} changed`; });
+	const parts = changes.slice(0, 5).map(asRow).map((c) => { const a = say(c.path, c.from), b = say(c.path, c.to); return a !== null && b !== null ? `${c.path} ${a} → ${b}` : `${c.path} changed`; });
 	const more = changes.length > 5 ? `, and ${changes.length - 5} more` : "";
 	return `Profile ${name} changed: ${parts.join(", ")}${more}.`;
 }
@@ -141,6 +147,63 @@ export async function updateProfileFor(name: string, repo: string | undefined, b
 		} catch (err) {
 			if (!(err instanceof ProfileWriteError)) throw err;
 			return refused(err.code === "not_found" ? 404 : err.code === "conflict" ? 409 : 422, err.code === "read_only" ? "invalid" : err.code, err.message, err.field ? { field: err.field } : {});
+		}
+	});
+	writes = run.catch(() => {});
+	return run;
+}
+
+export type PersonaLookup = { ok: true; persona: z.infer<typeof ProfilePersona> } | ProfileRefusal;
+export type PersonaUpdate = { ok: true; persona: z.infer<typeof ProfilePersonaWritten>; event: ProfileChangedEvent | null } | ProfileRefusal;
+
+/** The profiles of `source`, or the 422 that they can't be read. */
+function readSet(source: Env): ProfileSet | ProfileRefusal {
+	try { return readProfiles(agentsFilePath(source), source); } catch (e) {
+		if (e instanceof AgentConfigError) return refused(422, "invalid", `the profiles can't be read: ${e.message}`);
+		throw e;
+	}
+}
+
+/** GET /v1/profiles/{name}/persona?repo= (capability profiles.persona): its persona's text, whether PUT can change it. */
+export async function personaFor(name: string, repo: string | undefined, base: Env = process.env): Promise<PersonaLookup> {
+	const source = await sourceFor(repo, base);
+	const set = readSet(source);
+	if ("ok" in set) return set;
+	const p = Object.hasOwn(set.profiles, name) ? set.profiles[name]! : undefined;
+	return p ? { ok: true, persona: personaView(p, source) } : refused(404, "not_found", `profile "${name}" not found`);
+}
+
+/** profile.changed's text for a persona write, daemon-written: never the persona's text. */
+export function personaChangedText(name: string, file: string, created: boolean, layer: string): string {
+	const f = SAYABLE.test(file) ? ` (${file})` : "";
+	const trust = layer === "project" ? `; its agents get it once it is trusted (capcomd profiles trust ${name})` : "";
+	return created ? `Profile ${name} has a persona of its own now${f}${trust}.` : `Profile ${name}'s persona changed${f}${trust}.`;
+}
+
+/**
+ * PUT /v1/profiles/{name}/persona?repo=: write its persona (src/profiles/persona-edit.ts) from the hash it was read at.
+ * Answers like GET, with `changed`, and the event to record when something was written.
+ */
+export async function updatePersonaFor(name: string, repo: string | undefined, body: { text: string; rev: string }, base: Env = process.env): Promise<PersonaUpdate> {
+	const source = await sourceFor(repo, base);
+	const run = writes.then((): PersonaUpdate => {
+		const path = agentsFilePath(source);
+		try {
+			const w = writePersona(name, body.text, { path, source, rev: body.rev });
+			const persona = { ...personaView(w.after.profiles[name]!, source), changed: w.changed };
+			const event = w.changed ? {
+				entity: `profile:${name}`, text: personaChangedText(name, w.personaFile, w.created, persona.layer),
+				data: { name, version: w.version, previousVersion: w.previousVersion, layer: persona.layer, path: w.file, changes: [{ path: "identity.persona", from: null, to: null }], persona: { file: w.personaFile, hash: w.hash, created: w.created } },
+			} : null;
+			return { ok: true as const, persona, event };
+		} catch (err) {
+			if (!(err instanceof ProfileWriteError)) throw err;
+			if (err.code === "conflict") {
+				const set = readSet(source);
+				const p = "ok" in set ? undefined : set.profiles[name];
+				return refused(409, "conflict", err.message, p ? { rev: personaView(p, source).hash } : {});
+			}
+			return refused(err.code === "not_found" ? 404 : 422, err.code === "not_found" ? "not_found" : "invalid", err.message, err.field ? { field: err.field } : {});
 		}
 	});
 	writes = run.catch(() => {});

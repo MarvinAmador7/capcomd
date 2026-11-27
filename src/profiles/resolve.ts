@@ -7,6 +7,7 @@ import { agentsFilePath, readProfiles, type MachineFile, type ProfileLayer } fro
 import type { ProfileRuntime } from "./runtime";
 import type { ProfileSkill } from "./skills";
 import type { ProfilePersona } from "./persona";
+import { avatarSeed } from "./describe";
 import { AgentConfigError, validateSpec, widenings, type AgentSpec } from "./v1";
 import { LIST_PATHS, flatOverrides } from "./v2";
 
@@ -27,6 +28,9 @@ export interface ResolvedAgent {
   /** The files that set its `sandbox.provider|environment|size` (./load.ts), resolved by name: a project's needs the
    *  operator's trust before the spawn honours its sandbox (src/primitives/ops.ts `checkResolved`). Not pinned. */
   machineFiles?: MachineFile[];
+  /** Its profile's bot face (`identity.avatar.seed`; capability profiles.avatar), when it sets one: recorded with the
+   *  agent at spawn (Agent.avatarSeed). Not pinned. */
+  avatarSeed?: string;
 }
 
 /**
@@ -42,7 +46,8 @@ export function resolveAgent(name?: string | null, source: Record<string, string
     if (!r) return null;
     const pm = r.manifest.permissions as { report?: unknown } | undefined;
     const permissions = pm && typeof pm === "object" && typeof pm.report === "boolean" ? { permissions: { report: pm.report } } : {};
-    return { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...permissions, ...(r.skills.length ? { skills: r.skills } : {}), ...(r.persona ? { persona: r.persona } : {}), ...(Object.keys(r.runtime).length ? { runtime: r.runtime } : {}), ...(r.machineFiles.length ? { machineFiles: r.machineFiles } : {}) };
+    const seed = avatarSeed(r);
+    return { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...permissions, ...(r.skills.length ? { skills: r.skills } : {}), ...(r.persona ? { persona: r.persona } : {}), ...(Object.keys(r.runtime).length ? { runtime: r.runtime } : {}), ...(r.machineFiles.length ? { machineFiles: r.machineFiles } : {}), ...(seed ? { avatarSeed: seed } : {}) };
   };
   if (name) {
     const ref = decodeAgentRef(name);

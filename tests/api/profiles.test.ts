@@ -56,7 +56,7 @@ describe("GET /v1/profiles (capability profiles)", () => {
 				{ as: "profile", name: "lead", layer: "project", path: w.at("P/lead/profile.yaml") },
 				{ as: "override", name: "lead", layer: "project", path: w.at("P/lead/override.yaml") },
 			],
-			title: null, fit: "orchestrates: sees everything, runs nothing; Claude Code, sonnet, medium cost; up to 30 turns; leads up to 3 worker helpers, one level", cost: "medium", canReport: true, skills: [], untrustedSkills: [], untrustedPersona: null, untrustedSandbox: [],
+			title: null, fit: "orchestrates: sees everything, runs nothing; Claude Code, sonnet, medium cost; up to 30 turns; leads up to 3 worker helpers, one level", cost: "medium", canReport: true, skills: [], untrustedSkills: [], untrustedPersona: null, untrustedSandbox: [], avatarSeed: null,
 		});
 		expect(o.profiles[2]).toMatchObject({ provider: "codex", path: w.at("U/critic.yaml"), description: null, tags: [], ready: false, readiness: "not logged in: capcomd auth login codex" });
 		// What it is never carries: a prompt or a credential.

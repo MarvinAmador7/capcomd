@@ -183,3 +183,10 @@ export function profileFacts(p: Pick<ResolvedProfile, "manifest" | "spec">): Pro
     ...(Object.keys(sharing).length ? { sharing } : {}),
   };
 }
+
+/** A profile's bot face (ADR-024 §2.2 `identity.avatar.seed`; capability profiles.avatar): the seed packages/bot-avatar
+ *  draws every agent of it from, or null when it sets none (each agent is drawn from its own id). Not inherited. */
+export function avatarSeed(p: { manifest: ProfileDoc }): string | null {
+  const id = p.manifest.identity, av = isMap(id) ? id.avatar : undefined, seed = isMap(av) ? av.seed : undefined;
+  return typeof seed === "string" && seed ? seed : null;
+}

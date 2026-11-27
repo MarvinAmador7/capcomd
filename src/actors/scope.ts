@@ -8,6 +8,7 @@ import { dottedType } from "../api/envelope";
 import { eventTypeOwner } from "../../packages/plugin/src/event-type";
 import { attach, inlineOrAttach } from "../api/inline-cap";
 import { workspaceOf, type AgentWorkspace } from "../api/workspace";
+import { PROFILE_WORK_MAX, workResult, type WorkRow } from "../api/profile-work";
 import { RUN_REPO_KV } from "../merge/run-config";
 import { sameHold, type PluginHold } from "../merge/types";
 import { env as envVar } from "../utils/env";
@@ -241,6 +242,9 @@ function rowToAgent(r: any) {
      *  row that predates them. */
     profileVersion: r.profile_version == null ? null : Number(r.profile_version),
     profileSource: (r.profile_source as ProfileLayer | null) ?? null,
+    /** Capability profiles.avatar: its profile's `identity.avatar.seed` at spawn (harness.v1 Agent.avatarSeed); null when
+     *  it set none, or on a row that predates it. */
+    avatarSeed: (r.avatar_seed as string | null) ?? null,
     /** ADR-026 §1: what it had spent when its current attempt began (its earlier attempts'); its spend is this plus what
      *  this attempt's runner reports. Null on its first attempt (and rows from before it). */
     spentBase: r.spent_base ? (JSON.parse(r.spent_base as string) as Budget) : null,
@@ -674,6 +678,8 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "title", "TEXT");
       await addColumn(database, "agents_v2", "profile_version", "INTEGER");
       await addColumn(database, "agents_v2", "profile_source", "TEXT");
+      // Capability profiles.avatar: its profile's identity.avatar.seed at spawn.
+      await addColumn(database, "agents_v2", "avatar_seed", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -972,6 +978,8 @@ export const scopeActor = actor({
         /** ADR-024 §2.4: the resolved profile's version and layer. Not part of the params hash: a retry after the
          *  profile was edited is the same spawn, and keeps the version it was first recorded with. */
         profileVersion?: number | null; profileSource?: ProfileLayer | null;
+        /** Capability profiles.avatar: its profile's identity.avatar.seed. Not part of the params hash, as its version. */
+        avatarSeed?: string | null;
         /** Its profile's skills' SKILL.md texts (ADR-024 §7 step 5), pinned by hash in `spec.skills`: kept as attachments
          *  (content-addressed), so whoever prepares the agent gives it exactly what was resolved at spawn. */
         skillTexts?: string[];
@@ -1033,14 +1041,14 @@ export const scopeActor = actor({
         try { if (repoKv.length) runRepo = envVar("REPO", JSON.parse(repoKv[0]!.v as string) ?? {}); } catch { /* unreadable: fall back */ }
         const workspace = workspaceOf(runRepo ?? envVar("REPO"));
         await tx.execute(
-          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace, drive_env, profile_version, profile_source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace, drive_env, profile_version, profile_source, avatar_seed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           params.agentId, params.runId, params.parent ?? null, d.depth, params.profile, params.ref,
           params.spec ? JSON.stringify(params.spec) : null, JSON.stringify(d.limits), params.task,
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now,
           workspace ? JSON.stringify(workspace) : null,
           params.driveEnv && Object.keys(params.driveEnv).length ? JSON.stringify(params.driveEnv) : null,
-          params.profileVersion ?? null, params.profileSource ?? null
+          params.profileVersion ?? null, params.profileSource ?? null, params.avatarSeed ?? null
         );
         killpoint("scope.spawn.mid");
         // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.
@@ -1057,7 +1065,7 @@ export const scopeActor = actor({
         }
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile,
-          profileVersion: params.profileVersion ?? null, profileSource: params.profileSource ?? null, budget: d.budget, limits: d.limits,
+          profileVersion: params.profileVersion ?? null, profileSource: params.profileSource ?? null, avatarSeed: params.avatarSeed ?? null, budget: d.budget, limits: d.limits,
           agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}), workspace,
           ...(shown.title ? { title: shown.title, titleSource: shown.titleSource } : {}), ...(params.by ? { by: params.by } : {}),
@@ -1902,6 +1910,27 @@ export const scopeActor = actor({
 
     async listAgents(c, _p: Record<string, never>) {
       return (await c.db.execute("SELECT * FROM agents_v2 ORDER BY created_at, agent_id")).map(rowToAgent);
+    },
+
+    /**
+     * Capability profiles.work (GET /v1/profiles/{name}/work): this run's newest agents of one profile, in one query,
+     * with only what a profile's page shows (src/api/profile-work.ts WorkRow): their state, the parts of their result an
+     * outcome is read from, their title and their task's first characters (for a derived title); never the rest.
+     */
+    async profileWork(c, params: { profile: string; limit?: number }) {
+      const limit = Math.max(1, Math.min(PROFILE_WORK_MAX, Math.floor(Number(params.limit) || 10)));
+      const rows = (await c.db.execute(
+        `SELECT a.agent_id, a.status, a.title, substr(a.task, 1, 2000) AS task_head, a.result, a.updated_at,
+           (SELECT MAX(e.at) FROM scope_events e WHERE e.agent_id = a.agent_id AND e.type IN ('AGENT_DONE', 'AGENT_FAILED', 'AGENT_CANCELLED', 'AGENT_REAPED')) AS ended_at
+         FROM agents_v2 a WHERE a.profile = ? ORDER BY a.updated_at DESC, a.agent_id DESC LIMIT ?`, String(params.profile), limit)) as any[];
+      return rows.map((r): WorkRow => {
+        let result: unknown = null;
+        try { result = r.result ? JSON.parse(r.result as string) : null; } catch { /* unreadable: no outcome from it */ }
+        return {
+          agentId: r.agent_id as string, status: r.status as string, titleState: r.title ? (JSON.parse(r.title as string) as TitleState) : null,
+          taskHead: String(r.task_head ?? ""), ...workResult(result), updatedAt: Number(r.updated_at), endedAt: r.ended_at == null ? null : Number(r.ended_at),
+        };
+      });
     },
 
     /**
