@@ -17,7 +17,12 @@ import PerfLoopKit
 
   /// The sidebar's foot (40 pt, under the list; 8 pt sides, 6 pt under it): Team sits left of History and Settings
   /// (28 pt buttons, 2 pt apart, 2 pt in from the right). AppKit's window coordinates: from the bottom.
-  static func teamButton(_ d: Desk) -> CGPoint { CGPoint(x: 248 - 8 - 2 - 28 * 2 - 2 * 2 - 14, y: 6 + 20) }
+  static func teamButton(_ d: Desk) -> CGPoint {
+    let sidebar: CGFloat = 248, side: CGFloat = 8, inset: CGFloat = 2, button: CGFloat = 28, gap: CGFloat = 2
+    let x = sidebar - side - inset - 2 * (button + gap) - button / 2
+    let y: CGFloat = 6 + 40 / 2
+    return CGPoint(x: x, y: y)
+  }
 
   /// The pane's place beside the sidebar (top-left coordinates, as ink regions take them).
   static func paneRegion(_ d: Desk) -> InkRegion {
