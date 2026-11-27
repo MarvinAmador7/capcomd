@@ -52,7 +52,7 @@ test("capcomd run --profile cx --set maxTurns=8 (codex profile, apikey, appendSy
   const runId = `run-codex-e2e-${Date.now()}`;
   // capcomd run without a planner agent is the recipe-hierarchical plugin's, off unless turned on.
   const cenv = { ...env, CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}`, CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" };
-  const running = capcomd(["run", "--json", "--run-id", runId, "--profile", "cx", "--set", "maxTurns=8", "make the failing test pass"], cenv);
+  const running = capcomd(["run", "--json", "--recipe", "--run-id", runId, "--profile", "cx", "--set", "maxTurns=8", "make the failing test pass"], cenv);
   // main is protected: the task parks in awaiting_approval after verification; approve it.
   let approved = false;
   for (let i = 0; i < 240 && !approved; i++) {

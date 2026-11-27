@@ -523,9 +523,9 @@ export function harnessApp(o: ServerOptions) {
 		}
 		const p = parsed.data;
 		if (p.profile !== undefined && p.driver !== undefined) return err(c, 422, "invalid", "profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
-		if (p.profile !== undefined && p.effort !== undefined) return err(c, 422, "invalid", "profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
-		if (p.profile !== undefined && p.model !== undefined) return err(c, 422, "invalid", "profile and model can't be combined: model is the planner agent's (the driver's), and profile picks the worker of a run without one");
-		if (p.profile !== undefined && p.planner !== undefined) return err(c, 422, "invalid", "profile and planner can't be combined: planner runs a planner agent, which picks its own workers, and profile picks the worker of a run without one; send one of them", { field: "planner" });
+		if (p.profile !== undefined && p.effort !== undefined) return err(c, 422, "invalid", "profile and effort can't be combined: effort is the planner agent's (the driver's), and profile runs one agent of that profile, with no planner");
+		if (p.profile !== undefined && p.model !== undefined) return err(c, 422, "invalid", "profile and model can't be combined: model is the planner agent's (the driver's), and profile runs one agent of that profile, with no planner");
+		if (p.profile !== undefined && p.planner !== undefined) return err(c, 422, "invalid", "profile and planner can't be combined: planner runs a planner agent, which picks its own workers, and profile runs one agent of that profile, with no planner; send one of them", { field: "planner" });
 		// GET /v1/run-options for this run (the body's project, when it names one), read once when something needs it.
 		let options: Awaited<ReturnType<typeof src.runOptions>> | undefined;
 		if (p.planner !== undefined || p.effort !== undefined || p.model !== undefined || p.sandbox !== undefined) {
@@ -551,8 +551,9 @@ export function harnessApp(o: ServerOptions) {
 				if (!ids.includes(p.model)) return err(c, 422, "invalid", `model ${JSON.stringify(p.model)} isn't a ${d.label} model capcomd offers: use one of ${ids.join(", ")}`, { field: "model" });
 			}
 			// Logins and agent environments are per sandbox: a driver that can't run in the chosen one is refused now, not
-			// minutes later (capability runs.options.sandbox).
-			const fit = p.sandbox !== undefined ? d?.sandboxes?.[p.sandbox] : undefined;
+			// minutes later (capability runs.options.sandbox). A run of one `profile` has no driver: `capcomd run` checks
+			// that profile's login and environment there instead.
+			const fit = p.sandbox !== undefined && p.profile === undefined ? d?.sandboxes?.[p.sandbox] : undefined;
 			if (fit && !fit.available) return err(c, 422, "invalid", `${d!.label} can't drive a run in ${PROVIDER_LABEL[p.sandbox as keyof typeof PROVIDER_LABEL] ?? p.sandbox}: ${fit.reason ?? "unavailable"}`);
 		}
 		// A run's plugin settings (capability plugins.config, plugin API §10.2 layer 5): per-run ones only, checked against
