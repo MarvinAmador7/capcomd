@@ -10,8 +10,10 @@ import PerfLoopKit
 /// the sidebar's foot clicked open and closed, roster rows clicked, and a profile's settings row opened in place and a
 /// value written. The sidebar's list and the profile's pane are ink regions: a blank roster or pane fails.
 @MainActor enum DriveTeam {
-  /// Views of the reel and the agents' panes, kept under Team: switching profiles must not render them.
-  static let agentViews: Set<String> = ["Column", "ColumnHead", "ColumnThread", "EntryRow", "PaneEntryRow", "PaneHead", "PaneThread", "AgentRow", "SidebarList", "CrewTab"]
+  /// The agents' pane and list, kept under Team: switching profiles must not render them. (The folded reel under the
+  /// opened layer loads its columns' thread pages on its own clock, which a switch neither causes nor waits on: its
+  /// views aren't judged here; `sidebar-toggle`'s reel-untouched judges it.)
+  static let agentViews: Set<String> = ["PaneEntryRow", "PaneHead", "PaneThread", "AgentRow", "SidebarList"]
 
   /// The sidebar's foot (40 pt, under the list; 8 pt sides, 6 pt under it): Team sits left of History and Settings
   /// (28 pt buttons, 2 pt apart, 2 pt in from the right). AppKit's window coordinates: from the bottom.
