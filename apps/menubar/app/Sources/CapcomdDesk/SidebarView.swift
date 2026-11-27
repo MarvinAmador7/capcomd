@@ -58,18 +58,27 @@ struct SidebarView: View {
 
 // MARK: header and footer
 
-/// The traffic lights' room, the sidebar button (where the folded title bar has it), then the hand, Search and +.
+/// Left: the traffic lights' room, the sidebar button (where the tab bar above has it), then the hand, Search and +.
+/// Right (Sidebar right): the hand, Search and +, then the sidebar button at the window's edge; the lights stay at the
+/// window's top left, over the pane's band.
 struct SidebarHeader: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
-    HStack(spacing: 2) {
-      SidebarToggleButton(on: true)
-      Spacer(minLength: 0)
-      NeedsHand(style: .header)
-      SideButton(symbol: "magnifyingglass", help: "Search (⌘K)", label: "Search") { model.togglePalette() }
-      SideButton(symbol: "plus", help: "New project (⇧⌘N)", label: "New project") { model.openNewProject() }
+    let right = model.nav.sidebarSide == .right
+    return HStack(spacing: 2) {
+      if !right {
+        SidebarToggleButton(on: true)
+        Spacer(minLength: 0)
+      }
+      NeedsHand()
+      SearchPlaceButton()
+      NewProjectPlaceButton()
+      if right {
+        Spacer(minLength: 0)
+        SidebarToggleButton(on: true)
+      }
     }
-    .padding(.leading, SidebarMetrics.toggleX - 8).padding(.trailing, 2)
+    .padding(.leading, right ? 2 : SidebarMetrics.toggleX - 8).padding(.trailing, 2)
     .frame(height: SidebarMetrics.header)
   }
 }
@@ -78,8 +87,7 @@ struct SidebarFooter: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
     HStack(spacing: 2) {
-      SideButton(glyph: AnyView(HouseGlyph().stroke(style: StrokeStyle(lineWidth: 1.3, lineJoin: .round)).frame(width: 15, height: 15)),
-                 on: model.homeShown && !model.team.isOpen, help: "Home (⌘0)", label: "Home") { model.toggleHome() }
+      HomePlaceButton()
       Spacer(minLength: 0)
       TeamButton()
       HistoryButton(size: Theme.Desk.Side.button)
@@ -90,63 +98,41 @@ struct SidebarFooter: View {
   }
 }
 
-/// The sidebar button: folds or opens (⌃⌘S). Pressed while the sidebar is open.
+/// The sidebar button: tabs ↔ the sidebar (⌃⌘S), on the side chosen last. Pressed while the sidebar is open.
 struct SidebarToggleButton: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let on: Bool
   var body: some View {
-    SideButton(symbol: "sidebar.left", on: on, help: on ? "Fold the sidebar (⌃⌘S)" : "Open the sidebar (⌃⌘S)",
-               label: on ? "Fold the sidebar" : "Open the sidebar", size: on ? Theme.Desk.Side.button : Theme.Desk.iconButton) {
+    let symbol = model.nav.sidebarSide == .right ? "sidebar.right" : "sidebar.left"
+    SideButton(symbol: symbol, on: on, help: on ? "Show tabs (⌃⌘S)" : "Show the sidebar (⌃⌘S)",
+               label: on ? "Show tabs" : "Show the sidebar", size: on ? Theme.Desk.Side.button : Theme.Desk.iconButton) {
       withAnimation(reduceMotion ? Theme.Motion.reduced : .spring(duration: 0.25, bounce: 0)) { model.toggleSidebar() }
     }
   }
 }
 
-/// The Needs you hand (SF hand.raised, AttentionIcon): the normal icon colour with the amber count beside it (header) or
-/// as a badge (rail) while anything needs you; grey with no count at zero. A click opens the Needs you reel.
+/// The Needs you hand (SF hand.raised, AttentionIcon): the normal icon colour with the amber count beside it while
+/// anything needs you; grey with no count at zero. A click opens the Needs you reel. In the sidebar's header and at the
+/// tab bar's trailing end.
 struct NeedsHand: View {
-  enum Style { case header, rail }
   @Environment(DeskModel.self) private var model
-  let style: Style
   var body: some View {
     let n = model.needs.count
-    let label = n > 0 ? "Needs you: \(n). Open them as a reel" : "Nothing needs you"
+    let label = n > 0 ? "\(PlaceButton.needs.label): \(n). Open them as a reel" : "Nothing needs you"
     return Button { model.openNeedsReel() } label: {
-      switch style {
-      case .header:
-        HStack(spacing: 4) {
-          Image(systemName: "hand.raised").font(.system(size: 14))
-          if n > 0 { Text(verbatim: "\(n)").font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(Theme.amber) }
-        }
-        .foregroundStyle(n > 0 ? Theme.Desk.text : Theme.Desk.tertiary)
-        .padding(.leading, n > 0 ? 5 : 0).padding(.trailing, n > 0 ? 7 : 0)
-        .frame(minWidth: Theme.Desk.Side.button, minHeight: Theme.Desk.Side.button)
-        .contentShape(Rectangle())
-      case .rail:
-        Image(systemName: "hand.raised").font(.system(size: 15))
-          .foregroundStyle(n > 0 ? Theme.Desk.text : Theme.Desk.tertiary)
-          .frame(width: RailMetrics.button, height: RailMetrics.button)
-          .overlay(alignment: .topTrailing) { if n > 0 { CountBadge(n: n).offset(x: 0, y: 1) } }
-          .contentShape(Rectangle())
+      HStack(spacing: 4) {
+        Image(systemName: "hand.raised").font(.system(size: 14))
+        if n > 0 { Text(verbatim: "\(n)").font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(Theme.amber) }
       }
+      .foregroundStyle(n > 0 ? Theme.Desk.text : Theme.Desk.tertiary)
+      .padding(.leading, n > 0 ? 5 : 0).padding(.trailing, n > 0 ? 7 : 0)
+      .frame(minWidth: Theme.Desk.Side.button, minHeight: Theme.Desk.Side.button)
+      .contentShape(Rectangle())
     }
-    .buttonStyle(SideButtonStyle(radius: style == .rail ? RailMetrics.radius : Theme.Desk.Side.buttonRadius))
-    .help(n > 0 ? "Needs you (\(n))" : "Nothing needs you")
+    .buttonStyle(SideButtonStyle(radius: Theme.Desk.Side.buttonRadius))
+    .help(n > 0 ? "\(PlaceButton.needs.help) (\(n))" : "Nothing needs you")
     .accessibilityLabel(label)
-  }
-}
-
-/// The amber count on the rail's hand (NavC `.badge`).
-struct CountBadge: View {
-  let n: Int
-  var body: some View {
-    Text(verbatim: n > 99 ? "99+" : "\(n)").font(.system(size: 10, weight: .bold)).monospacedDigit()
-      .foregroundStyle(Color(red: 0x1D / 255, green: 0x1D / 255, blue: 0x1F / 255))
-      .padding(.horizontal, 4).frame(minWidth: 15, minHeight: 15)
-      .background(Capsule().fill(Theme.amber))
-      .background(Capsule().stroke(Theme.Desk.ground, lineWidth: 4))
-      .fixedSize()
   }
 }
 
@@ -158,10 +144,10 @@ struct HistoryButton: View {
       Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).foregroundStyle(Theme.Desk.tertiary)
         .frame(width: size, height: size)
     }
-    .buttonStyle(SideButtonStyle(radius: size > 30 ? RailMetrics.radius : Theme.Desk.Side.buttonRadius))
+    .buttonStyle(SideButtonStyle(radius: Theme.Desk.Side.buttonRadius))
     .disabled(true).opacity(0.5)
-    .help("History (not built yet)")
-    .accessibilityLabel("History, not available yet")
+    .help(PlaceButton.history.help)
+    .accessibilityLabel(PlaceButton.history.label)
   }
 }
 
@@ -176,8 +162,8 @@ struct SettingsButton: View {
       Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.Desk.tertiary)
         .frame(width: size, height: size)
     }
-    .buttonStyle(SideButtonStyle(radius: size > 30 ? RailMetrics.radius : Theme.Desk.Side.buttonRadius))
-    .help("Settings (⌘,)")
+    .buttonStyle(SideButtonStyle(radius: Theme.Desk.Side.buttonRadius))
+    .help(PlaceButton.settings.help)
     .accessibilityLabel("Settings")
   }
 }

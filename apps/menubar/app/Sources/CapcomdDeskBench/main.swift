@@ -16,7 +16,7 @@ let drivers: [String: ScenarioBody] = [
   "open": Drive.open, "switch": Drive.switchProjects, "step": Drive.step, "jump": Drive.jump, "fling": Drive.fling,
   "swipe": { try await Drive.swipe($0) }, "burst": Drive.burst, "typing": Drive.typing, "resize": Drive.resize, "follow": Drive.follow,
   "sidebar-toggle": DriveSidebar.sidebarToggle, "sidebar-select": DriveSidebar.sidebarSelect, "sidebar-burst": DriveSidebar.sidebarBurst,
-  "sidebar-scroll": DriveSidebar.sidebarScroll,
+  "sidebar-scroll": DriveSidebar.sidebarScroll, "layout-switch": DriveLayout.layoutSwitch,
   "palette-first": Palette.paletteFirst, "palette-open": Palette.paletteOpen, "palette-type": Palette.paletteType, "palette-keys": Palette.paletteKeys,
   "split-open": DriveSplits.splitOpen, "split-focus": DriveSplits.splitFocus, "split-burst": DriveSplits.splitBurst,
   "pane-expand": DriveSplits.paneExpand, "expand-switch": DriveSplits.expandSwitch,

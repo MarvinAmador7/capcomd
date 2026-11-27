@@ -23,7 +23,7 @@ public enum BenchCatalog {
   /// Every `DeskProbe.body` name in CapcomdDesk.
   public static let probes = ["AgentRow", "Column", "ColumnComposer", "ColumnHead", "ColumnThread", "CrewTab", "DecisionBar", "EntryRow", "FoldedDeck",
                                "LimitBar", "NeedsReel", "NothingNeedsYou", "OpenGroup", "Pane", "PaneArea", "PaneComposer", "PaneEntryRow", "PaneHead",
-                               "PaneThread", "ProjectLabel", "Rail", "Reel", "RootView", "SearchView", "SectionHeading", "Sidebar", "SidebarList",
+                               "PaneThread", "ProjectLabel", "Reel", "RootView", "SearchView", "SectionHeading", "Sidebar", "SidebarList", "TabBarPlaces",
                                "TitleBar", "TeamDeck", "TeamFieldRows", "TeamPane", "TeamPaneHead", "TeamProfileBody", "TeamRoster", "TeamRow",
                                "TeamSheet", "TeamWork"]
 

@@ -10,11 +10,34 @@ import PerfLoopProbe
 // `SidebarSlice.content`, rebuilt from the runs a change names (`.run(id)`, `.agent(id)`, `.all`) and assigned only when
 // it differs; nothing in it depends on a thread's items, so a thread item that arrives re-renders no row.
 
-/// Folded or opened, and the sidebar's own view state. `sidebarOpen` is remembered across launches.
+/// Tabs (folded) or the sidebar (opened), the layout's side and edge and behaviors (DeskLayout.swift), and the sidebar's
+/// own view state. The layout is remembered across launches (`DeskLayoutPrefs`).
 @Observable @MainActor
 package final class DeskNav {
+  /// The sidebar shows (a sidebar layout), not the tabs.
   package internal(set) var sidebarOpen = false {
-    didSet { Mutations.record("DeskNav.sidebarOpen"); if sidebarOpen != oldValue { defaults?.set(sidebarOpen, forKey: Self.key) } }
+    didSet { Mutations.record("DeskNav.sidebarOpen"); if sidebarOpen != oldValue { save() } }
+  }
+  /// The sidebar's side; kept while the tabs show, for ⌃⌘S.
+  package internal(set) var sidebarSide: SidebarSide = .left {
+    didSet { Mutations.record("DeskNav.sidebarSide"); if sidebarSide != oldValue { save() } }
+  }
+  /// The tab bar's edge; kept while the sidebar shows, for ⌃⌘S.
+  package internal(set) var tabsEdge: TabsEdge = .above {
+    didSet { Mutations.record("DeskNav.tabsEdge"); if tabsEdge != oldValue { save() } }
+  }
+  /// Sidebar behavior: Always show, or Show on hover.
+  package internal(set) var sidebarBehavior: ChromeBehavior = .always {
+    didSet { Mutations.record("DeskNav.sidebarBehavior"); if sidebarBehavior != oldValue { save() } }
+  }
+  /// The tab bar's behavior: Always show, or Show on hover.
+  package internal(set) var tabsBehavior: ChromeBehavior = .always {
+    didSet { Mutations.record("DeskNav.tabsBehavior"); if tabsBehavior != oldValue { save() } }
+  }
+  /// The layout the window shows.
+  package var layout: DeskLayout { DeskLayout(sidebar: sidebarOpen, side: sidebarSide, edge: tabsEdge) }
+  package var prefs: DeskLayoutPrefs {
+    DeskLayoutPrefs(layout: layout, side: sidebarSide, edge: tabsEdge, sidebarBehavior: sidebarBehavior, tabsBehavior: tabsBehavior)
   }
   /// The sidebar and the pane have been built (the first open): from then on they stay built, and a toggle only moves
   /// layers (the sidebar's transform, the opacities), so it costs no view building or teardown.
@@ -34,14 +57,20 @@ package final class DeskNav {
   /// The height the list has (set by the sidebar when the window's height changes, never per frame).
   package internal(set) var listHeight: CGFloat = 0 { didSet { Mutations.record("DeskNav.listHeight") } }
   @ObservationIgnored var defaults: UserDefaults?
-  static let key = "desk.sidebarOpen"
 
+  /// The layout as stored (the old Reel / Sidebar choice migrated: Tabs above / Sidebar left).
   func restore(from d: UserDefaults?) {
     defaults = nil
-    sidebarOpen = d?.bool(forKey: Self.key) ?? false
+    let p = DeskLayoutPrefs.read(d)
+    sidebarOpen = p.layout.isSidebar
+    sidebarSide = p.side
+    tabsEdge = p.edge
+    sidebarBehavior = p.sidebarBehavior
+    tabsBehavior = p.tabsBehavior
     everOpened = sidebarOpen
     defaults = d
   }
+  private func save() { if let defaults { prefs.write(defaults) } }
   func focusList() { listFocus &+= 1 }
 }
 

@@ -42,9 +42,12 @@ package struct DeskCommands: Commands {
     CommandGroup(replacing: .saveItem) {
       Button("Fold into the Title Bar") { current()?.foldShortcut() }.keyboardShortcut("w", modifiers: .command)
     }
-    // View: the sidebar (⌃⌘S; ⌘\\ too, from the window). Opened, the window is the sidebar and one agent's pane.
+    // View: tabs ↔ the sidebar (⌃⌘S; ⌘\\ too, from the window), on the side or edge chosen last; Layout picks any of
+    // the four and each part's Show on hover. Opened, the window is the sidebar and one agent's pane.
     CommandGroup(replacing: .sidebar) {
       Button("Toggle Sidebar") { current()?.toggleSidebar() }.keyboardShortcut("s", modifiers: [.control, .command])
+      Menu("Layout") { LayoutMenu(current: current) }
+      Divider()
       // Opened (SPEC §2.1): splits bring the reel's columns back as panes; the focused pane can take the window.
       Button("Split Right") { current()?.split(down: false) }.keyboardShortcut("d", modifiers: .command)
       Button("Split Down") { current()?.split(down: true) }.keyboardShortcut("d", modifiers: [.command, .shift])
@@ -76,6 +79,24 @@ package struct DeskCommands: Commands {
       Divider()
       Button(current()?.follow == true ? "Stop Following" : "Follow") { current()?.follow.toggle() }.keyboardShortcut("f", modifiers: [.command, .shift])
     }
+  }
+}
+
+/// View › Layout: the four layouts (checked: the one shown), then each part's Show on hover. The same choices as
+/// Settings › Interface › Layout. A view, so the checkmarks follow the model.
+struct LayoutMenu: View {
+  let current: @MainActor () -> DeskModel?
+  var body: some View {
+    let m = current()
+    let layout = m?.layout
+    ForEach(DeskLayout.allCases) { l in
+      Toggle(l.title, isOn: Binding(get: { layout == l }, set: { if $0 { current()?.setLayout(l) } }))
+    }
+    Divider()
+    Toggle("Show Sidebar on Hover", isOn: Binding(get: { m?.nav.sidebarBehavior == .hover },
+                                                   set: { current()?.setSidebarBehavior($0 ? .hover : .always) }))
+    Toggle("Show Tab Bar on Hover", isOn: Binding(get: { m?.nav.tabsBehavior == .hover },
+                                                   set: { current()?.setTabsBehavior($0 ? .hover : .always) }))
   }
 }
 

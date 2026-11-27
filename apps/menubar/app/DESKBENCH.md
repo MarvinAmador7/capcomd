@@ -85,6 +85,16 @@ its run when the median is over it; the frame budgets are information.
 - `sidebar-scroll`: a long sidebar (every project unfolded, Finished open) scrolled with the synthetic `scroll-down` /
   `scroll-up` (`gesture`, `gestureBack`) replayed into its scroll view. Checks `scrolled`, `isolation-pane`. Use a
   fixture with several projects (`--fixture crew@projects=8,agents=24`).
+- `layout-switch`: the four layouts (SPEC §2): with the reel off its first column, an agent picked and two panes, ten
+  switches covering every layout and way: real clicks on the sidebar button (in the tab bar above and below, in the
+  sidebar's header left and right), ⌃⌘S through the menu bar (`Toggle Sidebar`), and a layout picked as Settings and
+  View › Layout pick it (`setLayout`). 50 ms. Checks `chrome` (tabs: the reel spans the window, under or over the
+  52 pt bar, no sidebar; sidebar: the sidebar's hosting view on its side), `columns-kept` (the reel's column views are
+  the same objects after every switch), `selection-kept` (the selected agent, the reel's place, the panes and their
+  views); ink: the sidebar and the pane after each switch to a sidebar, the reel after each to tabs.
+- Any scenario runs in a layout with `--set layout=tabsAbove|sidebarLeft|sidebarRight|tabsBelow` (default `tabsAbove`,
+  the window as it opens by default), and `--set sidebarBehavior=hover`, `--set tabsBehavior=hover`; a scenario that
+  folds or opens the sidebar then does so on that side or edge.
 - `palette-open`, `palette-type`, `palette-keys`: Search ⌘K on the `search` fixture (their default: 60 projects, 250+
   items). ⌘K through the menu bar → the frame with the panel and its results (50 ms); a query typed a key at a time (`run.type`,
   each key → the frame with its results, one frame); ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens (folded, as ↩ does), Esc

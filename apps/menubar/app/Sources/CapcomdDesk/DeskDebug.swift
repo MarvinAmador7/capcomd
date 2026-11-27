@@ -491,7 +491,7 @@ import CapcomdStore
         out.append("paneview \(p.paneId) \(p.shownAgent) frame \(v.frame.integral) \(scrolls.joined(separator: "; "))")
       }
     }
-    out.append("sidebar open \(model.nav.sidebarOpen) pane \(model.paneAgent ?? "-") selected \(model.selectedAgent ?? "-") cursor \(model.nav.cursor.map { "\($0)" } ?? "-") needs \(model.sidebar.needsCount) overflow \(lines.overflow) height \(Int(model.nav.listHeight))")
+    out.append("layout \(model.layout.rawValue) sidebar \(model.nav.sidebarBehavior.rawValue) tabs \(model.nav.tabsBehavior.rawValue) sidebar open \(model.nav.sidebarOpen) pane \(model.paneAgent ?? "-") selected \(model.selectedAgent ?? "-") cursor \(model.nav.cursor.map { "\($0)" } ?? "-") needs \(model.sidebar.needsCount) overflow \(lines.overflow) height \(Int(model.nav.listHeight))")
     for l in lines.pinned + lines.list {
       switch l {
       case .heading(let sec, let n, _): out.append("side \(sec.rawValue) \(n)")
