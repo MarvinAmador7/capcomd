@@ -5,6 +5,7 @@ import SwiftUI
 import DeskBenchKit
 #if canImport(SwiftUI) && os(macOS)
 @testable import CapcomdDesk
+@testable import CapcomdSettings
 #endif
 
 /// The desk's four layouts (owner, 2026-11-27): the stored preference and its migration from Reel / Sidebar, ⌃⌘S
@@ -189,6 +190,48 @@ final class DeskLayoutTests: XCTestCase {
       let expanded = OpenedFrames.make(size: size, side: side, hover: false, expanded: true)
       XCTAssertEqual(expanded.main, CGRect(origin: .zero, size: size))
     }
+  }
+
+  /// Settings › Interface › Layout: the four tiles pick the window's layout, the behavior row is the sidebar's with a
+  /// sidebar layout and the tab bar's with tabs. With DESK_LAYOUT_CAPTURE_DIR set, the page is written there.
+  @MainActor func testTheLayoutCardInSettings() throws {
+    let (m, s) = model()
+    let settings = SettingsModel(store: s, session: nil, host: .quiet)
+    settings.desk = m
+    for l in DeskLayout.allCases {
+      settings.deskLayout = l
+      XCTAssertEqual(m.layout, l)
+      XCTAssertEqual(settings.deskLayout, l)
+    }
+    settings.deskLayout = .sidebarRight
+    settings.layoutBehavior = .hover
+    XCTAssertEqual(m.nav.sidebarBehavior, .hover)
+    XCTAssertEqual(m.nav.tabsBehavior, .always)
+    settings.deskLayout = .tabsAbove
+    XCTAssertEqual(settings.layoutBehavior, .always)
+    settings.layoutBehavior = .hover
+    XCTAssertEqual(m.nav.tabsBehavior, .hover)
+    m.toggleSidebar()   // ⌃⌘S: Settings follows the window
+    XCTAssertEqual(settings.deskLayout, .sidebarRight)
+    settings.layoutBehavior = .always
+    m.setTabsBehavior(.always)
+    settings.deskLayout = .sidebarLeft
+
+    guard let dir = ProcessInfo.processInfo.environment["DESK_LAYOUT_CAPTURE_DIR"].map({ URL(fileURLWithPath: $0) }) else { return }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    settings.go(.page(.interface))
+    _ = NSApplication.shared
+    let w = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 880, height: 660), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+    w.isReleasedWhenClosed = false
+    w.appearance = NSAppearance(named: .darkAqua)
+    let host = NSHostingView(rootView: SettingsWindowView(model: settings))
+    w.contentView = host
+    w.orderFrontRegardless()
+    defer { w.orderOut(nil); w.contentView = nil }
+    RunLoop.main.run(until: Date().addingTimeInterval(1.0))
+    let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: rep)
+    try rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("settings-interface.png"))
   }
 
   /// Each layout in a real window (off screen): tabs show the tab bar and no sidebar (no rail either), on their edge;

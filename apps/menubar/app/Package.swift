@@ -67,6 +67,6 @@ let package = Package(
     .testTarget(name: "CapcomdOnboardingTests", dependencies: ["CapcomdOnboarding"], exclude: ["Fixtures"]),
     // CapcomdDesk for its knobs' defaults (no window is made).
     // PerfLoopKit and PerfLoopHost: the manifest read back the way the runner reads it.
-    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", "CapcomdDesk", .product(name: "PerfLoopProbe", package: "perfloop"),
+    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", "CapcomdDesk", "CapcomdSettings", .product(name: "PerfLoopProbe", package: "perfloop"),
                                                           .product(name: "PerfLoopKit", package: "perfloop"), .product(name: "PerfLoopHost", package: "perfloop")]),
   ])

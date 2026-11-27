@@ -22,6 +22,15 @@ package enum DeskLayout: String, CaseIterable, Sendable, Hashable, Identifiable 
     case .tabsBelow: "Tabs Below"
     }
   }
+  /// The Layout tile's name (Settings › Interface), in sentence case as Settings writes it.
+  package var name: String {
+    switch self {
+    case .tabsAbove: "Tabs above"
+    case .sidebarLeft: "Sidebar left"
+    case .sidebarRight: "Sidebar right"
+    case .tabsBelow: "Tabs below"
+    }
+  }
   /// The sidebar, not the tabs.
   package var isSidebar: Bool { self == .sidebarLeft || self == .sidebarRight }
   /// The sidebar's side in this layout (nil: a tabs layout).
@@ -45,6 +54,8 @@ package enum ChromeBehavior: String, CaseIterable, Sendable, Hashable, Identifia
   case always, hover
   package var id: String { rawValue }
   package var title: String { self == .always ? "Always Show" : "Show on Hover" }
+  /// Settings' wording (sentence case).
+  package var name: String { self == .always ? "Always show" : "Show on hover" }
 }
 
 /// What is kept across launches: the layout, the side and edge ⌃⌘S goes back to, and each part's behavior.
