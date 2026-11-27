@@ -5,6 +5,48 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.13.0-rc.3 (2026-11-26)
+
+Release candidate: the desktop app gets Team, your agent profiles by project, each one a page you can give a task,
+edit and check on, served by new profile routes in the daemon. Changes since 0.13.0-rc.2 are below; everything in
+rc.1 and rc.2 still applies.
+
+### Team in the desktop app
+
+- **Team** is the new button in the sidebar's foot (and on the folded rail). It lists your agent profiles by project,
+  then "All projects" for your own, each with its bot, its name and what it does: plans, leads, builds or reviews.
+- Pick a profile to open it as a pane, beside your agents. From there you can:
+  - rename it, and change its bot by clicking it;
+  - give it a task from the same composer as Home: a worker profile starts a run of that profile, a planner starts a
+    run it plans;
+  - read and edit its SOUL.md in place;
+  - open its settings row to change any value, saved as you change it, with where each value comes from and Reset;
+  - see its recent work and how each one ended;
+  - for an installed profile, check for updates or show it in Finder.
+- Splits (⌘D) and expand (⇧⌘↩) work as they do for agents. Parts that need routes your capcomd doesn't have yet are
+  left out rather than shown empty.
+
+### Profiles in the API
+
+- `GET /v1/profiles/{name}/work` lists a profile's latest agents (with `?repo=`, in that project's runs), newest
+  first, each with its run, project, title and an outcome capcomd reads from its state and its verify, review and
+  merge results: running, idle, merged, passed, found issues, failed or cancelled (capability `profiles.work`).
+- `GET` and `PUT /v1/profiles/{name}/persona` read and edit a profile's persona, its `SOUL.md` (capability
+  `profiles.persona`; writing needs the `configure` scope). Editing a profile that has no persona gives it a
+  `SOUL.md` in its own directory (a single `<name>.yaml` becomes `<name>/profile.yaml`) and bumps its version.
+- Every agent of a profile can wear the same bot: set `identity.avatar.seed` in the profile (or from the app, through
+  `PUT /v1/profiles/{name}`), and `GET /v1/profiles`, each agent and `agent.spawned` carry it as `avatarSeed`
+  (capability `profiles.avatar`).
+- `POST /v1/runs` takes `planner`, the profile that plans the run, as `capcomd run --planner <name>` does: one of the
+  planners `GET /v1/run-options` lists (capability `runs.planner`).
+
+### Behavior to watch for
+
+- A project persona you edit (from the app or the API) needs `capcomd profiles trust <name>` again before its agents
+  get it, as any change to it does.
+- Personas in installed packages, `agents.json` entries and personas set by an `override.yaml` stay read-only; the
+  app and the API say why.
+
 ## 0.13.0-rc.2 (2026-11-25)
 
 Release candidate: questions show where they were asked and survive a reconnect, the event wait answers at once, and
