@@ -51,15 +51,16 @@ public final class TeamStore {
     if store.capabilities.isEmpty { await store.refreshDaemonInfo() }
     guard available, let port else { rosterLoaded = true; changed(.roster); return }
     let known = await store.knownProjects()
-    async let own = try? port.profiles(repo: nil)
-    var lists: [(name: String, path: String, list: ProfileList?)] = []
+    // Every list at once, in one group (the daemon's own as -1): an `async let` beside a task group is freed out of
+    // order by some Swift runtimes ("freed pointer was not the last allocation").
+    var got: [Int: ProfileList] = [:]
     await withTaskGroup(of: (Int, ProfileList?).self) { g in
+      g.addTask { (-1, try? await port.profiles(repo: nil)) }
       for (i, p) in known.enumerated() { g.addTask { (i, try? await port.profiles(repo: p.path)) } }
-      var got = [Int: ProfileList?]()
-      for await (i, l) in g { got[i] = l }
-      lists = known.enumerated().map { i, p in (p.name, p.path, got[i] ?? nil) }
+      for await (i, l) in g { if let l { got[i] = l } }
     }
-    let mine = await own
+    let lists: [(name: String, path: String, list: ProfileList?)] = known.enumerated().map { i, p in (p.name, p.path, got[i]) }
+    let mine = got[-1]
     var rows: [String: ProfileRow] = [:]
     for (_, path, l) in lists { for r in l?.profiles ?? [] where r.layer == "project" { rows[TeamKey.make(repo: path, name: r.name)] = r } }
     for r in mine?.profiles ?? [] where r.layer != "bundled" { rows[TeamKey.make(repo: nil, name: r.name)] = r }
@@ -75,10 +76,17 @@ public final class TeamStore {
   public func load(_ key: String) async {
     guard let port else { return }
     let (repo, name) = TeamKey.split(key)
-    async let detail: ProfileDetail? = has(Capability.profilesEdit) ? try? port.profile(name, repo: repo) : nil
-    async let items: [ProfileWorkItem]? = has(Capability.profilesWork) ? try? port.profileWork(name, repo: repo, limit: 5) : nil
-    async let persona: ProfilePersona? = has(Capability.profilesPersona) ? try? port.persona(name, repo: repo) : nil
-    let (d, w, p) = await (detail, items, persona)
+    enum Part: Sendable { case detail(ProfileDetail?), work([ProfileWorkItem]?), persona(ProfilePersona?) }
+    let (edit, works, souls) = (has(Capability.profilesEdit), has(Capability.profilesWork), has(Capability.profilesPersona))
+    var d: ProfileDetail?, w: [ProfileWorkItem]?, p: ProfilePersona?
+    await withTaskGroup(of: Part.self) { g in
+      if edit { g.addTask { .detail(try? await port.profile(name, repo: repo)) } }
+      if works { g.addTask { .work(try? await port.profileWork(name, repo: repo, limit: 5)) } }
+      if souls { g.addTask { .persona(try? await port.persona(name, repo: repo)) } }
+      for await part in g {
+        switch part { case .detail(let x): d = x; case .work(let x): w = x; case .persona(let x): p = x }
+      }
+    }
     if let d { details[key] = d; rows[key] = merged(rows[key], d.profile) }
     if let w { work[key] = w }
     if let p { personas[key] = p }
