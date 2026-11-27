@@ -36,11 +36,12 @@ public enum Guards {
   static let snapshotScenarios: Set<String> = ["open", "switch", "step", "jump", "fling", "swipe", "follow", "resize",
                                                 "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe", "sidebar-toggle", "sidebar-select",
                                                 "palette-first", "palette-open", "palette-type", "palette-keys", "split-open", "split-focus", "pane-expand", "expand-switch",
-                                                "team-open", "team-switch", "team-settings"]
+                                                "team-open", "team-switch", "team-settings", "settings-open", "settings-switch-page"]
 
   /// The correctness guards of a scenario, as the manifest lists them.
   public static func forScenario(_ name: String) -> [String] {
-    [checks, builtWithin] + (snapshotScenarios.contains(name) ? [snapshotDiff] : [])
+    // Settings shows no desk: built-within (the desk's columns) has nothing to judge there.
+    [checks] + (name.hasPrefix("settings-") ? [] : [builtWithin]) + (snapshotScenarios.contains(name) ? [snapshotDiff] : [])
   }
 
   /// The guard parameters a scenario uses (the defaults of its guards; per-scenario values go here when a scenario

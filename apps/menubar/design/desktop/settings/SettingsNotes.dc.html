@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings: notes</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./affect-tokens.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#0c0c0d}
+a{color:#4ea1ff;text-decoration:none}a:hover{color:#7cb9ff}
+.st-wf{border-radius:12px;box-shadow:0 0 0 .5px rgba(255,255,255,.16),0 24px 60px rgba(0,0,0,.55)}
+.st-search{display:flex;align-items:center;gap:6px;height:28px;flex:0 0 28px;margin:0 0 10px;padding:0 6px 0 8px;border-radius:7px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.08);font-size:13px;line-height:18px;color:var(--t3);white-space:nowrap}
+.st-search .st-q{flex:1;min-width:0;color:var(--t1)}
+.st-search .st-q i{display:inline-block;width:1px;height:15px;margin-left:1px;vertical-align:-3px;background:#0a84ff}
+.st-search.on{box-shadow:inset 0 0 0 .5px rgba(10,132,255,.85),0 0 0 3px rgba(10,132,255,.22)}
+.st-clr{width:16px;height:16px;border-radius:8px;background:rgba(255,255,255,.28);color:#161618;display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px}
+.st-who{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;height:44px;flex:0 0 44px;padding:0 8px;border-radius:7px;cursor:pointer}
+.st-who.sel{background:rgba(255,255,255,.08)}
+.st-mk{width:28px;height:28px;flex:0 0 28px;border-radius:14px;background:#2c2c31;display:inline-flex;align-items:center;justify-content:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.st-wt{display:flex;flex-direction:column;min-width:0}
+.st-wn{font-size:13px;line-height:17px;font-weight:500;color:var(--t1)}
+.st-ws{font-size:11.5px;line-height:15px;color:var(--t3);display:flex;align-items:center;gap:5px;white-space:nowrap}
+.st-gap{height:10px;flex:0 0 10px}
+.st-ic{width:20px;height:20px;flex:0 0 20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fff;background-image:linear-gradient(rgba(255,255,255,.16),rgba(255,255,255,0));box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14)}
+.st-cb{min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:#ffb020;color:#1d1d1f;font-size:10px;line-height:15px;font-weight:600;text-align:center;font-variant-numeric:tabular-nums;flex:0 0 auto;box-sizing:border-box}
+.st-res{font-size:11.5px;line-height:16px;color:var(--t3);flex:0 0 auto}
+.st-sb .row .tt b{font-weight:600;color:var(--t1)}
+.st-sb .row{color:var(--t1)}
+.st-tb{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:12px;padding:0 12px;white-space:nowrap}
+.st-nav{display:inline-flex;height:28px;border-radius:14px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.1);flex:0 0 auto}
+.st-nav button{all:unset;box-sizing:border-box;width:30px;height:28px;display:inline-flex;align-items:center;justify-content:center;color:var(--t1);cursor:pointer}
+.st-nav button[disabled]{color:var(--t4)}
+.st-nav button+button{box-shadow:inset .5px 0 0 rgba(255,255,255,.1)}
+.st-tt{font-size:15px;line-height:20px;font-weight:600;color:var(--t1)}
+.st-bd{flex:1;min-height:0;overflow:hidden;padding:6px 20px 24px;display:flex;flex-direction:column;gap:20px}
+.st-bd.fade{-webkit-mask-image:linear-gradient(#000 90%,transparent);mask-image:linear-gradient(#000 90%,transparent)}
+.st-sec{display:flex;flex-direction:column;gap:6px}
+.st-gh{display:flex;align-items:center;gap:6px;padding:0 2px;font-size:13px;line-height:18px;font-weight:600;color:var(--t1)}
+.st-card{border-radius:10px;background:rgba(255,255,255,.05);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column}
+.st-card.hit{box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09),0 0 0 2px rgba(10,132,255,.9),0 0 0 6px rgba(10,132,255,.2)}
+.st-r{position:relative;display:flex;align-items:center;gap:12px;min-height:40px;padding:7px 12px;font-size:13px;line-height:18px;color:var(--t1);white-space:nowrap}
+.st-r+.st-r::before{content:"";position:absolute;left:12px;right:12px;top:0;height:.5px;background:rgba(255,255,255,.08)}
+.st-r.k{min-height:32px;padding:5px 12px}
+.st-r.off{opacity:.45}
+.st-l{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.st-l small{font-size:11px;line-height:14px;color:var(--t3);overflow:hidden;text-overflow:ellipsis}
+.st-ln{display:flex;align-items:center;gap:6px}
+.st-gl{width:16px;flex:0 0 16px;display:inline-flex;justify-content:center;color:var(--t2)}
+.st-v{display:inline-flex;align-items:center;gap:6px;color:var(--t3);white-space:nowrap}
+.st-k{color:var(--t3);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.st-age{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-size:11px;color:var(--t3)}
+.st-dot{width:8px;height:8px;flex:0 0 8px;border-radius:4px;display:inline-block}
+.st-dot.d-ok{background:#30d158}.st-dot.d-warn{background:#ff9f0a}.st-dot.d-bad{background:#ff453a}
+.st-dot.d-empty{box-shadow:inset 0 0 0 1.2px #8e8e93}
+.st-dot.s6{width:6px;height:6px;flex-basis:6px;border-radius:3px}
+.st-sw{display:inline-block;width:38px;height:22px;flex:0 0 38px;border-radius:11px;background:rgba(255,255,255,.18);position:relative}
+.st-sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:9px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.st-sw.on{background:#0a84ff}
+.st-sw.on::after{left:18px}
+.st-pop,.st-btn{all:unset;box-sizing:border-box;height:22px;border-radius:6px;background:rgba(255,255,255,.13);box-shadow:inset 0 .5px 0 rgba(255,255,255,.08);display:inline-flex;align-items:center;gap:6px;font-size:13px;line-height:18px;color:var(--t1);white-space:nowrap;cursor:pointer;flex:0 0 auto}
+.st-pop{padding:0 3px 0 8px}
+.st-pop .st-ud{color:var(--t2);display:inline-flex}
+.st-btn{padding:0 10px}
+.st-btn.pri{background:#0a84ff;color:#fff;box-shadow:none}
+.st-btn.sm{height:19px;padding:0 8px;border-radius:5px;font-size:11px}
+.st-btn[disabled]{opacity:.4}
+.st-seg{display:inline-flex;height:22px;padding:1px;border-radius:6px;background:rgba(255,255,255,.1);flex:0 0 auto}
+.st-seg span{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 10px;border-radius:5px;font-size:12px;line-height:16px;color:var(--t2);white-space:nowrap}
+.st-seg span.on{background:rgba(255,255,255,.26);color:#fff;box-shadow:0 .5px 1px rgba(0,0,0,.3)}
+.st-cv{color:var(--t4);display:inline-flex;flex:0 0 auto}
+.st-fn{display:flex;align-items:flex-start;gap:6px;padding:0 2px;font-size:11px;line-height:15px;color:var(--t3)}
+.st-fn svg{flex:0 0 auto;margin-top:1px}
+.st-fn .mono{font-size:10.5px;color:var(--t2)}
+.st-def{font-size:11px;line-height:14px;font-weight:500;color:#4ea1ff;background:rgba(10,132,255,.16);padding:2px 7px;border-radius:5px;flex:0 0 auto}
+.st-face{width:32px;height:32px;flex:0 0 32px;border-radius:7px;background:rgba(255,255,255,.06);display:inline-flex;align-items:center;justify-content:center}
+.st-spin{width:12px;height:12px;border-radius:6px;box-shadow:inset 0 0 0 1.6px rgba(255,255,255,.18);border-top:1.6px solid var(--t2);box-sizing:border-box;flex:0 0 12px}
+.st-tiles{display:flex;gap:18px;padding:14px 12px 12px}
+.st-tile{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:12px;line-height:16px;color:var(--t2)}
+.st-tile.on{color:var(--t1);font-weight:500}
+.st-th{position:relative;width:150px;height:94px;border-radius:8px;overflow:hidden;background:#0e0e10;box-shadow:0 0 0 .5px rgba(255,255,255,.16)}
+.st-tile.on .st-th{box-shadow:0 0 0 3px #0a84ff}
+.st-th span{position:absolute;display:block}
+.st-th .c{background:#151518;border-radius:3px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.1)}
+.st-th .l{height:2px;border-radius:1px;background:rgba(255,255,255,.22)}
+.st-th .l.d{background:rgba(255,255,255,.12)}
+.st-th .h{width:4px;height:4px;border-radius:1px;background:#8a6bd1}
+.st-th .lt{width:3px;height:3px;border-radius:2px;background:#3a3a3e}
+.st-th .g{border-radius:2px;background:rgba(255,255,255,.08)}
+.st-th .s{border-radius:2px;background:rgba(255,255,255,.1)}
+.st-th .a{height:2px;border-radius:1px;background:#ffb020}
+.st-hero{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 0 4px}
+.st-hmk{width:56px;height:56px;border-radius:28px;background:#2c2c31;display:inline-flex;align-items:center;justify-content:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.st-hn{font-size:17px;line-height:22px;font-weight:600;color:var(--t1);margin-top:4px}
+.st-hs{display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--t3)}
+.st-about{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 24px 28px}
+.st-about .st-tag{font-size:13px;line-height:18px;color:var(--t2);margin-top:12px}
+.st-about .st-ver{font-size:11px;line-height:14px;color:var(--t3);margin-top:6px}
+.st-about .st-lic{font-size:11px;line-height:14px;color:var(--t4);margin-top:18px}
+.st-lbl{font-size:13px;line-height:18px;font-weight:500;color:var(--t2);margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.st-lbl span{color:var(--t3);font-weight:400}
+.st-fr{display:flex;flex:0 0 auto}
+.st-grid{display:grid;gap:40px 32px;align-items:start}
+.st-n1{font-size:24px;line-height:32px;font-weight:500;margin:0}
+.st-n2{font-size:15px;line-height:20px;font-weight:500;margin:0 0 8px;color:var(--t1)}
+.st-nl{font-size:13px;line-height:20px;color:var(--t2);margin:0;padding-left:18px}
+.st-nl li{margin-bottom:6px}
+.st-nl b{color:var(--t1)}
+.st-nl .mono{font-size:12px;color:var(--t1)}
+.st-ir{display:grid;grid-template-columns:330px 250px 280px 1fr;gap:12px;align-items:center;min-height:32px;padding:4px 0;font-size:12.5px;line-height:17px;color:var(--t2);box-shadow:inset 0 -.5px 0 var(--line)}
+.st-ir.hd{min-height:24px;font-size:11px;line-height:16px;font-weight:500;letter-spacing:.04em;text-transform:uppercase;color:var(--t3)}
+.st-it{color:var(--t1)}
+.st-nm{font-size:11px;line-height:16px;color:var(--t3)}
+</style>
+</helmet>
+<div class="ax" style="width: 1100px; height: 1980px; padding: 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 28px; background: var(--page); overflow: hidden">
+<div>
+<h1 class="st-n1">Settings · notes and open choices</h1>
+</div>
+<section>
+<p class="st-n2">Structure</p>
+<ul class="st-nl">
+<li><b>One window, sidebar and pane</b>: the desk’s chrome (the 248 pt sidebar on the ground, its 28 pt rows and selection; the pane 8 pt in), 880 × 660 pt, taller by dragging. SwiftUI: a <span class="mono">NavigationSplitView</span> in the Settings scene, <span class="mono">.searchable(placement: .sidebar)</span>, each page today’s grouped <span class="mono">Form</span> in a 624 pt pane (today’s window is 620 pt).</li>
+<li><b>Sidebar</b>: Search, then the <b>capcomd</b> status row (Rex’s “Server · Running”: the menu bar mark, Running and the version; red Not running), then General · Notifications | Interface · Shortcuts | Runs · Accounts | About. Four tabs become eight pages because capcomd’s own state, layout, notifications and shortcuts each get one page instead of sharing General.</li>
+<li><b>Toolbar</b>: Back and Forward in a capsule (⌘[ ⌘]) and the page’s title. Back walks pages and pushed pages alike.</li>
+<li><b>Progressive disclosure</b>: a place is one row on Runs; its environment, machines, safety and options are on its page. A row shows the one state that needs action (“Agent environment not built”).</li>
+<li><b>Labels and values only</b>: the explaining sublabels go. A fact the person needs stays as one ⓘ footnote under its card (⌃⌘S, Terminal for logins, System Settings for banners).</li>
+<li><b>Search</b>: every row’s label and its page, plus the places and logins the store holds; results replace the list, ↩ opens the first and rings the matching card for a second.</li>
+<li><b>Attention</b>: a login the default driver needs where new runs go puts the rail’s amber count on Accounts and the prominent Log In… on its row.</li>
+<li><b>The layout setting</b>: capcomd’s chrome is already Rex’s Above / Left choice: Reel puts the crew as tabs above the columns, Sidebar lists them at the side. The tiles pick it (the value ⌃⌘S already stores); the rows under them set the side, the sidebar’s behavior and the reel’s columns and tabs.</li>
+</ul>
+</section>
+<section>
+<p class="st-n2">Inventory</p>
+<div class="st-ir hd"><span>Setting</span><span>Today</span><span>New</span><span></span></div>
+<div class="st-ir"><span class="st-it">Status · Start capcomd · Connect · Paste Token…</span><span>General › capcomd</span><span>capcomd (the status row)</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">Keep capcomd running</span><span>General › capcomd</span><span>capcomd › Service</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">App token · Reset…</span><span>Accounts › This app</span><span>capcomd › This app</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">Open at login</span><span>General › Menu bar</span><span>General › App</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">Show in menu bar · Keep in Dock</span><span>General › Menu bar</span><span>General › App</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">Bot faces</span><span>General › Menu bar</span><span>General › Menu bar</span><span><span class="st-nm">same</span></span></div><div class="st-ir"><span class="st-it">Keep .capcomd/ out of git</span><span>General › New projects</span><span>General › New projects</span><span><span class="st-nm">same</span></span></div><div class="st-ir"><span class="st-it">Show Onboarding Again</span><span>General</span><span>General</span><span><span class="st-nm">same</span></span></div><div class="st-ir"><span class="st-it">Approval requests · Finished runs</span><span>General › Notifications</span><span>Notifications</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">Logins, per AI and place</span><span>Accounts</span><span>Accounts</span><span><span class="st-nm">same</span></span></div><div class="st-ir"><span class="st-it">boxd API key</span><span>Accounts › boxd</span><span>Accounts › boxd</span><span><span class="st-nm">same</span></span></div><div class="st-ir"><span class="st-it">Project · Driven by · Effort · Runs on</span><span>Runs › New runs</span><span>Runs › New runs</span><span><span class="st-nm">same</span></span></div><div class="st-ir"><span class="st-it">Model</span><span>Home’s model menu only (prefs.startModel)</span><span>Runs › New runs</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Place status · Set Up… · Make Default</span><span>Runs, a section per place</span><span>Runs › Places, a row per place</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">Agent environment · Build… · Rebuild… · Show Log</span><span>Runs, in each place</span><span>The place’s page; its row says “not built”</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">Details… sheet: machines, Open in Terminal, Delete…, idle lifetime, Safety, Options</span><span>A sheet over Runs</span><span>The place’s page, pushed (Back ⌘[)</span><span><span class="st-nm">moved</span></span></div><div class="st-ir"><span class="st-it">About</span><span>About</span><span>About</span><span><span class="st-nm">same</span></span></div><div class="st-ir"><span class="st-it">Layout: Reel or Sidebar</span><span>⌃⌘S only (desk.sidebarOpen)</span><span>Interface › Layout, the same stored value</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Follow asks and failures</span><span>Title bar and ⇧⌘F; on at every launch</span><span>Interface › Reel, the starting value</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Sidebar position: Left · Right</span><span>–</span><span>Interface › Layout</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Sidebar behavior: Always show · Show on hover</span><span>–</span><span>Interface › Layout</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Columns across: Fit the window · 1 · 2 · 3</span><span>Fixed: 3 from 1280 pt, 2 from 900, else 1</span><span>Interface › Reel</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Crew tabs: Bot and title · Bot only</span><span>–</span><span>Interface › Reel</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Usage limits notification</span><span>Needs you only</span><span>Notifications</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Badge app icon (Needs you count)</span><span>–</span><span>Notifications</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Shortcuts, read-only</span><span>Menus only</span><span>Shortcuts</span><span><span class="badge info">new · app</span></span></div><div class="st-ir"><span class="st-it">Search</span><span>–</span><span>The sidebar’s field</span><span><span class="badge info">new · app</span></span></div>
+<ul class="st-nl" style="margin-top:12px">
+<li><b>Stays out</b>: the PerfLoop knobs (<span class="mono">DeskKnobs</span>), the socket path (never), the keychain service, the onboarding scan folder.</li>
+</ul>
+</section>
+<section>
+<p class="st-n2">Daemon work</p>
+<ul class="st-nl">
+<li><b>None for what is drawn.</b> Every page reads today’s routes: <span class="mono">/v1/health</span>, <span class="mono">/v1/service</span>, <span class="mono">/v1/run-options</span>, <span class="mono">/v1/logins</span>, <span class="mono">/v1/environments</span>, <span class="mono">/v1/sandboxes</span> and its resources, settings and actions.</li>
+<li><b>Left off until the daemon has it</b>: Log Out of a login (no route), an environment build’s progress in the app (D3), Restart capcomd (no route).</li>
+</ul>
+</section>
+<section>
+<p class="st-n2">Open choices (yours)</p>
+<ul class="st-nl">
+<li><b>Chrome</b>: the desk’s sidebar and pane (drawn), or the system’s macOS 26 sidebar with its accent-blue selection.</li>
+<li><b>Appearance</b>: dark only, as the desk (drawn); Settings follows the system today (GeneralLight board). Light needs light desk tokens.</li>
+<li><b>Attention badge</b>: the rail’s amber count (drawn) or System Settings’ red; and a dot on the desk’s Settings gear too, or not.</li>
+<li><b>Show on hover</b>: keep it (the most new work on Interface) or ship Always show only.</li>
+<li><b>Shortcuts</b>: read-only (drawn; System Settings › App Shortcuts can rebind menu items) or rebinding in the app.</li>
+<li><b>Columns across</b>: keep, or leave the reel’s fixed rule.</li>
+</ul>
+</section>
+<section>
+<p class="st-n2">How it would ship</p>
+<ul class="st-nl">
+<li><b>1</b> · The window, sidebar, status row, search, Back / Forward, place pages, Model row. Moves only, no new settings.</li>
+<li><b>2</b> · Interface: Layout tiles, sidebar position, Follow, crew tabs, columns across; then Show on hover.</li>
+<li><b>3</b> · Notifications: usage limits and the Dock badge. Shortcuts page.</li>
+</ul>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1100,"height":1980}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

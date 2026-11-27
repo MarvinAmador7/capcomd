@@ -23,6 +23,7 @@ let drivers: [String: ScenarioBody] = [
   "needs-open": NeedsDrive.needsOpen, "needs-answer": NeedsDrive.needsAnswer, "needs-arrive": NeedsDrive.needsArrive,
   "needs-step": NeedsDrive.needsStep, "needs-empty": NeedsDrive.needsEmpty, "needs-swipe": NeedsDrive.needsSwipe,
   "team-open": DriveTeam.teamOpen, "team-switch": DriveTeam.teamSwitch, "team-settings": DriveTeam.teamSettings,
+  "settings-open": DriveSettings.settingsOpen, "settings-switch-page": DriveSettings.settingsSwitchPage,
 ]
 
 let bench = MainActor.assumeIsolated {
