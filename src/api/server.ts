@@ -2,11 +2,12 @@
 // contract (src/api/contract.ts) served by OpenAPIHandler; the SSE stream and the write routes (decision, runs.create,
 // run controls, messages) are native Hono routes because they need SSE framing, Last-Event-ID and Idempotency-Key.
 // Every non-2xx body is ApiError {code, message}.
+import { createHash } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
-import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, type EventsPage, type EventsQuery, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, type EventsPage, type EventsQuery, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfilePersonaBody, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { listSchemas } from "../schemas";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
@@ -361,6 +362,24 @@ export function harnessApp(o: ServerOptions) {
 			}),
 			// Served natively below (Idempotency-Key, the configure scope): never reached.
 			update: os.profiles.update.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			// Capability profiles.work: its newest agents; a `repo` that isn't a project is 422.
+			work: os.profiles.work.handler(async ({ input }) => {
+				try { return await src.profileWork(input.name, input.repo, input.limit ?? 10); } catch (e) {
+					if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
+					throw e;
+				}
+			}),
+			// Capability profiles.persona: the one route that serves a persona's text.
+			persona: os.profiles.persona.handler(async ({ input }) => {
+				let r: Awaited<ReturnType<typeof src.persona>>;
+				try { r = await src.persona(input.name, input.repo); } catch (e) {
+					if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
+					throw e;
+				}
+				if (r.ok) return r.persona;
+				throw new ORPCError(r.status === 404 ? "NOT_FOUND" : "UNPROCESSABLE_CONTENT", { message: r.message });
+			}),
+			updatePersona: os.profiles.updatePersona.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		skills: { list: os.skills.list.handler(() => src.skills()) },
 		schemas: { list: os.schemas.list.handler(() => ({ schemas: listSchemas().map((s) => ({ id: s.id, name: s.name, version: s.version, description: s.description, schema: s.schema as unknown as Record<string, unknown> })) })) },
@@ -500,20 +519,28 @@ export function harnessApp(o: ServerOptions) {
 		const parsed = CreateRunBody.safeParse(await c.req.json().catch(() => undefined));
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
-			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?, driver?, effort?, model?, sandbox?, base?, goalBranch?, plugins?}", i?.path.length ? { field: String(i.path[0]) } : {});
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, planner?, targetBranch?, driver?, effort?, model?, sandbox?, base?, goalBranch?, plugins?}", i?.path.length ? { field: String(i.path[0]) } : {});
 		}
 		const p = parsed.data;
 		if (p.profile !== undefined && p.driver !== undefined) return err(c, 422, "invalid", "profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
 		if (p.profile !== undefined && p.effort !== undefined) return err(c, 422, "invalid", "profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
 		if (p.profile !== undefined && p.model !== undefined) return err(c, 422, "invalid", "profile and model can't be combined: model is the planner agent's (the driver's), and profile picks the worker of a run without one");
-		if (p.effort !== undefined || p.model !== undefined || p.sandbox !== undefined) {
-			// GET /v1/run-options for this run (the body's project, when it names one): the chosen driver, else the default.
-			let drivers;
-			try { drivers = (await src.runOptions(p.repo)).drivers; } catch (e) {
+		if (p.profile !== undefined && p.planner !== undefined) return err(c, 422, "invalid", "profile and planner can't be combined: planner runs a planner agent, which picks its own workers, and profile picks the worker of a run without one; send one of them", { field: "planner" });
+		// GET /v1/run-options for this run (the body's project, when it names one), read once when something needs it.
+		let options: Awaited<ReturnType<typeof src.runOptions>> | undefined;
+		if (p.planner !== undefined || p.effort !== undefined || p.model !== undefined || p.sandbox !== undefined) {
+			try { options = await src.runOptions(p.repo); } catch (e) {
 				if (e instanceof CreateRunError) return err(c, 422, "invalid", e.message);
 				throw e;
 			}
-			const d = p.driver !== undefined ? drivers.find((x) => x.provider === p.driver) : drivers.find((x) => x.default);
+		}
+		// Capability runs.planner: one of the profiles that can plan (`planners`); its provider is the run's driver.
+		const chosen = p.planner !== undefined ? (options!.planners ?? []).find((x) => x.name === p.planner) : undefined;
+		if (p.planner !== undefined && !chosen) return err(c, 422, "invalid", `planner ${p.planner} isn't a profile that can plan ${p.repo !== undefined ? "in this project" : "here"} (it doesn't exist or may not spawn agents): GET /v1/run-options lists the planners`, { field: "planner" });
+		if (options && (p.effort !== undefined || p.model !== undefined || p.sandbox !== undefined)) {
+			// The chosen driver, else the chosen planner's provider, else the default.
+			const drivers = options.drivers;
+			const d = p.driver !== undefined ? drivers.find((x) => x.provider === p.driver) : chosen ? drivers.find((x) => x.provider === chosen.provider) : drivers.find((x) => x.default);
 			if (p.effort !== undefined) {
 				if (!d) return err(c, 422, "invalid", `effort needs a driver: ${p.repo !== undefined ? "this project" : "this daemon"} has no default planner profile (run capcomd setup), so send driver too`);
 				if (!d.efforts.includes(p.effort)) return err(c, 422, "invalid", d.efforts.length ? `effort ${JSON.stringify(p.effort)} isn't a ${d.label} level: use one of ${d.efforts.join(", ")}` : `${d.label}'s effort can't be set`);
@@ -539,13 +566,13 @@ export function harnessApp(o: ServerOptions) {
 			}
 		}
 		const input: CreateRunInput = { goal: p.goal.trim(), ...(plugins ? { plugins } : {}), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.model !== undefined ? { model: p.model } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox as NonNullable<CreateRunInput["sandbox"]> } : {}),
-			...(p.base !== undefined ? { base: p.base } : {}), ...(p.goalBranch !== undefined ? { goalBranch: p.goalBranch } : {}) };
+			...(p.base !== undefined ? { base: p.base } : {}), ...(p.goalBranch !== undefined ? { goalBranch: p.goalBranch } : {}), ...(p.planner !== undefined ? { planner: p.planner } : {}) };
 		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
 		// driver and sandbox are part of the body (another value: idempotency_conflict); a request without them hashes as
 		// before they existed, so a retry across the upgrade still replays.
 		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null, ...(input.driver || input.sandbox || input.effort ? [input.driver ?? null, input.sandbox ?? null, ...(input.effort ? [input.effort] : [])] : []),
 			...(input.base !== undefined || input.goalBranch !== undefined ? [{ base: input.base ?? null, goalBranch: input.goalBranch ?? null }] : []),
-			...(input.model !== undefined ? [{ model: input.model }] : []), ...(input.plugins ? [{ plugins: input.plugins }] : [])]);
+			...(input.model !== undefined ? [{ model: input.model }] : []), ...(input.plugins ? [{ plugins: input.plugins }] : []), ...(input.planner !== undefined ? [{ planner: input.planner }] : [])]);
 		const conflict = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different body");
 		const replay = (r: Outcome) => c.json(r.body, r.status as 201, r.status === 201 ? { "idempotent-replayed": "true" } : {});
 		const prior = state.key(kid);
@@ -855,6 +882,31 @@ export function harnessApp(o: ServerOptions) {
 			}
 			if (r.event) state.recordDaemonEvent({ type: "profile.changed", entity: r.event.entity, text: r.event.text, data: { ...r.event.data, clientId: client.clientId } });
 			return { status: 200, body: r.detail };
+		});
+	});
+
+	// PUT /v1/profiles/{name}/persona (capability profiles.persona; the configure scope, checked above): write its persona
+	// in the profile's own directory, from the hash it was read at (`rev`), with an Idempotency-Key. Audited as
+	// profile.changed on the daemon stream, without the text.
+	app.put("/v1/profiles/:name/persona", async (c) => {
+		const name = c.req.param("name"), repo = c.req.query("repo");
+		if (repo !== undefined && !repo.startsWith("/")) return err(c, 422, "invalid", "repo: repo must be an absolute path", { field: "repo" });
+		const p = await bodyOf(c, ProfilePersonaBody, "{text, rev}");
+		if (!p.body) return p.refused!;
+		const b = p.body;
+		// The request is kept (with the key) by its text's hash, not the text.
+		return idempotent(c, ["profiles.persona", name, repo ?? null, createHash("sha256").update(b.text).digest("hex"), b.rev], async (client) => {
+			let r: Awaited<ReturnType<typeof src.updatePersona>>;
+			try { r = await src.updatePersona(name, repo, b); } catch (e) {
+				if (e instanceof CreateRunError) return { status: 422, body: { code: "invalid", message: e.message } };
+				throw e;
+			}
+			if (!r.ok) {
+				const { ok: _, status, ...body } = r;
+				return { status, body };
+			}
+			if (r.event) state.recordDaemonEvent({ type: "profile.changed", entity: r.event.entity, text: r.event.text, data: { ...r.event.data, clientId: client.clientId } });
+			return { status: 200, body: r.persona };
 		});
 	});
 
