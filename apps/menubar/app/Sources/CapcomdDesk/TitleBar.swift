@@ -158,6 +158,8 @@ struct CrewTab: View {
           BotAvatar(traits: a.bot, size: .xs, cell: 1.5)
           if a.renaming == .tab {
             InlineTitleField(agentId: agentId, font: Theme.Desk.label, width: Theme.Desk.tabTitleMax)
+          } else if DeskPrefs.shared.crewTabs == .botOnly {
+            EmptyView()   // Settings › Interface › Crew tabs: Bot only (the title stays in the help tag and VoiceOver)
           } else {
             Text(verbatim: h.tabLabel).font(Theme.Desk.label).lineLimit(1).truncationMode(.tail)
               .frame(maxWidth: Theme.Desk.tabTitleMax, alignment: .leading).fixedSize(horizontal: true, vertical: false)

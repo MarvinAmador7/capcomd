@@ -114,6 +114,8 @@ final class ReelView: NSView, ReelColumnViews {
     if parkColumns { parking.isHidden = true; addSubview(parking, positioned: .below, relativeTo: scroll) }
     if bitmapCache { startBitmapCache() }
     NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    // Settings › Interface › Columns across: lay out again at the new count.
+    NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: DeskPrefs.didChange, object: nil)
     swipeMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
       nonisolated(unsafe) let event = e   // local monitors run on the main thread
       return MainActor.assumeIsolated { self?.took(event) ?? false } ? nil : e
@@ -611,6 +613,8 @@ final class ReelView: NSView, ReelColumnViews {
     driver.reelMoving = m
     DeskProbe.event("reel.phase", m ? 1 : 0)
   }
+
+  @objc private func prefsChanged() { needsLayout = true }
 
   @objc private func scrolled() {
     guard pitch > 0, !order.isEmpty else { return }

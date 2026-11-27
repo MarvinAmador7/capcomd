@@ -256,6 +256,7 @@ package final class DeskModel {
     setupFlow = ProjectSetupFlow(store: store)
     restoreHidden(from: .standard)
     nav.restore(from: .standard)
+    follow = DeskPrefs.followAtLaunch(.standard)
     needs.model = self
     session.onStore { [weak self] s in self?.connect(s) }
   }
@@ -267,6 +268,7 @@ package final class DeskModel {
     setupFlow = ProjectSetupFlow(store: s)
     if let d { restoreHidden(from: d) }
     nav.restore(from: d)
+    follow = DeskPrefs.followAtLaunch(d)
     needs.model = self
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }

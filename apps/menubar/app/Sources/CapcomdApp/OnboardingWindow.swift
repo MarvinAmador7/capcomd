@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import CapcomdStore
+import CapcomdSettings
 import CapcomdUI
 import CapcomdDesk
 import CapcomdOnboarding

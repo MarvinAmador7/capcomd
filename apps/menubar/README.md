@@ -55,8 +55,8 @@ The window and the menu bar panel are two views of one app, on the session's one
   a row does. Approve and deny stay in the panel.
 - What the window focuses is the store's `selection`; the panel marks that card and agent row. Nothing syncs.
 - The menu bar item is the app's home: closing the last window keeps the app running, and the Dock icon (with ⌘-Tab)
-  shows only while a window is open (`AppPresence` switches the activation policy). Settings › General: **Show in menu
-  bar** and **Keep in Dock**, one of which stays on (`Presence`). Quit is in the panel's + menu.
+  shows only while a window is open (`AppPresence` switches the activation policy). Settings › General › **Show app icon**:
+  Dock and menu bar, Dock only or Menu bar only, so one of the two always stays (`Presence`). Quit is in the panel's + menu.
 
 Notifications come from the panel's model (one banner per notice).
 
