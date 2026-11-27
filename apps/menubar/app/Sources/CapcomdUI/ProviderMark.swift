@@ -19,7 +19,14 @@ package enum ProviderMarks {
   /// Settings › Runs. 24×24 viewBox; the path is the one on design/settings/Runs.dc.html.
   package static let docker = SVGPath.parse("M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z")
 
-  /// The brand colour for the badge (Claude's coral); OpenAI's mark is black or white only.
+  /// fx (fx.sh, the third harness): capcomd's own plain monogram, a lowercase "fx" in one colour, drawn here (not
+  /// fx's logo), 24×24 viewBox: the f's hooked stem and crossbar, then the x's two strokes.
+  package static let fx = SVGPath.parse("M4.8 20V7.5C4.8 5 6.2 3.5 8.6 3.5H11.1V6.1H8.8C7.8 6.1 7.4 6.6 7.4 7.6V20Z M2.6 9H10.1V11.4H2.6Z M11.6 9H14.6L21.4 20H18.4Z M18.4 9H21.4L14.6 20H11.6Z")
+  /// A provider this app doesn't know (a plugin's harness): a generic chip, SF Symbol `cpu`.
+  package static let genericSymbol = "cpu"
+
+  /// The brand colour for the badge (Claude's coral); OpenAI's mark is black or white only, and so are fx's and a
+  /// generic one.
   package static func badgeTint(_ p: Provider) -> Color { p == .claude ? Theme.Provider.claude : .white }
 }
 
@@ -56,6 +63,8 @@ package struct ProviderMark: View {
       switch provider {
       case .claude: SVGShape(path: ProviderMarks.claude, viewBox: 24).frame(width: size, height: size)
       case .codex: SVGShape(path: ProviderMarks.openai, viewBox: 24).frame(width: size, height: size)
+      case .fx: SVGShape(path: ProviderMarks.fx, viewBox: 24).frame(width: size, height: size)
+      case .other: Image(systemName: ProviderMarks.genericSymbol).resizable().scaledToFit().frame(width: size, height: size)
       }
     }
     .accessibilityLabel(provider.displayName)

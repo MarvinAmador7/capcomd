@@ -326,7 +326,8 @@ struct TeamModelChip: View {
     let provider = Provider(wire: row?.provider)
     let driver = s.runOptions.drivers.first { $0.provider == row?.provider }
     let models = driver?.models ?? []
-    let efforts = driver?.efforts ?? []
+    // A harness that drives no run (fx) has no driver: its levels are the profile's own effort row's choices.
+    let efforts = driver?.efforts ?? slice.detail?.field("harness.effort")?.choices?.map(\.value) ?? []
     let current: String? = slice.pending["harness.model"] ?? row?.model
     let effort: String? = slice.pending["harness.effort"] ?? row?.effort
     let names = Dictionary(s.runOptions.drivers.flatMap { $0.models ?? [] }.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })

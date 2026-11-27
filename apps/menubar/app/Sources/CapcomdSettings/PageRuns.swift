@@ -210,6 +210,8 @@ struct PlaceRow: View {
     switch p {
     case .claude: Image(nsImage: image("claude", path: ProviderMarks.claude, viewBox: 24, size: 13, color: NSColor(Theme.Provider.claude)))
     case .codex: Image(nsImage: image("openai", path: ProviderMarks.openai, viewBox: 24, size: 13, color: nil))
+    case .fx: Image(nsImage: image("fx", path: ProviderMarks.fx, viewBox: 24, size: 13, color: nil))
+    case .other: Image(systemName: ProviderMarks.genericSymbol)
     }
   }
   /// A place's mark by its id (PlaceMarks): bundled marks, else a glyph by kind.

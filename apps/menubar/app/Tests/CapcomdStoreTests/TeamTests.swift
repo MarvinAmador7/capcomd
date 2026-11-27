@@ -97,6 +97,20 @@ final class TeamTests: XCTestCase {
     XCTAssertEqual(TeamSummary.line(teamRow("signal", "project", mode: "orchestrate", skills: 1), detail: nil), "claude-opus-5-5 · high · orchestrates · alone · 1 skill")
   }
 
+  /// fx is a harness of its own; a provider the app doesn't know keeps its wire name (a generic mark), never dropped.
+  func testProvidersFromTheWire() {
+    XCTAssertEqual(Provider(wire: "claude-code"), .claude)
+    XCTAssertEqual(Provider(wire: "codex"), .codex)
+    XCTAssertEqual(Provider(wire: "fx"), .fx)
+    XCTAssertEqual(Provider(wire: "acme"), .other("acme"))
+    XCTAssertNil(Provider(wire: "fake")); XCTAssertNil(Provider(wire: nil)); XCTAssertNil(Provider(wire: " "))
+    XCTAssertEqual([Provider.claude, .codex, .fx, .other("acme")].map(\.harnessName), ["Claude Code", "Codex", "fx", "acme"])
+    XCTAssertEqual([Provider.claude, .codex, .fx, .other("acme")].map(\.wire), ["claude", "codex", "fx", "acme"])
+    XCTAssertEqual(TeamSummary.providerLabel("fx"), "fx")
+    XCTAssertEqual(TeamSummary.providerLabel("acme"), "acme")
+    XCTAssertEqual(TeamSummary.providerLabel("claude"), "Claude Code")
+  }
+
   func testTheRosterIsByProjectThenAllProjects() {
     let list = ProfileList(file: "/p/capcomd/.capcomd/agents.json", profiles: [teamRow("signal", "project"), teamRow("forge", "project"), teamRow("tern", "user"), teamRow("worker", "bundled")])
     let other = ProfileList(profiles: [teamRow("tern", "user"), teamRow("worker", "bundled")])

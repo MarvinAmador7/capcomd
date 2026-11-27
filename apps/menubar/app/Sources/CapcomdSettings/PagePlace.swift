@@ -210,7 +210,7 @@ struct PlaceEnvironmentRow: View {
     } else {
       switch env.state {
       case .building:
-        SRow { SLabel(title: "Agent environment", sub: "Installing Claude Code and Codex") } value: {
+        SRow { SLabel(title: "Agent environment", sub: "Installing Claude Code, Codex and fx") } value: {
           ProgressView().progressViewStyle(.linear).frame(width: 150).accessibilityLabel("Building the agent environment")
           if TerminalLauncher.terminalRunning { Button("Show Log") { TerminalLauncher.showTerminal() } }
         }

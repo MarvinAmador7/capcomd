@@ -13,7 +13,7 @@ struct AccountsPage: View {
     let live = model.connection.live
     let rows = model.loginRows
     SPage {
-      ForEach(SettingsRows.providers, id: \.self) { provider in
+      ForEach(model.accountProviders, id: \.self) { provider in
         let mine = rows.filter { $0.provider == provider }
         if !mine.isEmpty {
           SGroup(id: "accounts.\(provider)") {
@@ -98,7 +98,8 @@ struct LoginRowView: View {
 
   @ViewBuilder private var value: some View {
     switch row.state {
-    case .plan: StatusValue(.ok, "Logged in with your \(PlaceNames.plan(row.provider)) plan")
+    // fx's plan login (Vercel or Grok) isn't named here: the daemon's detail says which, in the row's help.
+    case .plan: StatusValue(.ok, PlaceNames.plan(row.provider).map { "Logged in with your \($0) plan" } ?? "Logged in with a plan")
     case .apiKey: StatusValue(.ok, "Using an API key")
     case .loggedIn: StatusValue(.ok, "Logged in")
     case .notLoggedIn: StatusValue(.empty, "Not logged in")
