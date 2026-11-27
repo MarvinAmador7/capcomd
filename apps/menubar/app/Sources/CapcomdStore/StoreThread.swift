@@ -30,6 +30,9 @@ public enum Capability {
   public static let runsOptionsModels = "runs.options.models"
   /// `GET /v1/logins`: each AI's login in each place agents run (Settings › Accounts).
   public static let logins = "logins"
+  /// `GET /v1/logins?provider=fx`: fx's logins (a Vercel or Grok plan login, or AI_GATEWAY_API_KEY), in Settings ›
+  /// Accounts beside Claude's and Codex's.
+  public static let loginsFx = "logins.fx"
   /// `GET /v1/environments`: each place's agent environment (Settings › Runs).
   public static let environments = "environments"
   /// `GET /v1/service`: capcomd as a background service (Settings › General).

@@ -85,7 +85,8 @@ extension Tone {
   }
 }
 
-/// A provider's mark in its Accounts section header: Claude's spark in its coral, Codex's stand-in glyph.
+/// A provider's mark in its Accounts section header: Claude's spark in its coral, Codex's and fx's glyphs (and a
+/// generic one for an AI the app doesn't know) in the secondary colour.
 struct ProviderHeaderMark: View {
   let provider: String
   var body: some View {

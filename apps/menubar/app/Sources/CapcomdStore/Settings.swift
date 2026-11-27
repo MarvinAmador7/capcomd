@@ -92,7 +92,13 @@ extension CapcomdStore {
       capabilities = h.capabilities; daemonVersion = h.version
     } catch { changed(); return }
     await refreshRunOptions()
-    if let v = await settingsRead(Capability.logins, { try await daemonInfo.logins() }) { logins = v }
+    if var v = await settingsRead(Capability.logins, { try await daemonInfo.logins() }) {
+      // fx's logins come only when asked for (capability logins.fx): added to the list, or left out if that read fails.
+      if case .loaded(let all) = v, capabilities.contains(Capability.loginsFx), let fx = try? await daemonInfo.logins(provider: "fx") {
+        v = .loaded(all.filter { $0.provider != "fx" } + fx)
+      }
+      logins = v
+    }
     if let v = await settingsRead(Capability.environments, { try await daemonInfo.environments() }) { environments = v }
     if let v = await settingsRead(Capability.service, { try await daemonInfo.service() }) { service = v }
     if let v = await settingsRead(Capability.sandboxes, { try await daemonInfo.sandboxes() }) { sandboxList = v }
@@ -270,6 +276,13 @@ public enum BoxdKeyState: Sendable, Hashable { case saved, notSet, unknown }
 /// Settings routes.
 public enum SettingsRows {
   public static let providers = ["claude", "codex"]
+  /// The AIs Settings › Accounts shows: Claude's and Codex's always, then every other AI the daemon lists logins for
+  /// (fx, with capability logins.fx; a plugin's), in its order.
+  public static func providers(_ logins: [LoginInfo]?) -> [String] {
+    var out = providers
+    for l in logins ?? [] where !out.contains(l.provider) { out.append(l.provider) }
+    return out
+  }
   /// Cloud first (Accounts board order), then Local, then any other place the daemon lists.
   public static func accountPlaces(_ options: RunOptions, _ logins: [LoginInfo]?) -> [String] {
     var names = options.sandboxes.map(\.name)
@@ -291,7 +304,7 @@ public enum SettingsRows {
   /// from run-options: per place when the daemon reports drivers per sandbox (`runs.options.sandbox`), else only for
   /// its own place (the default one), every other place Unknown.
   public static func logins(_ fetched: Fetched<[LoginInfo]>?, options: RunOptions, capabilities: Set<String>, places: [String]) -> [LoginRow] {
-    providers.flatMap { provider in
+    providers(fetched?.value).flatMap { provider in
       places.map { place -> LoginRow in
         if let all = fetched?.value {
           guard let l = all.first(where: { $0.provider == provider && $0.sandbox == place }) else {
@@ -333,7 +346,7 @@ public enum SettingsRows {
       }
       let state: EnvironmentRow.State
       switch e.status { case "ready": state = .ready; case "missing": state = .missing; case "building": state = .building; case "failed": state = .failed; default: state = .unknown }
-      let tools: [(String, String)] = [("claude", "Claude Code"), ("codex", "Codex")]
+      let tools: [(String, String)] = [("claude", "Claude Code"), ("codex", "Codex"), ("fx", "fx")]
       let versions = tools.compactMap { key, name in e.versions?[key].map { EnvironmentRow.Pair(tool: name, version: $0) } }
       return EnvironmentRow(sandbox: place, state: state, versions: versions, builtAt: e.builtAt.flatMap(parseISO), command: e.command)
     }

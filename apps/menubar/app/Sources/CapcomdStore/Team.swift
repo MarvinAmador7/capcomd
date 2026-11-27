@@ -358,7 +358,7 @@ public enum TeamSummary {
     return parts.joined(separator: " · ")
   }
   public static func providerLabel(_ p: String) -> String {
-    switch p { case "claude": "Claude Code"; case "codex": "Codex"; case "fx": "fx"; default: p }
+    Provider(wire: p)?.harnessName ?? p
   }
   /// A place as the composer's pills name it: boxd is Cloud, Docker and the fake host are This Mac.
   public static func placeWord(_ name: String) -> String { name == "boxd" ? "Cloud" : name == "docker" || name == "fake-host" ? "This Mac" : name }

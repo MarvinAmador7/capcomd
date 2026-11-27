@@ -16,7 +16,8 @@ struct AccountsPane: View {
     let live = model.connection.live
     let rows = model.loginRows
     Form {
-      ForEach(Array(SettingsRows.providers.enumerated()), id: \.element) { i, provider in
+      let providers = model.accountProviders
+      ForEach(Array(providers.enumerated()), id: \.element) { i, provider in
         let mine = rows.filter { $0.provider == provider }
         Section {
           ForEach(mine) { LoginRowView(row: $0) }
@@ -28,7 +29,7 @@ struct AccountsPane: View {
         } footer: {
           VStack(alignment: .leading, spacing: 4) {
             if let w = mine.lazy.compactMap({ model.handOffs.waiting(HandOffKey.login($0)) }).first { OpenedFoot(command: w.command) }
-            if i == SettingsRows.providers.count - 1 {
+            if i == providers.count - 1 {
               Foot(verbatim: "Log In opens Terminal with the command ready, so your login never passes through this app. Each place agents run keeps its own login. On Cloud, a login is kept as a boxd secret that only works on its AI's API (api.anthropic.com, api.openai.com), so it can't be sent anywhere else.")
               if model.store.logins == .unavailable(.unsupported), rows.contains(where: { $0.state == .unknown }) {
                 Foot(verbatim: "Update capcomd to see every login here.")
@@ -170,7 +171,7 @@ struct LoginRowView: View {
 
   @ViewBuilder private var value: some View {
     switch row.state {
-    case .plan: StatusValue(.ok, "Logged in with your \(PlaceNames.plan(row.provider)) plan")
+    case .plan: StatusValue(.ok, PlaceNames.plan(row.provider).map { "Logged in with your \($0) plan" } ?? "Logged in with a plan")
     case .apiKey: StatusValue(.ok, "Using an API key")
     case .loggedIn: StatusValue(.ok, "Logged in")
     case .notLoggedIn: StatusValue(.empty, "Not logged in")

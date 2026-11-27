@@ -225,7 +225,7 @@ struct PlaceEnvironmentRow: View {
           }
         } label: {
           Text("Agent environment")
-          Text("Installing Claude Code and Codex. This takes a few minutes; you can close Settings.")
+          Text("Installing Claude Code, Codex and fx. This takes a few minutes; you can close Settings.")
         }
       case .ready:
         LabeledContent {

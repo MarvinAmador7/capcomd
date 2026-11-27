@@ -37,6 +37,8 @@ extension AppModel {
 
   // Accounts
   var accountPlaces: [String] { _ = revision; return SettingsRows.accountPlaces(store.runOptions, store.logins?.value) }
+  /// Claude, Codex, then fx (capability logins.fx) and any other AI the daemon lists logins for.
+  var accountProviders: [String] { _ = revision; return SettingsRows.providers(store.logins?.value) }
   var loginRows: [LoginRow] {
     _ = revision
     return SettingsRows.logins(store.logins, options: store.runOptions, capabilities: store.capabilities, places: accountPlaces)
@@ -166,7 +168,7 @@ enum PlaceNames {
   }
   static func provider(_ p: String) -> String { Provider(wire: p)?.displayName ?? p }
   /// Whose plan a subscription login uses.
-  static func plan(_ p: String) -> String { p == "codex" ? "ChatGPT" : "Claude" }
+  static func plan(_ p: String) -> String? { p == "codex" ? "ChatGPT" : p == "claude" ? "Claude" : nil }
   /// "No boxd API key (run capcomd setup)" → "No boxd API key": the row's button is the way to fix it.
   static func reason(_ r: String?) -> String? {
     guard let r else { return nil }
@@ -399,6 +401,8 @@ struct SheetFit: ViewModifier {
     switch p {
     case .claude: Image(nsImage: image("claude", path: ProviderMarks.claude, viewBox: 24, size: Theme.Settings.menuMark, color: NSColor(Theme.Provider.claude)))
     case .codex: Image(nsImage: image("openai", path: ProviderMarks.openai, viewBox: 24, size: Theme.Settings.menuMark, color: nil))
+    case .fx: Image(nsImage: image("fx", path: ProviderMarks.fx, viewBox: 24, size: Theme.Settings.menuMark, color: nil))
+    case .other: Image(systemName: ProviderMarks.genericSymbol)
     }
   }
   /// A place's mark by its id (PlaceMarks): bundled marks, else a glyph by kind.

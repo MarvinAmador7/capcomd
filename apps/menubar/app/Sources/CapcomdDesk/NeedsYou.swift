@@ -488,7 +488,7 @@ struct LimitBar: View {
     return VStack(alignment: .leading, spacing: 8) {
       Text(verbatim: when.map { "Usage limit reached. It resumes at \($0)." } ?? "Usage limit reached.").font(Theme.Desk.question).foregroundStyle(Theme.Desk.text)
         .fixedSize(horizontal: false, vertical: true)
-      Text(verbatim: [limit.provider.map { $0 == .claude ? "Claude Code" : "Codex" }, n == 1 ? "1 agent is paused" : "\(n) agents are paused"].compactMap { $0 }.joined(separator: " · "))
+      Text(verbatim: [limit.provider.map(\.harnessName), n == 1 ? "1 agent is paused" : "\(n) agents are paused"].compactMap { $0 }.joined(separator: " · "))
         .font(.system(size: 12.5)).foregroundStyle(Theme.Desk.secondary)
       HStack(spacing: 8) {
         Spacer(minLength: 0)

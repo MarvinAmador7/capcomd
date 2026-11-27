@@ -91,6 +91,20 @@ final class SettingsTests: XCTestCase {
     XCTAssertTrue(rows[0].isLoggedIn); XCTAssertFalse(rows[1].isLoggedIn)
   }
 
+  /// fx's logins (capability logins.fx, `GET /v1/logins?provider=fx`) get their own section after Claude's and Codex's;
+  /// any other AI the daemon lists one for does too, by its wire name.
+  func testFxAndUnknownProvidersGetTheirOwnLoginRows() {
+    let infos = [LoginInfo(provider: "claude", sandbox: "docker", loggedIn: true, how: "plan", command: "capcomd auth login claude --sandbox docker"),
+                 LoginInfo(provider: "fx", sandbox: "docker", loggedIn: true, how: "api_key", command: "capcomd auth login fx --sandbox docker"),
+                 LoginInfo(provider: "fx", sandbox: "boxd", loggedIn: false, command: "capcomd auth login fx --sandbox boxd"),
+                 LoginInfo(provider: "acme", sandbox: "docker", loggedIn: false, command: "capcomd auth login acme --sandbox docker")]
+    XCTAssertEqual(SettingsRows.providers(infos), ["claude", "codex", "fx", "acme"])
+    XCTAssertEqual(SettingsRows.providers(nil), ["claude", "codex"])
+    let rows = SettingsRows.logins(.loaded(infos), options: settingsOptions(), capabilities: [Capability.logins, Capability.loginsFx], places: ["boxd", "docker"])
+    XCTAssertEqual(rows.map(\.id), ["claude:boxd", "claude:docker", "codex:boxd", "codex:docker", "fx:boxd", "fx:docker", "acme:boxd", "acme:docker"])
+    XCTAssertEqual(rows.filter { $0.provider == "fx" }.map(\.state), [.notLoggedIn, .apiKey])
+  }
+
   /// Without `GET /v1/logins`, run-options' per-sandbox answers stand in: a reason about logging in means logged out,
   /// any other reason (no agent environment) says nothing about the login.
   func testLoginRowsFallBackToRunOptionsPerSandbox() {
