@@ -8,7 +8,8 @@
 //         /v1/sandboxes/{name}/settings and POST /v1/sandboxes/{name}/resources/{id}/actions/delete. With PROJECTS=<scene>
 //         (projects.ts): GET /v1/projects/inspect and POST /v1/projects (capability projects.setup), git-init, publish-options and
 //         publish (projects.git), and run-options?repo=
-//         refusing a folder that isn't set up.
+//         refusing a folder that isn't set up. With PROFILES=<scene> (profiles.ts): the Team screen's profile routes,
+//         projects.known and run-options.
 // SSE frames per contract: `id: <seq>` / `event: <type>` / `data: <envelope>`; `event: stream.reset` {snapshotSeq, reason}
 //   then snapshot.run / agents / approvals / steps / threads / snapshot.end {snapshotSeq}, then live from snapshotSeq+1;
 //   `: heartbeat` comment every HEARTBEAT_MS (default 15000).
@@ -26,6 +27,7 @@
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
 import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
+import { profilesCaps, profilesRoute, profilesScene } from "./profiles";
 import { runTitle } from "../../../../src/api/run-title";
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/harness.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -33,7 +35,9 @@ const TOKEN = process.env.TOKEN ?? "test-token";
 const settings = process.env.SETTINGS ? settingsScene(process.env.SETTINGS) : null;
 // PROJECTS=<scene> (projects.ts): project setup from the app.
 const projects = process.env.PROJECTS ? projectsScene(process.env.PROJECTS) : null;
-const caps = [...(settings ? settingsCaps(settings) : []), ...(projects ? projectsCaps(projects) : [])];
+// PROFILES=<scene> (profiles.ts): the Team screen's profile routes.
+const profiles = process.env.PROFILES ? profilesScene(process.env.PROFILES) : null;
+const caps = [...new Set([...(settings ? settingsCaps(settings) : []), ...(projects ? projectsCaps(projects) : []), ...(profiles ? profilesCaps(profiles) : [])])];
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS ?? 15000);
 const RESET_AFTER = 12, DROP_AFTER = 22, COMPACTED_BELOW = 3, RUN = "run-demo", PRJ = "prj-demo", GOAL = "ship transport spike";
 const T0 = Date.UTC(2026, 9, 25, 6, 0, 0);
@@ -145,10 +149,14 @@ Bun.serve({
   idleTimeout: 0,
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
-    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40", ...(settings || projects ? { capabilities: caps } : {}) });
+    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40", ...(settings || projects || profiles ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
     if (projects) {
       const r = projectsRoute(url, projects, req) ?? projectsRunOptionsRefusal(url, projects);
+      if (r) return r;
+    }
+    if (profiles) {
+      const r = await profilesRoute(url, profiles, req);
       if (r) return r;
     }
     if (settings) {

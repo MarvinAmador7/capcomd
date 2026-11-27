@@ -271,9 +271,7 @@ package struct ToolGroupRow: View {
 
   private var line: some View {
     HStack(spacing: Theme.Rows.gap) {
-      HStack(spacing: -Theme.Rows.tileOverlap) {
-        ForEach(Array(run.stacked.enumerated()), id: \.offset) { n, i in tile(i).zIndex(Double(-n)) }
-      }
+      GroupTileStack(count: run.stacked.count) { n in tile(run.stacked[n]) }
       HStack(spacing: 0) {
         Text(verbatim: run.title).foregroundStyle(Theme.Rows.groupText)
         ForEach(run.notes, id: \.self) { note in
@@ -293,12 +291,35 @@ package struct ToolGroupRow: View {
   }
 
   private func tile(_ i: CapcomdThread.Item) -> some View {
+    GroupTile { Image(systemName: ToolIcon.symbol(i.tool)).font(Theme.Rows.tileIcon).foregroundStyle(Theme.Rows.tileText) }
+  }
+}
+
+/// One tile of a group's stack (`.stk span`): 20 pt, 6 pt corners, a hairline, parted from the one under it by a ring
+/// of the ground it sits on. The thread's call groups and the Team screen's settings row draw with it.
+package struct GroupTile<Content: View>: View {
+  let ground: Color
+  let content: Content
+  package init(ground: Color = Theme.Affect.ground, @ViewBuilder content: () -> Content) { self.ground = ground; self.content = content() }
+  package var body: some View {
     let r = RoundedRectangle(cornerRadius: Theme.Rows.tileRadius, style: .continuous)
-    return Image(systemName: ToolIcon.symbol(i.tool)).font(Theme.Rows.tileIcon).foregroundStyle(Theme.Rows.tileText)
+    content
       .frame(width: Theme.Rows.tile, height: Theme.Rows.tile)
       .background(r.fill(Theme.Rows.tileFill))
       .overlay(r.strokeBorder(Theme.Rows.tileStroke, lineWidth: Theme.Affect.hairline))
-      .background(r.inset(by: -Theme.Rows.tileRing).fill(Theme.Affect.ground))
+      .background(r.inset(by: -Theme.Rows.tileRing).fill(ground))
+  }
+}
+
+/// Tiles stacked left to right, each over the next (`.stk`: 4 pt overlap).
+package struct GroupTileStack<Tile: View>: View {
+  let count: Int
+  let tile: (Int) -> Tile
+  package init(count: Int, @ViewBuilder tile: @escaping (Int) -> Tile) { self.count = count; self.tile = tile }
+  package var body: some View {
+    HStack(spacing: -Theme.Rows.tileOverlap) {
+      ForEach(0..<count, id: \.self) { n in tile(n).zIndex(Double(-n)) }
+    }
   }
 }
 

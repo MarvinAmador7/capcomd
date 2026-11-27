@@ -35,7 +35,15 @@ struct SidebarView: View {
     DeskProbe.body("Sidebar")
     return VStack(spacing: 0) {
       SidebarHeader()
-      SidebarList()
+      // Team pressed: the roster by project (TeamSidebar.swift) in the agents' place. Both stay built once Team has
+      // shown, so pressing it only swaps which one shows; the hidden one takes no click and no keyboard.
+      let team = model.team.isOpen
+      ZStack {
+        SidebarList().opacity(team ? 0 : 1).allowsHitTesting(!team).accessibilityHidden(team)
+        if model.team.everOpened {
+          TeamRosterList().opacity(team ? 1 : 0).allowsHitTesting(team).accessibilityHidden(!team)
+        }
+      }
       SidebarFooter()
     }
     .padding(.horizontal, 8).padding(.bottom, 6)
@@ -71,8 +79,9 @@ struct SidebarFooter: View {
   var body: some View {
     HStack(spacing: 2) {
       SideButton(glyph: AnyView(HouseGlyph().stroke(style: StrokeStyle(lineWidth: 1.3, lineJoin: .round)).frame(width: 15, height: 15)),
-                 on: model.homeShown, help: "Home (⌘0)", label: "Home") { model.toggleHome() }
+                 on: model.homeShown && !model.team.isOpen, help: "Home (⌘0)", label: "Home") { model.toggleHome() }
       Spacer(minLength: 0)
+      TeamButton()
       HistoryButton(size: Theme.Desk.Side.button)
       SettingsButton(size: Theme.Desk.Side.button)
     }
@@ -272,9 +281,10 @@ struct SidebarList: View {
     .onKeyPress(.rightArrow) { model.sidebarUnfold(true); return .handled }
     .onKeyPress(.leftArrow) { model.sidebarUnfold(false); return .handled }
     .onKeyPress(.return) { model.sidebarReturn(); return .handled }
-    .task(id: model.nav.listFocus) { if model.nav.listFocus > 0 && model.nav.sidebarOpen { focused = true } }
-    // Folded, the list (kept built, hidden) gives the keyboard back.
+    .task(id: model.nav.listFocus) { if model.nav.listFocus > 0 && model.nav.sidebarOpen && !model.team.isOpen { focused = true } }
+    // Folded, or Team in its place, the list (kept built, hidden) gives the keyboard back.
     .onChange(of: model.nav.sidebarOpen) { _, open in if !open { focused = false } }
+    .onChange(of: model.team.isOpen) { _, team in if team { focused = false } }
   }
 }
 

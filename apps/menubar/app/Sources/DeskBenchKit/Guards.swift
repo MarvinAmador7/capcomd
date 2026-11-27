@@ -35,7 +35,8 @@ public enum Guards {
   /// thread is the owner's to read (DESKBENCH.md, Snapshots).
   static let snapshotScenarios: Set<String> = ["open", "switch", "step", "jump", "fling", "swipe", "follow", "resize",
                                                 "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe", "sidebar-toggle", "sidebar-select",
-                                                "palette-first", "palette-open", "palette-type", "palette-keys", "split-open", "split-focus", "pane-expand", "expand-switch"]
+                                                "palette-first", "palette-open", "palette-type", "palette-keys", "split-open", "split-focus", "pane-expand", "expand-switch",
+                                                "team-open", "team-switch", "team-settings"]
 
   /// The correctness guards of a scenario, as the manifest lists them.
   public static func forScenario(_ name: String) -> [String] {

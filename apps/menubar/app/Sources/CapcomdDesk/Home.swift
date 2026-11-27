@@ -122,7 +122,6 @@ struct HomeComposer: View {
     let busy = form.phase != .editing
     let setup = model.newProjectSetup()
     let branches = model.newProjectBranches
-    let shape = RoundedRectangle(cornerRadius: Theme.Desk.Home.cardRadius, style: .continuous)
     return VStack(alignment: .leading, spacing: Theme.Desk.Home.cardGap) {
       HStack(spacing: 4) {
         FolderChip(revision: np.revision)
@@ -158,17 +157,7 @@ struct HomeComposer: View {
         toolRow(busy: busy)
       }
     }
-    .padding(Theme.Desk.Home.cardPadding)
-    .background {
-      ZStack {
-        // The blue ring outside the card while the goal has the keyboard (the card is opaque: only 3 pt of it shows).
-        RoundedRectangle(cornerRadius: Theme.Desk.Home.cardRadius + Theme.Desk.Home.focusWidth, style: .continuous)
-          .fill(Theme.Desk.Home.focusRing).padding(-Theme.Desk.Home.focusWidth).opacity(focused ? 1 : 0)
-        shape.fill(Theme.Desk.Home.cardFill)
-          .shadow(color: .black.opacity(0.5), radius: 16, x: 0, y: 14)
-      }
-    }
-    .overlay(shape.strokeBorder(Theme.Desk.Home.cardRing, lineWidth: 0.5))
+    .modifier(ComposerCard(focused: focused))
     .contentShape(Rectangle())
     .onTapGesture { focused = true }
     .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: focused)
@@ -231,6 +220,27 @@ struct HomeComposer: View {
       return
     }
     Task { await model.startNewProject() }
+  }
+}
+
+/// The composer's card (Home.dc.html): #1B1B1F, 16 pt corners, a .5 pt ring, a soft drop shadow, and the blue 3 pt ring
+/// outside it while its field has the keyboard. Home's composer and the Team launcher (TeamPane.swift) are this card.
+struct ComposerCard: ViewModifier {
+  let focused: Bool
+  func body(content: Content) -> some View {
+    let shape = RoundedRectangle(cornerRadius: Theme.Desk.Home.cardRadius, style: .continuous)
+    content
+      .padding(Theme.Desk.Home.cardPadding)
+      .background {
+        ZStack {
+          // The blue ring outside the card while the goal has the keyboard (the card is opaque: only 3 pt of it shows).
+          RoundedRectangle(cornerRadius: Theme.Desk.Home.cardRadius + Theme.Desk.Home.focusWidth, style: .continuous)
+            .fill(Theme.Desk.Home.focusRing).padding(-Theme.Desk.Home.focusWidth).opacity(focused ? 1 : 0)
+          shape.fill(Theme.Desk.Home.cardFill)
+            .shadow(color: .black.opacity(0.5), radius: 16, x: 0, y: 14)
+        }
+      }
+      .overlay(shape.strokeBorder(Theme.Desk.Home.cardRing, lineWidth: 0.5))
   }
 }
 

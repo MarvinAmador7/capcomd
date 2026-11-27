@@ -209,7 +209,7 @@ package final class DeskModel {
   @ObservationIgnored package var chooseFolder: () async -> String? = { await DeskFolderPicker.choose() }
   /// Return approves the focused column's ask only while nothing else takes Return: a rename field, the new project
   /// column's composer, the menu, the palette or the Stop question (SPEC §4).
-  package var returnApproves: Bool { renamingAgent == nil && typingIn == nil && newProject == nil && !menuOpen && !paletteOpen && !stopAsked }
+  package var returnApproves: Bool { renamingAgent == nil && typingIn == nil && newProject == nil && !menuOpen && !paletteOpen && !stopAsked && !team.isOpen }
   /// The column whose message box has the keyboard (nil: none).
   package private(set) var typingIn: String? { didSet { Mutations.record("DeskModel.typingIn") } }
   /// A message box took or gave up the keyboard: its column is the focused one while it has it.
@@ -237,6 +237,8 @@ package final class DeskModel {
   /// Folded or opened, and the sidebar's view state; the sidebar's content (SidebarModel.swift).
   @ObservationIgnored package let nav = DeskNav()
   @ObservationIgnored package let sidebar = SidebarSlice()
+  /// Team (TeamModel.swift): the profiles by project, and the profile panes.
+  @ObservationIgnored package let team = TeamModel()
   @ObservationIgnored var sidebarRowsByRun: [String: [(row: SidebarRow, needs: Bool)]] = [:]
   /// The Needs you reel (NeedsYou.swift): every asking agent, across projects.
   @ObservationIgnored package let needs = NeedsReel()
@@ -268,6 +270,7 @@ package final class DeskModel {
     needs.model = self
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }
+    s.team.onChange = { [weak self] c in self?.teamChanged(c) }
     link = .ready
     apply([.all])
   }
@@ -287,6 +290,7 @@ package final class DeskModel {
     setupFlow = ProjectSetupFlow(store: s)
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }
+    s.team.onChange = { [weak self] c in self?.teamChanged(c) }
     tokenRejected = false
     // The run that was open follows the new store's feeds: select it again.
     if reconnect { openRunId = nil }
@@ -333,6 +337,7 @@ package final class DeskModel {
       if daemonVersion != store.daemonVersion { daemonVersion = store.daemonVersion }
       if !loaded, store.daemonLoaded { loaded = true }
       actionsRevision &+= 1
+      teamStoreChanged()
       let d = shown(store.decks())
       if decks != d { decks = d }
       let opens = autoOpens && !folded
@@ -343,7 +348,7 @@ package final class DeskModel {
       }
       else if let deck = d.first(where: { $0.id == openProjectId }), deck.runId != openRunId { select(deck.id) }
       // Nothing open: Home (the window's first screen, and where folding the last project leaves you).
-      if openProjectId == nil, newProject == nil, !needs.isOpen { openHome(focus: false) }
+      if openProjectId == nil, newProject == nil, !needs.isOpen, !team.isOpen { openHome(focus: false) }
     }
     // Home: its cards follow the runs; its composer redraws on general changes, and a run it started takes over once the
     // run's planner is listed (which may arrive as that run's own change).
@@ -454,6 +459,7 @@ package final class DeskModel {
   package func open(project id: String?) {
     menuOpen = false; stopAsked = false
     if id != nil { needs.close(restore: false) }
+    if id != nil, team.isOpen { team.isOpen = false }
     if newProject != nil, id != nil { leaveHome() }
     if id != nil { folded = false }
     guard select(id) else { return }

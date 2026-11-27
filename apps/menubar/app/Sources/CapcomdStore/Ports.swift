@@ -182,6 +182,8 @@ public enum StartWire {
     if let v = c.repo { body["repo"] = v }; if let v = c.driver { body["driver"] = v }
     if let v = c.sandbox { body["sandbox"] = v }; if let v = c.effort { body["effort"] = v }
     if let v = c.model { body["model"] = v }
+    if let v = c.profile { body["profile"] = v }
+    if let v = c.planner { body["planner"] = v }
     if let v = c.base { body["base"] = v }
     if c.noGoalBranch { body["goalBranch"] = false } else if let v = c.goalBranch { body["goalBranch"] = v }
     return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -203,10 +205,13 @@ public struct RunChoice: Sendable, Hashable {
   /// the goal branch's name (nil: the daemon's suggestion). `noGoalBranch`: merge into the target as before.
   public var base: String?, goalBranch: String?
   public var noGoalBranch: Bool
+  /// A run of one profile (the desktop's Team launcher): `profile`, the worker of the built-in recipe; or `planner`
+  /// (capability runs.planner), the profile that plans it. Neither with `driver`.
+  public var profile: String?, planner: String?
   public init(repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil, base: String? = nil, goalBranch: String? = nil, noGoalBranch: Bool = false,
-              model: String? = nil) {
+              model: String? = nil, profile: String? = nil, planner: String? = nil) {
     self.repo = repo; self.driver = driver; self.sandbox = sandbox; self.effort = effort; self.base = base; self.goalBranch = goalBranch; self.noGoalBranch = noGoalBranch
-    self.model = model
+    self.model = model; self.profile = profile; self.planner = planner
   }
 }
 

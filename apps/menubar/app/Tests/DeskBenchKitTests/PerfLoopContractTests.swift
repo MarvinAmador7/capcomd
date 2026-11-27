@@ -43,7 +43,7 @@ import PerfLoopKit
     let (_, read) = try manifests()
     XCTAssertEqual(read.defaultFixture, "crew17")
     for s in Scenarios.all {
-      let expected = s.name.hasPrefix("palette-") ? "search" : s.name.hasPrefix("needs-") ? "needs5" : nil
+      let expected = s.name.hasPrefix("palette-") ? "search" : s.name.hasPrefix("needs-") ? "needs5" : s.name.hasPrefix("team-") ? "team" : nil
       XCTAssertEqual(s.fixture, expected, s.name)
       XCTAssertEqual(read.scenarios.first { $0.name == s.name }?.fixture, expected, s.name)
       // What perfloop passes as --fixture when nobody names one is what the bench picks on its own.

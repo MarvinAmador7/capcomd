@@ -21,6 +21,8 @@ public struct FixtureSpec: Sendable, Codable, Hashable {
   /// The Needs you reel's fixtures: every project has `openAgents` agents and the asks are spread across them (merges
   /// with their files, questions, a usage limit per project at most), at shuffled times. Nil elsewhere.
   public var needs: Bool? = nil
+  /// The Team screen's fixture: its store has a daemon with the profile routes (TeamFixture.swift). Nil elsewhere.
+  public var team: Bool? = nil
 }
 
 /// What one fixture generates: lifecycle events per run scope, thread items per agent, media bytes by attachment id.
@@ -84,6 +86,8 @@ public enum Fixtures {
     FixtureSpec(name: "search", summary: "Search ⌘K's load: 60 projects (~200 agents in all, 40 in the open one, three asks) plus the commands: 250+ searchable items, short threads.", openAgents: 40, itemsPerThread: 8...16, projects: 60, asks: 3),
     FixtureSpec(name: "needs5", summary: "Needs you: five asks across five projects of 6 agents (merges with their files, questions, a usage limit), at shuffled times.", openAgents: 6, itemsPerThread: 40...80, projects: 5, asks: 5, needs: true),
     FixtureSpec(name: "needs20", summary: "Needs you: twenty asks across eight projects of 9 agents (merges with their files, questions, usage limits), at shuffled times.", openAgents: 9, itemsPerThread: 40...80, projects: 8, asks: 20, needs: true),
+    FixtureSpec(name: "team", summary: "Team: two projects with profiles of their own (capcomd: plans, leads, builds, reviews; capcomd-site: three) and the user's two, served as the daemon's profile routes; two small runs.",
+                openAgents: 6, itemsPerThread: 20...40, projects: 2, asks: 0, team: true),
     FixtureSpec(name: "crew", summary: "The family the sweeps vary: crew17's shape (3 projects, one ask, 60–120 items a thread) for `crew@agents=N,items=M` (M ± 20 % a thread; also projects, asks, seed).", openAgents: 17, itemsPerThread: 60...120, projects: 3, asks: 1),
   ].map { var s = $0; s.parametric = Fixtures.parameterRanges; return s }
 

@@ -314,6 +314,7 @@ extension DeskModel {
   package func openNeedsReel() {
     if stopAsked { stopAsked = false }
     collapsePane()   // the reel takes the pane's place beside the sidebar
+    if team.isOpen { team.isOpen = false }
     needs.open()
   }
   /// Esc or Back: the window goes back to what it showed before.

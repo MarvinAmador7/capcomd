@@ -114,6 +114,16 @@ public enum Scenarios {
     ScenarioSpec(name: "needs-swipe", summary: "A recorded (or synthetic) trackpad gesture replayed into the Needs you reel's scroll view, as `swipe` does for the project reel.",
                  budget: "Reel scroll: no dropped frames at 120 Hz", rule: "no late frame while the reel moves; the content within 1 pt of the fingers (p95) with no stall; it lands on a column edge",
                  kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "0", "timestamps": "recorded", "deliver": "window"], fixture: "needs5"),
+    // Team (design/desktop/team; SPEC §2.2), on the `team` fixture's profile routes.
+    ScenarioSpec(name: "team-open", summary: "With the sidebar open, click the Team button in its foot (a real click) and back, repeatedly: the roster by project and the first profile's pane, then the agents again.",
+                 budget: "Open Team: first frame ≤ 50 ms", rule: "median latency from the click to the frame with the roster and the profile's pane header ≤ 50 ms; checks: opened, roster, closed",
+                 kind: .latency, latencyBudgetMs: 50, params: ["opens": "4"], fixture: "team"),
+    ScenarioSpec(name: "team-switch", summary: "With Team open, click roster rows (real clicks) across projects and All projects: each profile in the pane.",
+                 budget: "Switch profile: first frame ≤ 50 ms", rule: "median latency from the click to the frame with that profile's header ≤ 50 ms; no reel or agent pane body; checks: switched, isolation",
+                 kind: .latency, latencyBudgetMs: 50, params: ["clicks": "6"], fixture: "team"),
+    ScenarioSpec(name: "team-settings", summary: "With Team open on an installed profile, open and close its settings row in place, then step a number (− / +) that is written to its file.",
+                 budget: "Expand the settings row: first frame ≤ 50 ms", rule: "median latency from the toggle to the frame with (or without) its rows ≤ 50 ms; checks: summary, rows, written",
+                 kind: .latency, latencyBudgetMs: 50, params: ["toggles": "6"], fixture: "team"),
   ]
   public static func spec(_ name: String) -> ScenarioSpec? { all.first { $0.name == name } }
   /// The scenarios `suite` runs, in order.
