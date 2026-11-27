@@ -49,6 +49,7 @@ struct TeamRosterList: View {
     .onKeyPress(.upArrow) { model.moveTeamSelection(-1); return .handled }
     .onKeyPress(.downArrow) { model.moveTeamSelection(1); return .handled }
     .task(id: model.nav.listFocus) { if model.nav.listFocus > 0 && model.team.isOpen { focused = true } }
+    .onChange(of: model.team.isOpen) { _, open in if !open { focused = false } }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Team, by project")
   }

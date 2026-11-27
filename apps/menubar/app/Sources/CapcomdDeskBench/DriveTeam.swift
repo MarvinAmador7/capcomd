@@ -22,6 +22,12 @@ import PerfLoopKit
     .rect("team-pane", CGRect(x: 248, y: 0, width: max(0, d.content.bounds.width - 248), height: d.content.bounds.height))
   }
 
+  /// The sidebar's list by its place (the roster and the agents' list are both kept built once Team has shown, one of
+  /// them transparent, so the list is judged where it shows, not by its scroll view).
+  static func listRegion(_ d: Desk) -> InkRegion {
+    .rect("sidebar-list", CGRect(x: 8, y: 52, width: 240, height: max(0, d.content.bounds.height - 52 - 46)))
+  }
+
   /// The daemon's capabilities read (the Team button works from then on), the sidebar open on the agents.
   static func prepare(_ d: Desk) async throws {
     await d.store.refreshDaemonInfo()
@@ -64,7 +70,7 @@ import PerfLoopKit
     let opens = run.int("opens", 4)
     for i in 0..<opens {
       let t = run.now
-      await run.click(at: teamButton(d), ink: [d.sidebarRegion, paneRegion(d)], name: "open#\(i)", until: {
+      await run.click(at: teamButton(d), ink: [listRegion(d), paneRegion(d)], name: "open#\(i)", until: {
         d.model.team.isOpen && !d.model.team.roster.isEmpty && d.bodies.contains { $0.view == "TeamPaneHead" && $0.t >= t }
       })
       let ok = d.model.team.isOpen && d.model.team.selectedKey != nil
@@ -73,7 +79,7 @@ import PerfLoopKit
       if i == opens - 1 { break }   // ends open, for the snapshot
       let tc = run.now
       // Cheap to ask every frame (a walk of the window's views isn't): the agents' list drew again.
-      await run.click(at: teamButton(d), ink: [d.sidebarRegion], name: "close#\(i)", until: {
+      await run.click(at: teamButton(d), ink: [listRegion(d)], name: "close#\(i)", until: {
         !d.model.team.isOpen && d.bodies.contains { $0.view == "SidebarList" && $0.t >= tc }
       })
       let back = !d.model.team.isOpen && d.paneView() != nil
@@ -85,7 +91,7 @@ import PerfLoopKit
     let words = d.model.team.roster.first?.members.map(\.role.rawValue) ?? []
     let rosterOK = labels == ["capcomd", "capcomd-site", "All projects"] && words == ["plans", "leads", "builds", "reviews"]
       && d.model.team.roster.last?.members.map(\.title) == ["Security critic", "tern"]
-    run.regions([d.sidebarRegion, paneRegion(d)])
+    run.regions([listRegion(d), paneRegion(d)])
     run.record([
       Check("opened", opened, notes.filter { $0.hasPrefix("open") }.joined(separator: "; ").ifEmpty("every click opened Team on a profile (\(opens) opens)")),
       Check("roster", rosterOK, "labels \(labels), first project's role words \(words)"),
@@ -121,7 +127,7 @@ import PerfLoopKit
     }
     let leaked = d.bodies(in: start...run.now).filter { agentViews.contains($0.view) }
     await d.quiet(timeoutMs: 3000)
-    run.regions([d.sidebarRegion, paneRegion(d)])
+    run.regions([listRegion(d), paneRegion(d)])
     run.record([
       Check("switched", switched, notes.joined(separator: "; ").ifEmpty("every clicked row showed its profile in the pane")),
       Check("isolation", leaked.isEmpty, leaked.isEmpty ? "no agent view rendered" : "agent views rendered: \(Desk.summary(leaked))"),
@@ -171,7 +177,7 @@ import PerfLoopKit
     let written = next == "45" && put?.name == "security-critic" && put?.values["limits.maxTurns"] == .some("45")
       && s.detail?.field("limits.maxTurns")?.display == "45 turns" && s.pending.isEmpty
     await d.quiet(timeoutMs: 2000)
-    run.regions([d.sidebarRegion, paneRegion(d)])
+    run.regions([listRegion(d), paneRegion(d)])
     run.record([
       Check("summary", summary == want, "\"\(summary)\""),
       Check("rows", toggled && rows == 13, "rows \(rows) (13 expected), every toggle \(toggled ? "took" : "did not take")"),
