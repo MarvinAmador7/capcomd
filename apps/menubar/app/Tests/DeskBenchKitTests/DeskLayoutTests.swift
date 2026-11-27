@@ -221,7 +221,16 @@ final class DeskLayoutTests: XCTestCase {
       return r
     }
     func reelFrame() -> CGRect? { reel().flatMap { shown($0.reelScrollView) } }
-    spin(1.0)
+    // The reel opens heads first and warms its columns after (each a view of its own once warm): every column warm and
+    // its view settled before the views are compared.
+    let deadline = Date().addingTimeInterval(20)
+    var last: [ObjectIdentifier] = []
+    repeat {
+      spin(0.5)
+      let now = columnViews()
+      if now == last, m.columns.allSatisfy({ m.agent($0)?.warm == true }) { break }
+      last = now
+    } while Date() < deadline
     let built = columnViews()
     XCTAssertFalse(built.isEmpty)
     let H = host.bounds.height, W = host.bounds.width, bar = DeskLayoutProbe.tabBar

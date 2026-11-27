@@ -32,6 +32,8 @@ import PerfLoopKit
     await d.threadsDrawn("setup")
     d.model.setLayout(.tabsAbove)
     _ = await d.run.wait(timeoutMs: 2000) { d.paneView() == nil }
+    // The reel warms its columns once folded (each a view of its own once warm): all warm before the views are taken.
+    _ = await d.run.wait(timeoutMs: 8000) { d.model.columns.allSatisfy { d.model.agent($0)?.warm == true } }
     await d.quiet(timeoutMs: 3000)
 
     let columns = columnViews(d)
