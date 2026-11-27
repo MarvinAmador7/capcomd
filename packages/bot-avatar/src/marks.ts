@@ -24,6 +24,39 @@ export const MENU_BAR_MARK: string[] = [
 	"................",
 ];
 
+/**
+ * The Antenna mark, a menu bar choice in the app's Settings (General › App Icon): the dome with a two-cell antenna.
+ * Kept in sync with `antennaMark` in apps/menubar/app/Sources/CapcomdBot/Marks.swift (its tests read this file).
+ */
+export const ANTENNA_MARK: string[] = [
+	".......##.......",
+	".......##.......",
+	...MENU_BAR_MARK.slice(2),
+];
+
+/**
+ * The Ring mark, a menu bar choice in the app's Settings: the original capcomd ring with its centre dot. Kept in sync
+ * with `ringMark` in apps/menubar/app/Sources/CapcomdBot/Marks.swift.
+ */
+export const RING_MARK: string[] = [
+	"................",
+	".....######.....",
+	"...##########...",
+	"..###......###..",
+	".###........###.",
+	".##..........##.",
+	".##....##....##.",
+	".##...####...##.",
+	".##...####...##.",
+	".##....##....##.",
+	".##..........##.",
+	".###........###.",
+	"..###......###..",
+	"...##########...",
+	".....######.....",
+	"................",
+];
+
 /** A 1-bit mark as SVG in one colour (default currentColor), one path, crisp edges. */
 export function markSvg(rows: string[], o: { scale?: number; color?: string; label?: string } = {}): string {
 	const s = o.scale ?? 1, w = rows[0]!.length, h = rows.length;

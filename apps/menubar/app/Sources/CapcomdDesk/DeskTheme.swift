@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 import CapcomdUI
+import CapcomdStore
 
 /// Desktop window tokens, from design/desktop (Reel, ReelStack, ReelTabs). The boards win on any measurement.
 extension Theme {
@@ -110,8 +111,8 @@ extension Theme {
       static let scrim = Color.black.opacity(0.4)
     }
 
-    /// Columns across: three at 1440 pt, two at 1100, one under 760 (SPEC §2).
-    static func columnsAcross(_ width: CGFloat) -> Int { width >= 1280 ? 3 : width >= 900 ? 2 : 1 }
+    /// Columns across: three at 1440 pt, two at 1100, one under 760 (SPEC §2), unless Settings › Interface fixes a count.
+    static func columnsAcross(_ width: CGFloat) -> Int { InterfacePrefs.across(Double(width), DeskPrefs.columnsNow) }
   }
 }
 #endif

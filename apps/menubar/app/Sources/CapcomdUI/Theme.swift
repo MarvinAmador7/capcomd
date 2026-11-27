@@ -657,52 +657,6 @@ package enum Theme {
   }
   /// The Settings window (design/settings/*.dc.html). Panes are system grouped Forms, so rows, controls, section headers
   /// and footers take the system's metrics and colours; these are the few things the boards draw themselves.
-  package enum Settings {
-    package static let width: CGFloat = 620                                   // .win width
-    package static let poll: Double = 5                                       // s between reads while the window is open
-    package static let chrome: CGFloat = 80                                   // title and tab bar, until the window says
-    package static let minPane: CGFloat = 200                                 // never shorter than this before scrolling
-    // Status dots (`.dot`, `.empty`): system colours, so they adapt to light, dark and Increase Contrast.
-    package static let dot: CGFloat = 8, ringWidth: CGFloat = 1.2, valueGap: CGFloat = 6
-    package static let ok = Color(nsColor: .systemGreen), warn = Color(nsColor: .systemOrange), bad = Color(nsColor: .systemRed)
-    package static let ring = Color(nsColor: .systemGray)
-    package static let rowGap: CGFloat = 12                                   // .row gap: value to button
-    package static let footFont = Font.system(size: 11), footMono = Font.system(size: 11, design: .monospaced)
-    // Section headers (`.sh`): a mark before the title, a Default badge or Make Default after it.
-    package static let headerGap: CGFloat = 6
-    package static let providerMark: CGFloat = 14, placeMark: CGFloat = 15
-    package static let badgeFont = Font.system(size: 11, weight: .medium)
-    package static let badgePaddingH: CGFloat = 7, badgePaddingV: CGFloat = 2, badgeRadius: CGFloat = 5, badgeFill: Double = 0.16
-    /// `.badge` text: #4ea1ff in dark (Runs.dc.html), #0062cc in light (GeneralLight.dc.html's accent text).
-    package static let badgeText = Color(nsColor: NSColor(name: nil) { a in
-      a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(srgbRed: 0x4E / 255, green: 0xA1 / 255, blue: 1, alpha: 1)
-                                                          : NSColor(srgbRed: 0, green: 0x62 / 255, blue: 0xCC / 255, alpha: 1)
-    })
-    package static let headerButtonFont = Font.system(size: 12)
-    package static let menuMark: CGFloat = 13                                 // marks inside popup menus
-    // Bot faces preview: the mark on a 32 pt tile.
-    package static let faceTile: CGFloat = 32, faceTileRadius: CGFloat = 7, faceTileFill = Color.primary.opacity(0.06), faceMark: CGFloat = 16
-    package static let progressWidth: CGFloat = 150                           // `.track` while an environment builds
-    package static let sheetWidth: CGFloat = 380, sheetPadding: CGFloat = 20, sheetGap: CGFloat = 10
-    /// A place's details (CloudExplore.dc.html), pushed from Runs.
-    package enum Details {
-      package static let sheetWidth: CGFloat = 560                             // the sheet (`.win` 560 px)
-      package static let actionsHeight: CGFloat = 52, actionsPaddingH: CGFloat = 20   // `.actions`: Done at the bottom right
-      package static let machineGap: CGFloat = 10                              // `.mrow` gap
-      package static let machineFont = Font.system(size: 12)                   // `.mrow` 12 px
-      package static let ageFont = Font.system(size: 11, design: .monospaced)  // `.mono`
-    }
-    /// About (`About.dc.html`): one centred column.
-    package enum About {
-      package static let height: CGFloat = 420                                // the board's 500 pt window less its toolbar
-      package static let botCell: CGFloat = 4                                 // 32 cells × 4 = 128 pt
-      package static let wordmarkCell: CGFloat = 6                            // 7 glyphs → 204 × 30 pt
-      package static let wordmarkTop: CGFloat = 18, taglineTop: CGFloat = 12, versionTop: CGFloat = 6, linksTop: CGFloat = 22
-      package static let linksGap: CGFloat = 8, licenseTop: CGFloat = 18
-      package static let paddingTop: CGFloat = 8, paddingH: CGFloat = 24, paddingBottom: CGFloat = 28
-      package static let taglineFont = Font.system(size: 13), smallFont = Font.system(size: 11)
-    }
-  }
   /// Secondary text for dark and light: the label grey (or white) at `dark` alpha on dark, #3C3C43 at `light` on light.
   package static func label(dark: Double, light: Double, white: Bool = false) -> Color {
     adaptive(dark: white ? NSColor(white: 1, alpha: dark) : NSColor(srgbRed: 235 / 255, green: 235 / 255, blue: 245 / 255, alpha: dark),

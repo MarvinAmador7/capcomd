@@ -124,6 +124,12 @@ public enum Scenarios {
     ScenarioSpec(name: "team-settings", summary: "With Team open on an installed profile, open and close its settings row in place, then step a number (− / +) that is written to its file.",
                  budget: "Expand the settings row: first frame ≤ 50 ms", rule: "median latency from the toggle to the frame with (or without) its rows ≤ 50 ms; checks: summary, rows, written",
                  kind: .latency, latencyBudgetMs: 50, params: ["toggles": "6"], fixture: "team"),
+    ScenarioSpec(name: "settings-open", summary: "Open the Settings window (as ⌘, does) on the Settings fixture's daemon and wait for the first frame with the sidebar and General.",
+                 budget: "Open Settings: first frame ≤ 100 ms", rule: "median latency from the window's creation to the frame with General ≤ 100 ms; checks: opened, status, needs-you",
+                 kind: .latency, latencyBudgetMs: 100, params: [:]),
+    ScenarioSpec(name: "settings-switch-page", summary: "In Settings, click every page's row in the sidebar (real clicks), then the Cloud place's row on Runs (its page pushed) and Back.",
+                 budget: "Switch Settings page: first frame ≤ 50 ms", rule: "median latency from the click to the frame with that page ≤ 50 ms; checks: switched, place-pushed, back",
+                 kind: .latency, latencyBudgetMs: 50, params: ["rounds": "1", "end": ""]),
   ]
   public static func spec(_ name: String) -> ScenarioSpec? { all.first { $0.name == name } }
   /// The scenarios `suite` runs, in order.

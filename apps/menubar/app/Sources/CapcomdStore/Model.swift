@@ -494,6 +494,9 @@ public enum Notice: Sendable, Hashable {
   case runFinished(runId: String, type: String, title: String)
   /// A goal branch run is ready, or stopped with work landed (GoalNotice): once per run.
   case goalReady(GoalNotice)
+  /// An agent's AI hit its usage limit and the run paused (`agent.paused` with limit "quota"): once per run until it
+  /// runs again. `asker`: the agent as its column names it; `resumesAtMs`: when it picks up by itself, if known.
+  case usageLimit(runId: String, agentId: String, title: String, asker: String?, resumesAtMs: Int?)
 }
 
 /// `Agent.activity.wake` (capability agents.wake, ADR-026 §3): what a running agent waits for between turns (its turn

@@ -6,6 +6,7 @@ import CapcomdStore
 import CapcomdLive
 import CapcomdClient
 import CapcomdBot
+import CapcomdSettings
 
 /// The menu bar panel's view of the app's one store (the window reads the same store, AppSession's). The store stays
 /// platform-neutral; every store change bumps `revision`, and computed properties read it so SwiftUI tracks them.
@@ -27,17 +28,24 @@ final class AppModel {
   /// Opens the window on a run, at an agent's column (the app sets it: every panel row leads there).
   @ObservationIgnored var openInWindow: (_ runId: String, _ agentId: String?) -> Void = { _, _ in }
 
+  /// The Settings window's model (CapcomdSettings), on the same store; its Terminal hand-offs are the onboarding's too.
+  @ObservationIgnored let settings: SettingsModel
+
   init(session: AppSession) {
     self.session = session
     self.store = session.store
     self.setup = ProjectSetupFlow(store: session.store)
+    self.settings = SettingsModel(store: session.store, session: session, host: .quiet)
   }
 
   private func attach(_ s: CapcomdStore) {
     store = s
+    settings.attach(s)
     s.onChange = { [weak self] in
       guard let self else { return }
       self.revision &+= 1
+      self.settings.bump()
+      DockBadge.update(s)   // Settings › Notifications › Badge app icon
       if s.unauthorized { self.session.storeRejected(s) }
       if !s.daemonUnreachable && s.daemonLoaded { self.session.reachable() }
     }
@@ -98,6 +106,9 @@ final class AppModel {
     Notifier.requestAuthorization()
     if Notifier.available { ApprovalNotifications.register() }
     let m = AppModel(session: session)
+    m.settings.host = SettingsHost(notificationsAvailable: Notifier.available, showOnboarding: { OnboardingController.shared?.showAgain() },
+                                   closePanel: { MenuBarPanel.close() }, chooseFolder: { await ProjectFolderPicker.choose(prompt: $0) },
+                                   presenceChanged: { AppPresence.update() })
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
     // A click on any other notice opens the window on its run and agent.
     ApprovalNotifications.onOpen = { [weak m] rid, aid in m?.openInWindow(rid, aid) }
@@ -123,8 +134,6 @@ final class AppModel {
   /// The token came from `CAPCOMD_TOKEN` (development): Settings says so and offers no Reset.
   var tokenFromEnvironment: Bool { session.tokenFromEnvironment }
 
-  /// Settings: what the user is finishing in Terminal (SettingsModel.swift).
-  var handOffs = HandOffs()
   /// A pref the store doesn't watch changed: views reading it re-render.
   func bump() { revision &+= 1 }
 
@@ -313,6 +322,12 @@ enum Notifier {
     case .runFinished(let rid, let type, let title):
       id = "run-\(rid)-\(type)"; c.title = title; c.userInfo = ["runId": rid]
       c.body = type == "run.completed" ? "Run completed" : type == "run.cancelled" ? "Run stopped" : "Run failed"
+    case .usageLimit(let rid, let aid, let title, let asker, let resumesAtMs):
+      // "Usage limit: add abs to the calculator" / "lead · login redirect paused. It picks up again at 3:40 PM."; a click
+      // opens the window at that agent.
+      id = "limit-\(rid)"; c.title = "Usage limit: \(title)"; c.userInfo = ["runId": rid, "agentId": aid]
+      let when = resumesAtMs.map { " It picks up again at \(Date(timeIntervalSince1970: Double($0) / 1000).formatted(date: .omitted, time: .shortened))." } ?? ""
+      c.body = "\(asker ?? "An agent") paused: its AI's usage limit was reached.\(when)"
     case .goalReady(let g):
       // "Ready: capcomd/add-x → dev: 2 of 3 tasks landed"; a click opens the run.
       id = "goal-\(g.runId)"; c.title = g.title; c.body = g.line; c.userInfo = ["runId": g.runId]
