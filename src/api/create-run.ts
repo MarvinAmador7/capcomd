@@ -84,8 +84,8 @@ const REFUSALS = new Set(["usage", "config", "not_found", "conflict"]);
  */
 export async function startDetachedRun(input: CreateRunInput & { runId: string }, o: { env?: Env; cwd?: string; timeoutMs?: number; sandboxCheck?: typeof sandboxAvailable; spawn?: typeof spawn } = {}): Promise<{ repo: string; log: string | null }> {
 	if (input.profile && input.driver) throw new CreateRunError("profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
-	if (input.profile && input.effort) throw new CreateRunError("profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
-	if (input.profile && input.model) throw new CreateRunError("profile and model can't be combined: model is the planner agent's (the driver's), and profile picks the worker of a run without one");
+	if (input.profile && input.effort) throw new CreateRunError("profile and effort can't be combined: effort is the planner agent's (the driver's), and profile runs one agent of that profile, with no planner");
+	if (input.profile && input.model) throw new CreateRunError("profile and model can't be combined: model is the planner agent's (the driver's), and profile runs one agent of that profile, with no planner");
 	if (input.profile && input.planner) throw new CreateRunError("profile and planner can't be combined: planner runs a planner agent, which picks its own workers; send one of them", "planner");
 	const ctx = launchContext(input.repo, o.env ?? process.env, o.cwd ?? process.cwd(), { ...(input.sandbox ? { sandbox: input.sandbox } : {}) });
 	if (input.sandbox) {

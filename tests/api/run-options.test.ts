@@ -378,6 +378,33 @@ describe("capcomd run --planner-provider / --sandbox (checked before the engine 
 		expect(noSnapshot.error).toMatchObject({ code: "config", message: expect.stringContaining("no capcomd env snapshot") });
 		expect(ok.error).toMatchObject({ code: "engine_unreachable" });
 	}, 30_000);
+	// POST /v1/runs `profile` (the desktop's Team launcher) on a real sandbox (Docker, boxd): `capcomd run --profile`
+	// is a run of that one agent, not refused for want of a planner agent; its profile is checked as a planner's is.
+	test("--profile on a real sandbox: a run of that one agent, checked before the engine is asked", async () => {
+		const ready = world({ logins: ["claude-code"], env: { CAPCOMD_ENV_SNAPSHOT: "capcomd-env-test" } });
+		const [docker, boxd, noSnapshot, noLogin, unknown, withPlanner, withDriver] = await Promise.all([
+			run(["--profile", "worker", "--sandbox", "docker"], ready),
+			run(["--profile", "worker", "--base", "main"], { ...ready, CAPCOMD_SANDBOX: "boxd" }),
+			run(["--profile", "worker", "--sandbox", "docker"], world({ logins: ["claude-code"] })),
+			run(["--profile", "worker", "--sandbox", "docker"], world({ env: { CAPCOMD_ENV_SNAPSHOT: "capcomd-env-test" } })),
+			run(["--profile", "nobody", "--sandbox", "docker"], ready),
+			run(["--profile", "worker", "--planner", "planner", "--sandbox", "docker"], ready),
+			run(["--profile", "worker", "--planner-provider", "claude", "--sandbox", "docker"], ready),
+		]);
+		expect(docker.error).toMatchObject({ code: "engine_unreachable" });
+		expect(boxd.error).toMatchObject({ code: "engine_unreachable" });
+		expect(noSnapshot.error).toMatchObject({ code: "config", message: expect.stringContaining("no capcomd env snapshot") });
+		expect(noLogin.error).toMatchObject({ code: "config", message: "profile worker can't start: Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)" });
+		expect(unknown.code).not.toBe(0);
+		expect(JSON.stringify(unknown.error)).toContain("nobody");
+		expect(withPlanner.error).toMatchObject({ code: "usage", message: expect.stringContaining("a planner agent picks its own workers") });
+		expect(withDriver.error).toMatchObject({ code: "usage" });
+		// What the daemon's POST /v1/runs launches for the Team launcher: the CLI's answer is the engine's absence, not
+		// the old "--profile/--set pick the worker of the built-in recipe" refusal (a 422 the composer showed).
+		const r = startDetachedRun({ goal: "fix it", runId: "run-team1", profile: "worker", sandbox: "docker" }, { env: { ...ready, CAPCOMD_REPO: "/srv/git/app.git", ...NO_ENGINE }, cwd: dir, sandboxCheck: async () => ({ available: true, reason: null }) });
+		await expect(r).rejects.toThrow(/engine|reach/i);
+		await expect(r).rejects.not.toBeInstanceOf(CreateRunError);
+	}, 30_000);
 });
 
 describe("effort (the driver's reasoning effort)", () => {
@@ -533,7 +560,11 @@ describe("per sandbox: drivers[].sandboxes (capability runs.options.sandbox)", (
 		expect((await post({ goal: "go", driver: "claude", sandbox: "boxd" }, "key-fit-03")).status).toBe(201);
 		expect((await post({ goal: "go", driver: "codex", sandbox: "docker" }, "key-fit-04")).status).toBe(201);
 		expect((await post({ goal: "go", driver: "claude" }, "key-fit-05")).status).toBe(201); // the daemon's sandbox: `available`, checked by capcomd run
-		expect(src.created.length).toBe(3);
+		// A run of one profile (the Team launcher) has no driver: the default driver's login there isn't its business
+		// (`capcomd run` checks the profile's own).
+		expect((await post({ goal: "go", profile: "fx", sandbox: "docker" }, "key-fit-06")).status).toBe(201);
+		expect(src.created.length).toBe(4);
+		expect(src.created.at(-1)).toMatchObject({ profile: "fx", sandbox: "docker" });
 	});
 	test("capcomd env/auth --sandbox takes docker or boxd", async () => {
 		const { capcomd } = require("../helpers/engine") as typeof import("../helpers/engine");

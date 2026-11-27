@@ -83,12 +83,16 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   if (plannerModel !== undefined && (values.recipe || values.legacy)) usage("--planner-model sets a planner agent's model; don't combine it with --recipe/--legacy");
   if (plannerModel !== undefined && !plannerModel.trim()) usage("--planner-model needs a model id");
   const realVms = (await import("../../providers/registry")).realSandbox();
+  // --profile NAME without a planner and without --recipe/--legacy (or CAPCOMD_RUN_PATH): a run of one agent of that
+  // profile (src/recipes/single-agent.ts), which is what POST /v1/runs `profile` (the desktop's Team launcher) asks for.
+  const agentFlag = (values.profile ?? values.agent) as string | undefined;
+  const single = !!agentFlag && values.planner === undefined && driver === undefined && effort === undefined && plannerModel === undefined && !values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH;
   let planner: string | null = null;
   if (values.planner !== undefined) {
     if (values.recipe || values.legacy) usage("--planner runs a planner agent; don't combine it with --recipe/--legacy");
     planner = PA.plannerProfile(values.planner as string);
     if (!planner) throw PA.noPlannerError(values.planner as string);
-  } else if (driver !== undefined || effort !== undefined || plannerModel !== undefined || (!values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH && realVms)) {
+  } else if (driver !== undefined || effort !== undefined || plannerModel !== undefined || (!single && !values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH && realVms)) {
     planner = PA.plannerProfile();
     if (!planner) throw PA.noPlannerError();
   }
@@ -102,18 +106,18 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     if (!d.ok) throw new RelayError("config", `${p} can't drive this run: ${d.reason}`, `Log in with \`capcomd auth login ${p}\` (or set its API key), or leave out --planner-provider to use the planner profile's own provider.`);
     plannerRef = d.ref;
   }
-  if (planner && (values.profile || values.agent || (values.set as string[] | undefined)?.length || values.overrides)) usage("--profile/--set pick the worker of the built-in recipe; a planner agent picks its own workers (from its profile's children.allowedChildProfiles)");
+  if (planner && (values.profile || values.agent || (values.set as string[] | undefined)?.length || values.overrides)) usage("--profile/--set pick the run's one agent (or the worker of the built-in recipe); a planner agent picks its own workers (from its profile's children.allowedChildProfiles)");
   // The checks the planner's spawn makes (its profile, the env snapshot its CLI needs on this run's sandbox, egress),
   // made before the run is created or detached: a run whose planner can't start is refused with the reason here,
   // instead of starting and then sitting with no agent.
   // A --sandbox beats the planner profile's sandbox.provider, as it does at the spawn.
   if (plannerRef) (await import("../../primitives/ops")).spawnChecks(plannerRef, process.env, { runChose: !!runSandbox });
-  // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
-  // the planner/worker/preflight read. Overrides may only narrow the profile unless --operator.
-  const agentFlag = (values.profile ?? values.agent) as string | undefined;
+  // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator]: the run's one agent, or (--recipe/--legacy)
+  // the goal directive the planner/worker/preflight read. Overrides may only narrow the profile unless --operator.
   const sets = (values.set as string[] | undefined) ?? [];
   if ((sets.length || values.overrides || values.operator) && !agentFlag) usage("--set/--overrides/--operator need --profile NAME");
   let goal = rawGoal;
+  let agentRef: string | null = null;
   if (agentFlag) {
     if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(agentFlag)) usage(`invalid --profile ${agentFlag}`);
     const P = await import("../../profiles");
@@ -124,13 +128,29 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     } catch (e) { usage(`bad override: ${(e as Error).message}`); }
     const ref = P.encodeAgentRef(agentFlag, { set, operator: !!values.operator });
     try { P.resolveAgent(ref); } catch (e) { throw new RelayError("config", (e as Error).message, "Overrides may only narrow the profile (fewer turns/budget/tools/egress, stricter sandbox, smaller children limits); pass --operator to widen deliberately."); }
-    if (!/^\s*\[agent:/i.test(rawGoal)) goal = `[agent:${ref}] ${rawGoal}`;
+    agentRef = ref;
+    if (!single && !/^\s*\[agent:/i.test(rawGoal)) goal = `[agent:${ref}] ${rawGoal}`;
+  }
+  // A run of one agent gets the same checks as a planner's before it is created or detached (its profile, the env
+  // snapshot its CLI needs on this run's sandbox, egress): one that can't start is refused here.
+  if (single && agentRef) {
+    (await import("../../primitives/ops")).spawnChecks(agentRef, process.env, { runChose: !!runSandbox });
+    // Its login in this run's sandbox (plan logins are per sandbox), as GET /v1/run-options checks a planner's.
+    const spec = (await import("../../profiles")).resolveAgent(agentRef).spec;
+    if (spec && realVms) {
+      const { credentialReady } = await import("../../agents/run-driver");
+      const R = await import("../../providers/registry");
+      const name = R.sandboxName(process.env);
+      const where = R.isListedProvider(name) ? { name, label: R.PROVIDER_LABEL[name] } : undefined;
+      const c = credentialReady(spec.provider, spec.auth, process.env, where);
+      if (!c.ready) throw new RelayError("config", `profile ${agentFlag} can't start: ${c.reason}`, "Log its agent in for this sandbox (or set its API key), or pick another profile.");
+    }
   }
   // Without a planner agent the run is recipe-hierarchical's (--recipe, --legacy, CAPCOMD_RUN_PATH): once its flags are
   // checked, refused while that plugin is off, before the run is created or detached.
-  const recipe = planner ? null : await (await import("../../plugins/recipe-hierarchical")).hierarchicalRecipe();
+  const recipe = planner || single ? null : await (await import("../../plugins/recipe-hierarchical")).hierarchicalRecipe();
   // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
-  if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
+  if (!planner && !single && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
   const runId = (values["run-id"] as string | undefined) ?? generateRunId();
   let targetBranch = values["target-branch"] as string | undefined;
   await assertEngine();
@@ -139,13 +159,13 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   // here, before the run detaches, so a base nobody can determine is refused now (never a made-up "main").
   let goalBranch: { branch: string; base: string } | null = null;
   if (values["no-goal-branch"] && (values["goal-branch"] !== undefined || values.base !== undefined)) usage("--no-goal-branch can't be combined with --goal-branch or --base");
-  if (values["goal-branch"] !== undefined && !planner) usage("--goal-branch needs a planner run (the built-in recipe merges into its target)");
+  if (values["goal-branch"] !== undefined && !planner && !single) usage("--goal-branch needs a planner run or a run of one --profile (the built-in recipe merges into its target)");
   // The built-in recipe has no goal branch: its work merges into the base it was given.
-  if (!planner && values.base !== undefined) {
+  if (!planner && !single && values.base !== undefined) {
     if (targetBranch !== undefined && targetBranch !== values.base) usage("--base and --target-branch name different branches");
     targetBranch = values.base as string;
   }
-  if (planner && !values["no-goal-branch"]) {
+  if ((planner || single) && !values["no-goal-branch"]) {
     if (values.base !== undefined && targetBranch !== undefined && values.base !== targetBranch) usage("--base and --target-branch name different branches: with a goal branch, pass only --base");
     const G = await import("../../merge/goal");
     const { env: envVar } = await import("../../utils/env");
@@ -174,7 +194,7 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     const log = join(dir, `${runId}.ndjson`);
     const fd = openSync(log, "a");
     const goalArgs = goalBranch ? ["--goal-branch", goalBranch.branch, "--base", goalBranch.base] : values["no-goal-branch"] ? ["--no-goal-branch"] : [];
-    const [cmd, ...args] = (await import("../../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...goalArgs, ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(plannerModel ? ["--planner-model", plannerModel] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), ...(pluginConfig ? (await import("../../plugins/run-config")).pluginConfigFlags(pluginConfig) : []), "--", goal);
+    const [cmd, ...args] = (await import("../../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...goalArgs, ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(single ? singleArgs(values) : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(plannerModel ? ["--planner-model", plannerModel] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), ...(pluginConfig ? (await import("../../plugins/run-config")).pluginConfigFlags(pluginConfig) : []), "--", goal);
     const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
     child.unref();
     if (json) out({ runId, detached: true, log, pid: child.pid, ...(goalBranch ? { goalBranch: goalBranch.branch, base: goalBranch.base } : {}) });
@@ -197,11 +217,19 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   };
   const result = planner
     ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}), ...(goalBranch ? { goalBranch } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
+    : single
+    ? await (await import("../../recipes/single-agent")).runWithAgent({ goal, runId, targetBranch, emit, profile: agentRef!, ...(runSandbox ? { sandbox: runSandbox } : {}), ...(goalBranch ? { goalBranch } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
     : runPath === "recipe"
     ? await recipe!.recipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
     : await recipe!.legacy({ goal, runId, targetBranch, emit });
   if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
   return result.ok ? EXIT.ok : EXIT.run_failed;
+}
+
+/** A run of one agent, detached: its profile flags as given (the background process checks them again). */
+function singleArgs(values: Cmd["values"]): string[] {
+  const sets = (values.set as string[] | undefined) ?? [];
+  return ["--profile", String(values.profile ?? values.agent), ...sets.flatMap((s) => ["--set", s]), ...(values.overrides ? ["--overrides", String(values.overrides)] : []), ...(values.operator ? ["--operator"] : [])];
 }
 
 /** `--plugin-config <plugin>.<key>=<value>` (repeatable), checked against the plugins' per-run settings; null: none. */
