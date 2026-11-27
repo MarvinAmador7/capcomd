@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import CapcomdStore
+import CapcomdSettings
 
 /// v5-a-final `.in`: "Start a project…" at the top of the panel (⌘K). Return starts a run on the goal (POST /v1/runs);
 /// Esc clears, then leaves the field.
@@ -179,7 +180,7 @@ struct StartProjectField: View {
       Button("Choose Project Folder…") { model.chooseProjectFolder() }
       if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
       Divider()
-      Button("Settings…") { SettingsWindow.open(openSettings) }
+      Button("Settings…") { SettingsWindow.open(openSettings, host: model.settings.host) }
       // The menu bar item is the app's home: with no window open there's no app menu, so Quit lives here.
       Button("Quit capcomd") { NSApp.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
     }

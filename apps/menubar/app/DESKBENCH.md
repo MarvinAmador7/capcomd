@@ -118,6 +118,13 @@ its run when the median is over it; the frame budgets are information.
   row opened and closed in place, then Turns + written through PUT; checks `summary`, `rows`, `written`). Ink: the
   sidebar and the pane's place (`team-pane`).
 
+- Settings (SPEC §4.10, design/desktop/settings), in a window of its own (880 × 660) on the Settings fixture's daemon
+  (DeskBenchKit/SettingsFixture.swift: the client mock's `SETTINGS=mixed SANDBOXES=machines`; the run's fixture isn't
+  used): `settings-open` (the window made as ⌘, makes it: the frame with General, 100 ms; checks `opened`, `status`,
+  `needs-you`), `settings-switch-page` (every page's sidebar row clicked, real clicks, then Runs › Cloud's row and Back:
+  the frame with that page, 50 ms; checks `switched`, `place-pushed`, `back`; `--set end=general|interface|runs|place:boxd|…`
+  leaves that page up for the picture). Ink: the sidebar (`settings-sidebar`) and the pane (`settings-pane`).
+
 A scenario whose data isn't `crew17`'s has its own fixture (`palette-*`: `search`, `needs-*`: `needs5`): the manifest
 says so (`scenarios[].fixture`), and perfloop, which always passes `--fixture`, passes that one unless you name another.
 
