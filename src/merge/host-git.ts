@@ -42,8 +42,8 @@ interface Marker { schema: 1; hooks: Record<string, string> }
  * holds commits a sandbox made, so nothing git can run or follow by itself may act on them: no hooks (the user's global
  * `core.hooksPath` included, so a pre-commit or pre-push hook never runs the sandbox's code), no fsmonitor, no
  * submodules, symlinks written as plain files and no `.git` look-alike written out (CVE-2024-32002 and the like), no
- * transport (a network command's GIT_ALLOW_PROTOCOL lifts it for the plain protocols), and no LFS filter unless the
- * user's own settings for it are passed back (userArgs: local work only).
+ * transport (a network command's GIT_ALLOW_PROTOCOL lifts it for the plain protocols). No filter is configured here: local
+ * work reads no config of the user's but what userArgs passes back (Git LFS among it).
  */
 const POLICY_CONFIG: ReadonlyArray<readonly [string, string]> = [
   ["core.hooksPath", "/dev/null"],
@@ -55,10 +55,6 @@ const POLICY_CONFIG: ReadonlyArray<readonly [string, string]> = [
   ["core.protectHFS", "true"],
   ["core.protectNTFS", "true"],
   ["protocol.allow", "never"],
-  ["filter.lfs.process", ""],
-  ["filter.lfs.smudge", ""],
-  ["filter.lfs.clean", ""],
-  ["filter.lfs.required", "false"],
 ];
 const POLICY_ARGS = POLICY_CONFIG.flatMap(([k, v]) => ["-c", `${k}=${v}`]);
 
@@ -135,10 +131,12 @@ export class HostRepoRefused extends Error {
 }
 
 /** The local and worktree settings a host repo may have: what `git init`, `git remote add`, a fetch (a partial one too)
- *  and `git worktree add` write. Anything else (a credential helper, `url.*.insteadOf`, `core.sshCommand`,
+ *  and `git worktree add` write, and the two Git LFS records itself there when the user's LFS filter runs
+ *  (`lfs.repositoryformatversion`, and `lfs.<url>.access`, the auth scheme its server asked for: neither names a command
+ *  or an endpoint). Anything else (a credential helper, `url.*.insteadOf`, `core.sshCommand`,
  *  `core.fsmonitor`, `core.hooksPath`, `include.path`, `http.*`, a remote's `uploadpack`/`receivepack`/`proxy`, …) was put
  *  there by something other than capcomd. */
-const ALLOWED_KEY = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|refstorage|partialclone)|remote\.[^\n]+\.(url|fetch|promisor|partialclonefilter))$/;
+const ALLOWED_KEY = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|refstorage|partialclone)|remote\.[^\n]+\.(url|fetch|promisor|partialclonefilter)|lfs\.repositoryformatversion|lfs\.[^\n]+\.access)$/;
 
 const hooksOf = (gitDir: string): Record<string, string> => {
   const dir = join(gitDir, "hooks");

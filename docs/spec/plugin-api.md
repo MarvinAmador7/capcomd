@@ -1930,7 +1930,8 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    and groundray itself talks to no remote.
 2. **On the host, network git runs only through `src/merge/host-git.ts`**: `remoteGit` in a *host repo* (one capcomd
    made with `initHostRepo`: the mirror, the merge clones, the scratch and files repos), checked before every call: its
-   local settings are only those `git init`, `git remote add`, a fetch and `git worktree add` write, its hooks are the
+   local settings are only those `git init`, `git remote add`, a fetch and `git worktree add` write (and the two Git LFS
+   records itself there, `lfs.repositoryformatversion` and `lfs.<url>.access`), its hooks are the
    ones it had when it was made, and it has no alternates; else it is refused (`HostRepoRefused`) and a disposable one is
    made again. `lsRemote` runs outside any repository. The remote is always the repository's URL as capcomd knows it,
    never a remote's name. Git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_ALLOW_PROTOCOL=file:git:http:https:ssh` (no

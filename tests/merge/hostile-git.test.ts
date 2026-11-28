@@ -14,7 +14,7 @@ import { bareRepo, withoutEngine } from "./gitfixture";
 import { FakeProvider } from "../../src/providers/fake";
 import { AGENT_EGRESS } from "../../src/agents/config";
 import { Git } from "../../src/merge/git";
-import { BundleRefused, HOST_POLICY, hostGit, initHostRepo, isSafeRefName, receiveBundle, remoteGit } from "../../src/merge/host-git";
+import { BundleRefused, HOST_POLICY, hostGit, hostRepoProblems, initHostRepo, isSafeRefName, receiveBundle, remoteGit } from "../../src/merge/host-git";
 import { pushFromSandbox, sendToSandbox, TransferError, type SandboxGit } from "../../src/merge/transfer";
 import { mergeTask } from "../../src/merge/service";
 import { taskBranch } from "../../src/merge/config";
@@ -155,8 +155,8 @@ describe("work that comes back from a sandbox", () => {
     const { v, m } = await w.land();
     delete process.env.GIT_CONFIG_GLOBAL;
 
-    expect(v.status).toBe("verified");
-    expect(m.status).toBe("merged");
+    expect({ status: v.status, reason: (v as { reason?: string }).reason ?? null, output: ((v as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "verified" });
+    expect({ status: m.status, reason: (m as { reason?: string }).reason ?? null, output: ((m as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "merged" });
     // Landed as git stores it: the 3-way merge by git's own rules, the symlink still a symlink, no filter applied.
     expect(await w.r.show("main", "shared.txt")).toBe("line 1 by the agent\nline 2\nline 3 on main");
     expect(await w.r.show("main", "feature.txt")).toBe("agent work");
@@ -178,7 +178,7 @@ describe("work that comes back from a sandbox", () => {
       await w.push(sha);
       const { m } = await w.land();
       delete process.env.GIT_CONFIG_GLOBAL;
-      expect(m.status).toBe("merged");
+      expect({ status: m.status, reason: (m as { reason?: string }).reason ?? null, output: ((m as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "merged" });
       expect((await new Git(w.r.bare).ok(["ls-tree", "main", "feature-link"])).split(/\s/)[0]).toBe("120000");
       expect(ran(w.leak)).toEqual([]);
     }, 60_000);
@@ -336,8 +336,8 @@ describe("the user's filters on an agent's work", () => {
       const tree = await archived(w.r.bare, w.leak, "main", "asset.bin");
       const secret = await archived(w.r.bare, w.leak, "main", "secret.txt");
       delete process.env.GIT_CONFIG_GLOBAL;
-      expect(v.status).toBe("verified");
-      expect(m.status).toBe("merged");
+      expect({ status: v.status, reason: (v as { reason?: string }).reason ?? null, output: ((v as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "verified" });
+      expect({ status: m.status, reason: (m as { reason?: string }).reason ?? null, output: ((m as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "merged" });
       // Fetched from the user's server, as git-lfs would for them; the commit keeps the pointer.
       expect(lfs.hits.some((h) => h.endsWith("/objects/batch"))).toBe(true);
       expect(await w.r.show("main", "asset.bin")).toContain("oid sha256:");
@@ -350,6 +350,29 @@ describe("the user's filters on an agent's work", () => {
       expect(hooksIn(w.r.cfg.workdir)).toEqual([]);
     } finally { lfs.stop(); }
   }, 90_000);
+
+  test("a user's LFS filter that records itself in the repository's config (as git-lfs does) doesn't stop the merge", async () => {
+    // git-lfs writes lfs.repositoryformatversion (and lfs.<url>.access) into the repository it runs in: the host repo
+    // check must take those, or every merge of a user with Git LFS set up is refused at its push. This stand-in does the
+    // same, so the test runs where git-lfs isn't installed.
+    const w = await world({ test: `test "$(cat asset.bin)" = "smudged"` });
+    await onMain(w, { ".gitattributes": "*.bin filter=lfs -text\n", "asset.bin": "pointer\n" });
+    writeFileSync(join(w.dir, "feature.txt"), "agent work\n");
+    const sha = await w.commit();
+    const lfsLike = join(w.leak, "lfs-like.sh");
+    writeFileSync(lfsLike, `#!/bin/sh\ngit config lfs.repositoryformatversion 0 || exit 1\ngit config "lfs.https://lfs.example.com/acme/repo.access" basic || exit 1\ncat >/dev/null\nprintf smudged\n`);
+    chmodSync(lfsLike, 0o755);
+    const file = join(w.leak, "lfs-like.gitconfig");
+    writeFileSync(file, `[filter "lfs"]\n\tsmudge = ${lfsLike}\n\tclean = cat\n\trequired = true\n`);
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    process.env.GIT_CONFIG_GLOBAL = file;
+    await w.push(sha);
+    const { v, m } = await w.land();
+    delete process.env.GIT_CONFIG_GLOBAL;
+    expect({ status: v.status, reason: (v as { reason?: string }).reason ?? null, output: ((v as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "verified" });
+    expect({ status: m.status, reason: (m as { reason?: string }).reason ?? null, output: ((m as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "merged" });
+    expect(await w.r.show("main", "asset.bin")).toBe("pointer");
+  }, 60_000);
 
   test("a git-crypt-like filter of the user's never runs on an agent's checks: they see what git stores", async () => {
     const w = await world({ test: `test "$(cat secret.txt)" = "ciphertext"` });
@@ -364,8 +387,8 @@ describe("the user's filters on an agent's work", () => {
     const { v, m } = await w.land();
     const secret = await archived(w.r.bare, w.leak, "main", "secret.txt");
     delete process.env.GIT_CONFIG_GLOBAL;
-    expect(v.status).toBe("verified");
-    expect(m.status).toBe("merged");
+    expect({ status: v.status, reason: (v as { reason?: string }).reason ?? null, output: ((v as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "verified" });
+    expect({ status: m.status, reason: (m as { reason?: string }).reason ?? null, output: ((m as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "merged" });
     expect(secret).toBe("ciphertext");
     expect(ran(w.leak)).toEqual([]);
   }, 60_000);
@@ -511,6 +534,9 @@ describe("the host repo policy", () => {
     const root = temp("capcomd-policy-");
     const leak = join(root, "leak");
     mkdirSync(leak);
+    // The operator's settings are this global file alone (a machine's system config may set up Git LFS, which brings
+    // its ssh settings along: the next test).
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
     process.env.GIT_CONFIG_GLOBAL = operatorConfig(leak);
     const g = hostGit(join(root, "repo"));
     mkdirSync(g.cwd);
@@ -527,6 +553,32 @@ describe("the host repo policy", () => {
     expect(await get("core.sshCommand", true)).toContain("operator-ssh");
     expect(await get("core.hooksPath", true)).toBe("/dev/null");
     expect(g.policy).toBe(HOST_POLICY);
+    expect(ran(leak)).toEqual([]);
+  });
+
+  test("Git LFS: the user's filter and what it needs come back for local work, no other filter; its own records pass the host repo check", async () => {
+    const root = temp("capcomd-policy-lfs-");
+    const leak = join(root, "leak");
+    mkdirSync(leak);
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    const file = filtersConfig(leak, "https://lfs.example.com/acme/repo");
+    writeFileSync(file, `${readFileSync(file, "utf8")}[core]\n\tsshCommand = ssh -i /keys/lfs\n[credential]\n\thelper = store\n`);
+    process.env.GIT_CONFIG_GLOBAL = file;
+    const g = await initHostRepo(join(root, "repo"));
+    const get = async (k: string) => (await g.run(["config", "--get", k])).stdout.trim();
+    expect(await get("filter.lfs.process")).toBe("git-lfs filter-process");
+    expect(await get("filter.lfs.required")).toBe("true");
+    expect(await get("lfs.url")).toBe("https://lfs.example.com/acme/repo");
+    expect(await get("credential.helper")).toBe("store");
+    expect(await get("core.sshCommand")).toBe("ssh -i /keys/lfs");
+    expect(await get("filter.crypt.smudge")).toBe("");
+    expect(await get("core.hooksPath")).toBe("/dev/null");
+    // What git-lfs writes in a repository it runs in passes the check; an endpoint or a command never does.
+    await g.ok(["config", "lfs.repositoryformatversion", "0"]);
+    await g.ok(["config", "lfs.https://lfs.example.com/acme/repo.access", "basic"]);
+    expect(await hostRepoProblems(g)).toEqual([]);
+    await g.ok(["config", "lfs.url", "https://attacker.example/lfs"]);
+    expect(await hostRepoProblems(g)).toEqual(["local setting lfs.url"]);
     expect(ran(leak)).toEqual([]);
   });
 
