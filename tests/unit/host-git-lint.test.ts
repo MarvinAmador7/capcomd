@@ -1,6 +1,6 @@
 // Plugin API §11.7: the host runs git that talks to a remote only through src/merge/host-git.ts (remoteGit in a host
-// repo it checks, lsRemote outside any repository; a sandbox's bundle is read by receiveBundle, with no transport), and no git credential is made
-// anywhere else. This fails when a new call spells a network git command (fetch, push, ls-remote, clone, pull) any
+// repo it checks, lsRemote outside any repository; a sandbox's bundle is read by receiveBundle, with no transport),
+// and no git credential is made anywhere else. This fails when a new call spells a network git command (fetch, push, ls-remote, clone, pull) any
 // other way, or builds a credential helper outside host-git.ts. A call that has to be an exception is listed below,
 // with the reason it can't reach an agent-editable checkout.
 import { describe, expect, test } from "bun:test";
@@ -31,7 +31,7 @@ function files(dir: string): string[] {
 /** Comments out: a comment may name a command. Strings stay (a command is a string). */
 const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/(^|[^:"'`\\])\/\/[^\n]*/g, (m, p) => p + " ".repeat(m.length - p.length));
 
-const CALLS = ["remoteGit(", "lsRemote(", "fetchBundle(", ".run(", ".ok(", "spawn(", "spawnSync(", "execFile(", "execFileSync(", "exec(", "git(", "Bun.spawn("];
+const CALLS = ["remoteGit(", "lsRemote(", ".run(", ".ok(", "spawn(", "spawnSync(", "execFile(", "execFileSync(", "exec(", "git(", "Bun.spawn("];
 /** The call a match is an argument of: the nearest call opened before it (within a statement's reach). */
 function callOf(text: string, at: number): string | null {
   const before = text.slice(Math.max(0, at - 400), at);
@@ -57,7 +57,7 @@ export function networkGitSites(): Array<{ file: string; line: number; text: str
 
 describe("host git lint (plugin API §11.7)", () => {
   test("every network git command on the host goes through src/merge/host-git.ts", () => {
-    const bad = networkGitSites().filter((s) => s.file !== "src/merge/host-git.ts" && !EXCEPTIONS[s.file] && s.via !== "remoteGit(" && s.via !== "lsRemote(" && s.via !== "fetchBundle(");
+    const bad = networkGitSites().filter((s) => s.file !== "src/merge/host-git.ts" && !EXCEPTIONS[s.file] && s.via !== "remoteGit(" && s.via !== "lsRemote(");
     expect(bad.map((s) => `${s.file}:${s.line} ${s.text} (in ${s.via ?? "?"})`)).toEqual([]);
   });
 

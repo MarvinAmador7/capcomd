@@ -26,8 +26,9 @@ verifier actor. Without `CAPCOMD_REPO` it is an explicit dry run (`mode:"none"`)
 - **Idempotent recovery, git wins**: before any work it checks (1) task tip is an ancestor of the target, (2) a trailer on the
   target, (3) `git cherry` patch-id, (4) pr mode: a merged PR for the head. Any hit is recorded as `already:true` and never merged again.
 - **Protected targets**: the verifier runs `testOnly`; the task waits in `awaiting_approval`; `APPROVED` leads to `approved`, and the
-  run loop then merges and records `MERGED`. Signed commits (`CAPCOMD_SIGN_COMMITS`, `-S`) and repo hooks are honored; we
-  never pass `--no-verify`.
+  run loop then merges and records `MERGED`. Signed commits (`CAPCOMD_SIGN_COMMITS`, `-S`) are honored. (Hooks were
+  honored too, until the commits a merge integrates were treated as hostile data: since then no hook runs in a host
+  repo, the user's global ones included; docs/spec/plugin-api.md §11.7 item 5.)
 - **Config**: env `CAPCOMD_MERGE_*` / `CAPCOMD_GITHUB_*`, or `.capcomd.json` `{merge:{...}}`.
 
 ## Crash points
