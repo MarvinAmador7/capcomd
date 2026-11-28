@@ -292,7 +292,24 @@ async function onMain(w: Awaited<ReturnType<typeof world>>, files: Record<string
   for (const [p, c] of Object.entries(files)) writeFileSync(join(seed, p), c);
   await w.r.seed.ok(["add", "-A"]);
   await w.r.seed.ok(["commit", "-q", "-m", "the user's files"]);
-  await w.r.seed.ok(["push", "-q", "origin", "HEAD:main"]);
+  // --no-verify: where git-lfs is set up globally (CI), its filter installs a pre-push hook in this fixture repo, which
+  // would try to upload the LFS object; the object is on the fake LFS server only. Without the hook it changes nothing.
+  await w.r.seed.ok(["push", "-q", "--no-verify", "origin", "HEAD:main"]);
+}
+
+/** Every hook file (not a git sample) under `dir`'s `hooks` directories. */
+function hooksIn(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (!e.isDirectory()) continue;
+      if (e.name === "hooks") out.push(...readdirSync(p).filter((f) => !f.endsWith(".sample")).map((f) => join(p, f)));
+      else walk(p);
+    }
+  };
+  walk(dir);
+  return out;
 }
 
 /** `path` in `ref`'s tree as `git archive` gives it under the host policy (what the checks VM is sent). */
@@ -328,6 +345,9 @@ describe("the user's filters on an agent's work", () => {
       expect(tree).toBe("the real asset");
       expect(secret).toBe("ciphertext");
       expect(ran(w.leak)).toEqual([]);
+      // git-lfs installs its hooks wherever core.hooksPath says when its filter runs: in a host repo that is /dev/null, so
+      // none lands there (a new hook would make the host refuse the repo for its next push).
+      expect(hooksIn(w.r.cfg.workdir)).toEqual([]);
     } finally { lfs.stop(); }
   }, 90_000);
 
