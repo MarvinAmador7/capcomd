@@ -5,8 +5,8 @@
 // planted in its checkout, its HOME or its PATH sees no token and can't redirect where the host pushes.
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
-import { Git } from "./git";
-import { fetchBundle, HostRepoRefused, hostRepoDir, initHostRepo, isHostRepo, remoteGit } from "./host-git";
+import type { Git } from "./git";
+import { BundleRefused, HostRepoRefused, hostGit, hostRepoDir, initHostRepo, isHostRepo, receiveBundle, remoteGit } from "./host-git";
 import { withTargetLock } from "./lock";
 import { addSpanEvent, setSpanAttributes, withSpan, type SimpleSpan } from "../utils/tracing-simple";
 
@@ -174,7 +174,7 @@ export function isBranchName(b: string): boolean {
  *  network call in it checks it first (remoteGit); fetchMirror starts it over when that check fails. */
 export async function mirror(h: HostRemote, o: { fresh?: boolean } = {}): Promise<Git> {
   const dir = hostRepoDir(h.workdir, h.remote, "_mirror");
-  if (!o.fresh && existsSync(join(dir, "HEAD")) && isHostRepo(dir)) return new Git(dir);
+  if (!o.fresh && existsSync(join(dir, "HEAD")) && isHostRepo(dir)) return hostGit(dir);
   rmSync(dir, { recursive: true, force: true });
   return initHostRepo(dir, { bare: true });
 }
@@ -460,9 +460,9 @@ export interface PushRequest {
 
 /**
  * The sandbox's commit `sha` (in `dir`) → the remote's `ref`: the sandbox bundles it (without credentials, leaving
- * out what the mirror has), the host downloads the bundle into its mirror (a chunk at a time), checks the commit is the
- * one asked for, and pushes it from there to the remote's URL with a lease. Nothing in the sandbox's checkout is read
- * but the bundle.
+ * out what the mirror has), the host downloads the bundle (a chunk at a time), checks it (receiveBundle: a bundle that
+ * fails is refused, kind "refused") into its mirror, checks the commit is the one asked for, and pushes it from there
+ * to the remote's URL with a lease. Nothing in the sandbox's checkout is read but the bundle.
  */
 export function pushFromSandbox(h: HostRemote, s: SandboxGit, dir: string, p: PushRequest): Promise<{ porcelain: string; bytes: number }> {
   return gitSpan("push", p.spanRef ?? `${p.sha}:${p.ref}`, async (span) => {
@@ -510,11 +510,15 @@ wc -c < ${sq(out)}`);
         if (bytes > MAX_BUNDLE()) throw new TransferError(`the sandbox's bundle is ${bytes} bytes (at most ${MAX_BUNDLE()})`, "refused");
         return file;
       };
-      const read = (file: string) => fetchBundle(m, file, `+refs/capcomd/out/${id}:${tmpRef}`);
+      // Checked before anything of it reaches the mirror (host-git.ts receiveBundle): a bundle that fails is refused.
+      const read = (file: string) => receiveBundle(m, file, { ref: `refs/capcomd/out/${id}`, into: tmpRef }).catch((e) => {
+        if (e instanceof BundleRefused) throw new TransferError(`the host refused the sandbox's bundle of ${p.sha.slice(0, 12)}: ${e.why}`, "refused");
+        throw e;
+      });
       let f = await read(await bundle(true));
       // The mirror lacks a commit the sandbox left out (a ref there pointed somewhere else): everything, then.
-      if (f.code !== 0) f = await read(await bundle(false));
-      if (f.code !== 0) throw new TransferError(`the host couldn't read the sandbox's bundle: ${tail(f)}`);
+      if (!f.ok && f.missing) f = await read(await bundle(false));
+      if (!f.ok) throw new TransferError(`the host couldn't read the sandbox's bundle: ${f.detail}`);
       const got = (await m.ok(["rev-parse", `${tmpRef}^{commit}`])).trim();
       if (got !== p.sha) throw new TransferError(`the sandbox's bundle holds ${got.slice(0, 12)}, not ${p.sha.slice(0, 12)}`, "refused");
     }

@@ -1,7 +1,9 @@
 import { createHash } from "crypto";
-import { readFileSync, renameSync, writeFileSync } from "fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import type { Git } from "./git";
+import { asHostGit } from "./host-git";
 import { realSandbox } from "../providers/registry";
 import { HOST_CHECK_DROP_NAMES, hostCheckDropPrefixes } from "../plugins/env-families";
 
@@ -135,10 +137,14 @@ async function runInVm(git: Git, command: string, env: Record<string, string>, s
     .catch((e): { code: number; stdout: string; stderr: string } => { if (execTimedOut(e)) return { code: 124, stdout: "", stderr: `timed out after ${timeoutMs} ms` }; throw e; });
   try {
     await provider.waitReady(id, 120_000);
-    const archive = Bun.spawn(["git", "archive", "--format=tar", "HEAD"], { cwd: git.cwd, stdout: "pipe", stderr: "pipe" });
-    const [tar, archiveErr, code] = await Promise.all([new Response(archive.stdout).arrayBuffer(), new Response(archive.stderr).text(), archive.exited]);
-    if (code !== 0) return { passed: false, stage: "setup", output: `checks VM: git archive failed: ${archiveErr.slice(-500)}` };
-    await provider.upload(id, `${W}.tar`, new Uint8Array(tar));
+    // Under the host repo policy (src/merge/host-git.ts): LFS files as real files, every other file as git stores it (a
+    // filter of the user's such as git-crypt would hand the checks, and so the agent, what it decrypts).
+    const tarFile = join(tmpdir(), `capcomd-checks-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tar`);
+    try {
+      const archive = await asHostGit(git).run(["archive", "--format=tar", "-o", tarFile, "HEAD"]);
+      if (archive.code !== 0) return { passed: false, stage: "setup", output: `checks VM: git archive failed: ${archive.stderr.slice(-500)}` };
+      await provider.upload(id, `${W}.tar`, new Uint8Array(readFileSync(tarFile)));
+    } finally { rmSync(tarFile, { force: true }); }
     // The env image may carry the context bundles of the project it was built for (`capcomd env build`: its mapped
     // brains, ADR-025 step 4), and this image is every project's: the tree under test is agent-written code, so they go
     // before it runs (an agent's runner does the same for the bundles its brief doesn't cite).

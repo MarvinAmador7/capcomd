@@ -5,8 +5,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { Git } from "../merge/git";
-import { hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
+import { hostGit, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
 import type { MergeConfig } from "../merge/config";
 import { LOCKFILES } from "../agents/workspace";
 import type { EnvManifest, EnvRecord } from "./resolve";
@@ -58,7 +57,7 @@ export async function templateDriftFacts(m: EnvManifest, cfg: MergeConfig, o: { 
   const commit = m.template?.commit ?? "";
   const timeoutMs = o.timeoutMs ?? 60_000;
   const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_envdrift");
-  let g = new Git(dir);
+  let g = hostGit(dir);
   try {
     // A host repo (src/merge/host-git.ts), started over when it isn't one or fails the check.
     if (!existsSync(join(dir, "HEAD")) || !isHostRepo(dir) || (await hostRepoProblems(g)).length) { rmSync(dir, { recursive: true, force: true }); g = await initHostRepo(dir, { bare: true }); }

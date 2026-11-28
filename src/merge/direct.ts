@@ -4,7 +4,8 @@ import { killpoint } from "../utils/killpoint";
 import { withSpan } from "../utils/tracing-simple";
 import type { MergeConfig } from "./config";
 import { taskKey, withRepoFile } from "./config";
-import { Git } from "./git";
+import type { Git } from "./git";
+import { hostGit } from "./host-git";
 import { cloneDir, findExistingMerge, openClone, withCloneLock, withWorktree } from "./repo";
 import { integrate } from "./integrate";
 import { checksFailReason, runTests } from "./verify";
@@ -96,7 +97,7 @@ async function landVerified(baseCfg: MergeConfig, req: MergeRequest, cloneName: 
   if (v.sha === v.targetSha) return { fallback: "the verified change is already on the target" };
   const dir = cloneDir(baseCfg, cloneName);
   if (!existsSync(join(dir, ".git"))) return { fallback: "the verify's clone is gone" };
-  const git = new Git(dir);
+  const git = hostGit(dir);
   if ((await git.run(["cat-file", "-e", `${v.sha}^{commit}`])).code !== 0) return { fallback: "the verified commit isn't in the clone" };
   if (!(await git.isAncestor(v.targetSha, v.sha))) return { fallback: "the verified commit isn't on the target it was verified on" };
   killpoint("merge.before_cas");
@@ -123,7 +124,7 @@ export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, clone
   if (!f) return { status: "failed", reason: `no active forge lands on ${baseCfg.remote}` };
   const targetRef = `refs/remotes/origin/${req.target}`;
   // The clone's view of the target: its last fetch, or this host's last push to it (a push moves it too).
-  const local = req.verified && existsSync(join(cloneDir(baseCfg, cloneName), ".git")) ? await new Git(cloneDir(baseCfg, cloneName)).revParse(targetRef) : null;
+  const local = req.verified && existsSync(join(cloneDir(baseCfg, cloneName), ".git")) ? await hostGit(cloneDir(baseCfg, cloneName)).revParse(targetRef) : null;
   if (req.verified) {
     // Known to have moved (a merge from here landed on it since the verify): the fast push would only be refused.
     const fast = local && local !== req.verified.targetSha ? { fallback: "the target moved since the verify" } : await landVerified(baseCfg, req, cloneName, t, f);
@@ -167,7 +168,7 @@ export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, clone
 
     killpoint("merge.before_cas");
     if (testHooks.beforePush) await testHooks.beforePush(attempts);
-    // The forge lands it: pre-push hooks run; the lease is a compare-and-swap on the remote ref.
+    // The forge lands it (no hook runs: host-git.ts HOST_POLICY); the lease is a compare-and-swap on the remote ref.
     const p0 = Date.now();
     const out = await landDirect(f, cfg, req, cloneName, git, { sha: merged.head, targetSha, ...(leaseBranch ? { branchSha: req.expectSha } : {}) });
     t.pushMs = (t.pushMs ?? 0) + since(p0);

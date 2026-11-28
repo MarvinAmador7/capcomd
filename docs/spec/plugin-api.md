@@ -1930,7 +1930,8 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    and groundray itself talks to no remote.
 2. **On the host, network git runs only through `src/merge/host-git.ts`**: `remoteGit` in a *host repo* (one capcomd
    made with `initHostRepo`: the mirror, the merge clones, the scratch and files repos), checked before every call: its
-   local settings are only those `git init`, `git remote add`, a fetch and `git worktree add` write, its hooks are the
+   local settings are only those `git init`, `git remote add`, a fetch and `git worktree add` write (and the two Git LFS
+   records itself there, `lfs.repositoryformatversion` and `lfs.<url>.access`), its hooks are the
    ones it had when it was made, and it has no alternates; else it is refused (`HostRepoRefused`) and a disposable one is
    made again. `lsRemote` runs outside any repository. The remote is always the repository's URL as capcomd knows it,
    never a remote's name. Git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_ALLOW_PROTOCOL=file:git:http:https:ssh` (no
@@ -1967,6 +1968,30 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    build refuses `capcomd env build --project`), none within an hour of a failed one; and `sandbox-boxd` keeps a timer (§16.2: a plugin-owned job, `job.changed`
    `fired`), daily by default (`CAPCOMD_TEMPLATE_REFRESH_HOURS`, 0 for none), that rebuilds every template whose
    repository moved since it was built.
+5. **A sandbox's commits are hostile data on the host** (`src/merge/host-git.ts`). They arrive only as the bundle of
+   item 1, and `receiveBundle` takes it only when its header is a plain v2 or v3 bundle (no `@filter`) holding the one
+   ref the host asked for, under a plain ref name (`refs/`, no control character, space, `..`, leading dot or `.lock`),
+   `git bundle verify` passes, and git's object checks (`index-pack --strict`, with `.git` in any spelling, `.`, `..`,
+   `/` and empty names as errors, besides git's own `.gitmodules` and `.gitattributes` errors) pass on every object in
+   it. The objects go into a quarantine first; its new commits are refused when a symlink's target goes through `.git`
+   (any case, HFS's ignorable characters, NTFS's `git~1`), or a `.gitmodules` has a control character in a value
+   (CVE-2025-48384), a submodule path or URL that starts with `-`, a submodule path out of the tree or into `.git`, or
+   an `update` command, or a root `.lfsconfig` (any case) is added or changed: it says where Git LFS fetches from, with
+   the user's credentials. Only then do they move into the mirror; a refused bundle fails the push (`TransferError` kind
+   `refused`) with the reason, and nothing of it reaches the mirror or the remote. Every git command in a host repo
+   (and in a worktree of one) runs under one policy: `core.hooksPath=/dev/null` (no hook runs, the user's own
+   global hooks included), `core.fsmonitor=false`, no submodule recursion, `core.symlinks=false` (a checkout writes a
+   symlink as a plain file; the commit keeps it a symlink), `core.protectHFS` and `core.protectNTFS`,
+   `protocol.allow=never` (a network command's `GIT_ALLOW_PROTOCOL` allows the plain protocols); local work
+   (checkout, merge, rebase, commit, archive, log, diff) also reads no system or global git config (`GIT_CONFIG_NOSYSTEM`,
+   `GIT_CONFIG_GLOBAL=/dev/null`) except the user's commit signing settings (`user.signingkey`, `commit.gpgsign`,
+   `gpg.*`) and, when they have Git LFS (`filter.lfs.*`), its filter with the settings it needs to reach their LFS
+   server (`lfs.*`, `credential.*`, `http.*`, `url.*`, `core.sshCommand`, `ssh.*`; git-lfs takes none of its command
+   settings from `.lfsconfig`, and git config beats `.lfsconfig`). So no other filter (git-crypt and the like), merge
+   or diff driver of theirs runs on an agent's files: the checks VM gets LFS files as real files and every other file
+   as git stores it. No variable that points git elsewhere (`GIT_DIR`, `GIT_WORK_TREE`,
+   `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, …) is inherited. Git never runs in a directory a sandbox made.
+   `tests/merge/hostile-git.test.ts` plants each vector and checks that nothing runs on the host.
 
 Checks that run on the host (`CAPCOMD_CHECKS=host`, or the test sandboxes) run agent-written code as the operator, which
 no git setting can contain: there a planted setting or hook in the merge clone is refused (the merge fails), but the
