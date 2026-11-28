@@ -137,8 +137,8 @@ async function runInVm(git: Git, command: string, env: Record<string, string>, s
     .catch((e): { code: number; stdout: string; stderr: string } => { if (execTimedOut(e)) return { code: 124, stdout: "", stderr: `timed out after ${timeoutMs} ms` }; throw e; });
   try {
     await provider.waitReady(id, 120_000);
-    // Under the host repo policy (src/merge/host-git.ts): the tree as git stores it, no filter or driver of the user's
-    // run on it (a filter could hand the checks, and so the agent, what it decrypts).
+    // Under the host repo policy (src/merge/host-git.ts): LFS files as real files, every other file as git stores it (a
+    // filter of the user's such as git-crypt would hand the checks, and so the agent, what it decrypts).
     const tarFile = join(tmpdir(), `capcomd-checks-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tar`);
     try {
       const archive = await asHostGit(git).run(["archive", "--format=tar", "-o", tarFile, "HEAD"]);

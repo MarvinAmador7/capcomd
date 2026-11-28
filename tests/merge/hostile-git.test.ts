@@ -42,7 +42,7 @@ function spy(leak: string, name: string, body = "cat >/dev/null 2>&1; exit 0"): 
 const ran = (leak: string) => existsSync(join(leak, "ran")) ? readdirSync(join(leak, "ran")).sort() : [];
 
 /** The operator's own git settings (as a global config would set them): a hook for every event, an fsmonitor, ssh, and
- *  filter, diff and merge drivers (LFS's too) that a sandbox's .gitattributes could select. */
+ *  filter, diff and merge drivers that a sandbox's .gitattributes could select. */
 function operatorConfig(leak: string): string {
   const hooks = join(leak, "operator-hooks");
   mkdirSync(hooks, { recursive: true });
@@ -61,10 +61,6 @@ function operatorConfig(leak: string): string {
 [filter "evil"]
 \tsmudge = ${spy(leak, "operator-smudge", "cat")}
 \tclean = ${spy(leak, "operator-clean", "cat")}
-[filter "lfs"]
-\tsmudge = ${spy(leak, "operator-lfs-smudge", "cat")}
-\tprocess = ${spy(leak, "operator-lfs-process", "exit 1")}
-\trequired = true
 [diff "evil"]
 \ttextconv = ${spy(leak, "operator-textconv", "cat \"$1\"")}
 \tcommand = ${spy(leak, "operator-diff")}
@@ -75,8 +71,8 @@ function operatorConfig(leak: string): string {
 }
 
 /** A repository on a local bare "remote", a sandbox (host mode) holding its clone, and the host's side of it. */
-async function world(o: { strategy?: "squash" | "rebase" | "merge"; path?: string } = {}) {
-  const r = await bareRepo({ strategy: o.strategy ?? "squash" });
+async function world(o: { strategy?: "squash" | "rebase" | "merge"; test?: string } = {}) {
+  const r = await bareRepo({ strategy: o.strategy ?? "squash", ...(o.test ? { test: o.test } : {}) });
   roots.push(r.root);
   const root = temp("capcomd-hostile-");
   const leak = join(root, "leak");
@@ -231,6 +227,149 @@ exec '${REAL_GIT}' "$@"
   }, 60_000);
 });
 
+// ---- the user's filters: Git LFS works as it does for them, no other filter runs ---------------------------------
+
+const LFS = Bun.which("git-lfs");
+if (!LFS) console.log("git-lfs isn't installed here: the tests that need it to fetch LFS files are skipped");
+const withLfs = LFS ? test : test.skip;
+
+/** A Git LFS server (the batch API, basic transfers): its objects by oid, and every request it got. */
+function lfsServer() {
+  const objects = new Map<string, Uint8Array>();
+  const hits: string[] = [];
+  let base = "";
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(req): Promise<Response> {
+      const u = new URL(req.url);
+      hits.push(`${req.method} ${u.pathname}`);
+      if (req.method === "POST" && u.pathname.endsWith("/objects/batch")) {
+        const body = await req.json() as { objects: Array<{ oid: string; size: number }> };
+        return Response.json({ transfer: "basic", objects: body.objects.map((o) => objects.has(o.oid)
+          ? { oid: o.oid, size: o.size, authenticated: true, actions: { download: { href: `${base}/obj/${o.oid}` } } }
+          : { oid: o.oid, size: o.size, error: { code: 404, message: "not found" } }) }, { headers: { "content-type": "application/vnd.git-lfs+json" } });
+      }
+      const d = req.method === "GET" && u.pathname.startsWith("/obj/") ? objects.get(u.pathname.slice(5)) : undefined;
+      return d ? new Response(d) : new Response("not found", { status: 404 });
+    },
+  });
+  base = `http://127.0.0.1:${server.port}`;
+  return {
+    base, hits, stop: () => server.stop(true),
+    /** Holds `content`; answers its pointer file. */
+    put(content: string): string {
+      const bytes = new TextEncoder().encode(content);
+      const oid = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+      objects.set(oid, bytes);
+      return `version https://git-lfs.github.com/spec/v1\noid sha256:${oid}\nsize ${bytes.length}\n`;
+    },
+  };
+}
+
+/** The operator's global config with Git LFS set up against `lfsUrl` (when given) and a git-crypt-like filter. */
+function filtersConfig(leak: string, lfsUrl?: string): string {
+  const file = join(leak, "filters.gitconfig");
+  writeFileSync(file, `${lfsUrl ? `[filter "lfs"]
+\tclean = git-lfs clean -- %f
+\tsmudge = git-lfs smudge -- %f
+\tprocess = git-lfs filter-process
+\trequired = true
+[lfs]
+\turl = ${lfsUrl}
+` : ""}[filter "crypt"]
+\tsmudge = ${spy(leak, "operator-crypt-smudge", "cat >/dev/null; printf decrypted")}
+\tclean = ${spy(leak, "operator-crypt-clean", "cat")}
+\trequired = true
+`);
+  return file;
+}
+
+/** main gains `files` (the user's own commit, as a person pushes it). */
+async function onMain(w: Awaited<ReturnType<typeof world>>, files: Record<string, string>) {
+  const seed = join(w.r.root, "seed");
+  await w.r.seed.ok(["fetch", "-q", "origin"]);
+  await w.r.seed.ok(["reset", "-q", "--hard", "origin/main"]);
+  for (const [p, c] of Object.entries(files)) writeFileSync(join(seed, p), c);
+  await w.r.seed.ok(["add", "-A"]);
+  await w.r.seed.ok(["commit", "-q", "-m", "the user's files"]);
+  await w.r.seed.ok(["push", "-q", "origin", "HEAD:main"]);
+}
+
+/** `path` in `ref`'s tree as `git archive` gives it under the host policy (what the checks VM is sent). */
+async function archived(remote: string, root: string, ref: string, path: string): Promise<string> {
+  const host = await initHostRepo(join(root, `archive-${Math.random().toString(36).slice(2)}`));
+  expect((await remoteGit(host, ["fetch", "-q", remote, `+refs/heads/${ref}:refs/remotes/origin/${ref}`], remote)).code).toBe(0);
+  const tar = join(root, `t-${Math.random().toString(36).slice(2)}.tar`);
+  const a = await host.run(["archive", "--format=tar", "-o", tar, `refs/remotes/origin/${ref}`]);
+  expect(a.code).toBe(0);
+  return Bun.spawnSync(["tar", "-xOf", tar, path]).stdout.toString();
+}
+
+describe("the user's filters on an agent's work", () => {
+  withLfs("Git LFS works as for the user: the checks see the real file, fetched from the user's LFS server", async () => {
+    const lfs = lfsServer();
+    try {
+      const w = await world({ test: `test "$(cat asset.bin)" = "the real asset" && test "$(cat secret.txt)" = "ciphertext"` });
+      await onMain(w, { ".gitattributes": "*.bin filter=lfs diff=lfs merge=lfs -text\nsecret.txt filter=crypt\n", "asset.bin": lfs.put("the real asset"), "secret.txt": "ciphertext" });
+      writeFileSync(join(w.dir, "feature.txt"), "agent work\n");
+      const sha = await w.commit();
+      process.env.GIT_CONFIG_GLOBAL = filtersConfig(w.leak, `${lfs.base}/lfs`);
+      await w.push(sha);
+      const { v, m } = await w.land();
+      const tree = await archived(w.r.bare, w.leak, "main", "asset.bin");
+      const secret = await archived(w.r.bare, w.leak, "main", "secret.txt");
+      delete process.env.GIT_CONFIG_GLOBAL;
+      expect(v.status).toBe("verified");
+      expect(m.status).toBe("merged");
+      // Fetched from the user's server, as git-lfs would for them; the commit keeps the pointer.
+      expect(lfs.hits.some((h) => h.endsWith("/objects/batch"))).toBe(true);
+      expect(await w.r.show("main", "asset.bin")).toContain("oid sha256:");
+      // What the checks VM is sent: the real LFS file, and the encrypted file as it is stored.
+      expect(tree).toBe("the real asset");
+      expect(secret).toBe("ciphertext");
+      expect(ran(w.leak)).toEqual([]);
+    } finally { lfs.stop(); }
+  }, 90_000);
+
+  test("a git-crypt-like filter of the user's never runs on an agent's checks: they see what git stores", async () => {
+    const w = await world({ test: `test "$(cat secret.txt)" = "ciphertext"` });
+    await onMain(w, { ".gitattributes": "secret.txt filter=crypt\n", "secret.txt": "ciphertext" });
+    // The agent marks its own files for the filter too.
+    mkdirSync(join(w.dir, "sub"));
+    writeFileSync(join(w.dir, "sub", ".gitattributes"), "* filter=crypt\n");
+    writeFileSync(join(w.dir, "sub", "feature.txt"), "agent work\n");
+    const sha = await w.commit();
+    process.env.GIT_CONFIG_GLOBAL = filtersConfig(w.leak);
+    await w.push(sha);
+    const { v, m } = await w.land();
+    const secret = await archived(w.r.bare, w.leak, "main", "secret.txt");
+    delete process.env.GIT_CONFIG_GLOBAL;
+    expect(v.status).toBe("verified");
+    expect(m.status).toBe("merged");
+    expect(secret).toBe("ciphertext");
+    expect(ran(w.leak)).toEqual([]);
+  }, 60_000);
+
+  test("an agent's .lfsconfig pointing elsewhere is refused, and no request reaches that server", async () => {
+    const lfs = lfsServer(), evil = lfsServer();
+    try {
+      const w = await world();
+      await onMain(w, { ".gitattributes": "*.bin filter=lfs diff=lfs merge=lfs -text\n", "asset.bin": lfs.put("the real asset") });
+      await w.sh("git fetch -q origin 2>/dev/null; true");
+      writeFileSync(join(w.dir, ".lfsconfig"), `[lfs]\n\turl = ${evil.base}/lfs\n[remote "origin"]\n\tlfsurl = ${evil.base}/lfs\n`);
+      writeFileSync(join(w.dir, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+      writeFileSync(join(w.dir, "bait.bin"), evil.put("bait"));
+      const sha = await w.commit("lfs elsewhere");
+      process.env.GIT_CONFIG_GLOBAL = filtersConfig(w.leak, LFS ? `${lfs.base}/lfs` : undefined);
+      const msg = await refused(w, sha);
+      delete process.env.GIT_CONFIG_GLOBAL;
+      expect(msg).toContain('it changes ".lfsconfig"');
+      expect(evil.hits).toEqual([]);
+      expect(ran(w.leak)).toEqual([]);
+    } finally { lfs.stop(); evil.stop(); }
+  }, 60_000);
+});
+
 describe("receiveBundle: what a bundle may hold", () => {
   /** A host repo with main's first commit, and a fixture repository to make bundles from. */
   async function stage() {
@@ -324,6 +463,8 @@ describe("receiveBundle: what a bundle may hold", () => {
       [[{ path: ".gitmodules", content: '[submodule "s"]\n\tpath = ../../outside\n\turl = https://example.com/s\n' }], /out of the tree or into .git/],
       [[{ path: ".gitmodules", content: '[submodule "s"]\n\tpath = s\n\turl = https://example.com/s\n\tupdate = !touch /tmp/pwned\n' }], /object checks failed|a command/],
       [[{ path: ".gitmodules", mode: "120000", content: "/etc/passwd" }], /object checks failed/],
+      [[{ path: ".LFSConfig", content: "[lfs]\n\turl = https://attacker.example/lfs\n" }], /it changes "\.LFSConfig", which says where Git LFS fetches files from/],
+      [[{ path: ".lfsconfig.", content: "[lfs]\n\turl = https://attacker.example/lfs\n" }], /which says where Git LFS fetches files from/],
     ];
     for (const [entries, expected] of cases) {
       const { file, sha } = await s.bundle(entries);

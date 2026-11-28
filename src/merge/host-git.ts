@@ -14,8 +14,8 @@
 //     quarantine, symlinks into `.git` and `.gitmodules` tricks refused, and only then into the mirror), and every git
 //     command in a host repo runs under HOST_POLICY (hostGit): no hooks, no fsmonitor, no submodules, no symlinks or
 //     `.git` look-alikes written out, no transport for local work, and for local work none of the user's git settings
-//     (their filters, merge and diff drivers, global hooks), only their commit signing ones. Git never runs in a
-//     directory a sandbox made.
+//     (their filters, merge and diff drivers, global hooks), only their commit signing and Git LFS ones (an agent's
+//     change to `.lfsconfig` is refused). Git never runs in a directory a sandbox made.
 //
 // `tests/unit/host-git-lint.test.ts` fails when a network git command is spelled anywhere else.
 import { createHash } from "crypto";
@@ -42,7 +42,8 @@ interface Marker { schema: 1; hooks: Record<string, string> }
  * holds commits a sandbox made, so nothing git can run or follow by itself may act on them: no hooks (the user's global
  * `core.hooksPath` included, so a pre-commit or pre-push hook never runs the sandbox's code), no fsmonitor, no
  * submodules, symlinks written as plain files and no `.git` look-alike written out (CVE-2024-32002 and the like), no
- * transport (a network command's GIT_ALLOW_PROTOCOL lifts it for the plain protocols), no LFS filter.
+ * transport (a network command's GIT_ALLOW_PROTOCOL lifts it for the plain protocols), and no LFS filter unless the
+ * user's own settings for it are passed back (userArgs: local work only).
  */
 const POLICY_CONFIG: ReadonlyArray<readonly [string, string]> = [
   ["core.hooksPath", "/dev/null"],
@@ -66,40 +67,54 @@ const REPO_VARS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR
 /** And for local work, the user's own settings: their config files and any passed in the environment. */
 const CONFIG_VARS = ["GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"];
 
-/** The user's commit signing settings (`user.signingkey`, `commit.gpgsign`, `gpg.*`), the only ones local work keeps:
- *  capcomd's own commits are signed as before (CAPCOMD_SIGN_COMMITS, or the user's `commit.gpgsign`). Read outside any
- *  repository once per set of config locations. */
-let signing: { key: string; args: string[] } | null = null;
-function signingArgs(): string[] {
+/**
+ * The only settings of the user's (system, global, environment) that local work keeps, as `-c` after POLICY_CONFIG:
+ *  - commit signing (`user.signingkey`, `commit.gpgsign`, `gpg.*`): capcomd's own commits are signed as before
+ *    (CAPCOMD_SIGN_COMMITS, or the user's `commit.gpgsign`);
+ *  - Git LFS, when the user has it (`filter.lfs.clean|smudge|process|required`), with what it needs to reach the user's
+ *    LFS server as it would for them: their `lfs.*` (its endpoint among them), `credential.*`, `http.*`, `url.*`,
+ *    `core.sshCommand` and `ssh.*` (git-lfs takes none of the commands among them from `.lfsconfig`). Every other
+ *    filter stays off (git-crypt and the like would hand an agent's checks what they decrypt). git-lfs reads config
+ *    from git (these) before a repository's `.lfsconfig`, and receiveBundle refuses an agent's change to `.lfsconfig`,
+ *    so the endpoint and its credentials are the user's own; an agent's `.gitattributes` can only mark files as LFS
+ *    pointers, fetched from that server.
+ * Read outside any repository once per set of config locations.
+ */
+const USER_KEYS = "^(user\\.signingkey|commit\\.gpgsign|gpg\\..+|filter\\.lfs\\.(clean|smudge|process|required)|lfs\\..+|credential\\..+|http\\..+|url\\..+|core\\.sshcommand|ssh\\..+)$";
+let user: { key: string; args: string[] } | null = null;
+function userArgs(): string[] {
   const src = process.env;
   const key = JSON.stringify(Object.keys(src).filter((k) => k === "HOME" || k === "XDG_CONFIG_HOME" || k.startsWith("GIT_CONFIG")).sort().map((k) => [k, src[k]]));
-  if (signing?.key === key) return signing.args;
+  if (user?.key === key) return user.args;
   const cwd = nowhere();
   let ceiling = dirname(cwd);
   try { ceiling = realpathSync(ceiling); } catch { /* as given */ }
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(src)) if (v !== undefined && !REPO_VARS.includes(k)) env[k] = v;
-  const r = Bun.spawnSync(["git", "config", "--null", "--get-regexp", "^(user\\.signingkey|commit\\.gpgsign|gpg\\..+)$"], { cwd, env: { ...env, GIT_CEILING_DIRECTORIES: ceiling }, stdout: "pipe", stderr: "ignore" });
-  const args: string[] = [];
+  const r = Bun.spawnSync(["git", "config", "--null", "--get-regexp", USER_KEYS], { cwd, env: { ...env, GIT_CEILING_DIRECTORIES: ceiling }, stdout: "pipe", stderr: "ignore" });
+  const kept: Array<[string, string]> = [];
   if (r.exitCode === 0) for (const e of r.stdout.toString().split("\0")) {
     const nl = e.indexOf("\n");
-    if (nl > 0) args.push("-c", `${e.slice(0, nl)}=${e.slice(nl + 1)}`);
+    if (nl > 0) kept.push([e.slice(0, nl), e.slice(nl + 1)]);
   }
-  signing = { key, args };
+  // LFS's company (its endpoint, credentials, http) only with LFS itself.
+  const lfs = kept.some(([k]) => k.startsWith("filter.lfs."));
+  const args = kept.filter(([k]) => lfs || !/^(lfs|credential|http|url|ssh)\.|^core\.sshcommand$/.test(k)).flatMap(([k, v]) => ["-c", `${k}=${v}`]);
+  user = { key, args };
   return args;
 }
 
 /** How a host repo's git runs (Git's `policy`). */
 export const HOST_POLICY: GitPolicy = {
-  args: (network) => network ? POLICY_ARGS : [...POLICY_ARGS, ...signingArgs()],
+  args: (network) => network ? POLICY_ARGS : [...POLICY_ARGS, ...userArgs()],
   inherit: (env, network) => {
     const out = { ...env };
     for (const k of network ? REPO_VARS : [...REPO_VARS, ...CONFIG_VARS]) delete out[k];
     return out;
   },
   // Local work reads no system or global config (GIT_CONFIG_GLOBAL needs git 2.32; POLICY_CONFIG covers the settings
-  // that run things on older ones), fetches nothing lazily (git 2.44+) and smudges no LFS file.
-  env: (network): Record<string, string> => network ? {} : { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_LAZY_FETCH: "1", GIT_LFS_SKIP_SMUDGE: "1" },
+  // that run things on older ones) but what userArgs keeps, and fetches nothing lazily (git 2.44+).
+  env: (network): Record<string, string> => network ? {} : { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_LAZY_FETCH: "1" },
 };
 
 /** Git in a host repo (or a worktree of one), under HOST_POLICY. */
@@ -411,6 +426,9 @@ async function treeProblem(git: Git, sha: string, env: Record<string, string>): 
     const [, dstMode, , dst, status] = meta.slice(1).split(" ");
     const path = parts[++i] ?? "";
     if (status === "D" || !dst || /^0+$/.test(dst)) continue;
+    // `.lfsconfig` says where Git LFS fetches files from, with the user's credentials: the user's decision, never an
+    // agent's (any case and spelling git or a case-insensitive disk would take for it).
+    if (!path.includes("/") && norm(path) === ".lfsconfig") return `it changes ${show(path)}, which says where Git LFS fetches files from with your credentials; change it on the target yourself if it should change`;
     if (dstMode === "120000") links.set(dst, path);
     else if (isDotGitmodules(path.split("/").pop() ?? "") && /^100(644|755)$/.test(dstMode ?? "")) modules.set(dst, path);
   }
