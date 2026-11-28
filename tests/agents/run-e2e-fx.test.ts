@@ -53,7 +53,7 @@ afterAll(async () => {
 test("capcomd run --profile fxw (fx profile, apikey): the bridge runs fx, the worker's commit is verified and merged; key never in trace", async () => {
   const runId = `run-fx-e2e-${Date.now()}`;
   const cenv = { ...env, CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}`, CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" };
-  const running = capcomd(["run", "--json", "--run-id", runId, "--profile", "fxw", "make the failing test pass"], cenv);
+  const running = capcomd(["run", "--json", "--recipe", "--run-id", runId, "--profile", "fxw", "make the failing test pass"], cenv);
   let approved = false, finished = false;
   void running.then(() => { finished = true; });
   for (let i = 0; i < 240 && !approved && !finished; i++) {

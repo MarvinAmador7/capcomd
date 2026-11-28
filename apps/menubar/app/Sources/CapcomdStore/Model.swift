@@ -26,14 +26,22 @@ public enum ProfileKind: String, Sendable, Hashable {
 /// Icon tint state (SPEC §2/§5): grey by default, blue while running, amber on approval, red on failure.
 public enum Tint: Sendable, Hashable { case grey, blue, amber, red, tertiary }
 
-/// The AI provider an agent runs on. Wire values: `Agent.provider` ("claude", "codex"), or agent.spawned's
-/// `agent.provider` / `agent.kind` ("claude-code", "codex"; "fake" is none).
-public enum Provider: String, Sendable, Hashable {
-  case claude, codex
+/// The AI provider (harness) an agent runs on. Wire values: `Agent.provider` ("claude", "codex", "fx"), or
+/// agent.spawned's `agent.provider` / `agent.kind` ("claude-code", "codex", "fx"; "fake" is none). A provider this app
+/// doesn't know yet (a plugin's) is `.other` with its wire name: it gets a generic mark and that name, never dropped.
+public enum Provider: Sendable, Hashable {
+  case claude, codex, fx
+  case other(String)
   public init?(wire: String?) {
-    switch wire { case "claude", "claude-code": self = .claude; case "codex": self = .codex; default: return nil }
+    guard let w = wire?.trimmingCharacters(in: .whitespaces), !w.isEmpty, w != "fake" else { return nil }
+    switch w { case "claude", "claude-code": self = .claude; case "codex": self = .codex; case "fx": self = .fx; default: self = .other(w) }
   }
-  public var displayName: String { switch self { case .claude: "Claude"; case .codex: "Codex" } }
+  /// The name the daemon uses for it (`Agent.provider`, `/v1/logins` `provider`, `capcomd auth login <it>`).
+  public var wire: String { switch self { case .claude: "claude"; case .codex: "codex"; case .fx: "fx"; case .other(let w): w } }
+  /// The AI it runs on, short: "Claude", "Codex", "fx" (a mark's accessibility label, an account section's header).
+  public var displayName: String { switch self { case .claude: "Claude"; case .codex: "Codex"; case .fx: "fx"; case .other(let w): w } }
+  /// The harness by name, as a picker or a chip names it: "Claude Code", "Codex", "fx".
+  public var harnessName: String { switch self { case .claude: "Claude Code"; case .codex: "Codex"; case .fx: "fx"; case .other(let w): w } }
 }
 
 public struct Agent: Sendable, Hashable, Identifiable {
@@ -494,6 +502,9 @@ public enum Notice: Sendable, Hashable {
   case runFinished(runId: String, type: String, title: String)
   /// A goal branch run is ready, or stopped with work landed (GoalNotice): once per run.
   case goalReady(GoalNotice)
+  /// An agent's AI hit its usage limit and the run paused (`agent.paused` with limit "quota"): once per run until it
+  /// runs again. `asker`: the agent as its column names it; `resumesAtMs`: when it picks up by itself, if known.
+  case usageLimit(runId: String, agentId: String, title: String, asker: String?, resumesAtMs: Int?)
 }
 
 /// `Agent.activity.wake` (capability agents.wake, ADR-026 §3): what a running agent waits for between turns (its turn

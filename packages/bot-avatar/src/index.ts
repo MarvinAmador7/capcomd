@@ -2,7 +2,7 @@
 // modular parts catalog (src/catalog.ts, exported as fixtures/catalog.json). Pure functions, no I/O, no dependencies.
 export * from "./types";
 export { CATALOG } from "./catalog";
-export { MENU_BAR_MARK, markSvg } from "./marks";
+export { ANTENNA_MARK, MENU_BAR_MARK, RING_MARK, markSvg } from "./marks";
 export { h32, hkey, fnv1a32, fmix32, mulberry32, rng, SEP } from "./hash";
 export {
 	botTraits, botName, botGrid, botSvg, botTeam, gridSvg, gridRows, withOverrides, withPart, distinct, normalizeRole, weightOf, compatible, candidates, rendezvous, tone, artFor,

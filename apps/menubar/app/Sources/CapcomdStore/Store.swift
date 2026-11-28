@@ -635,6 +635,14 @@ public final class CapcomdStore {
         return
       }
       onNotify(finished)
+    case "agent.paused":
+      // A usage limit: said once per run while its agents wait on it (the first agent it pauses).
+      guard e.data["result"]?["limit"]?.string == "quota", let rid = e.runId ?? e.data["runId"]?.string,
+            let aid = e.agentId ?? e.data["agentId"]?.string, let run = runs[rid], let agent = run.agents[aid] else { return }
+      let paused = run.agents.values.filter { $0.status == .paused && $0.limit == "quota" }
+      guard paused.count == 1, paused.first?.id == aid else { return }
+      onNotify(.usageLimit(runId: rid, agentId: aid, title: run.title, asker: columnHeader(runId: rid, agentId: aid)?.label,
+                           resumesAtMs: agent.resetAtMs))
     default: return
     }
   }

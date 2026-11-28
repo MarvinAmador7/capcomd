@@ -113,11 +113,32 @@ public final class UIPreferences {
     get { store.string(forKey: "botFaces") != "0" }
     set { store.set(newValue ? "1" : "0", forKey: "botFaces") }
   }
-  /// Whether this notice may be posted (Settings › General › Notifications).
+  /// Settings › Notifications › Usage limits: a run paused by its AI's usage limit (on unless turned off).
+  public var notifyUsageLimits: Bool {
+    get { store.string(forKey: "notifyUsageLimits") != "0" }
+    set { store.set(newValue ? "1" : "0", forKey: "notifyUsageLimits") }
+  }
+  /// Settings › Notifications › Badge app icon: the Dock icon carries the Needs you count (on unless turned off).
+  public var badgeAppIcon: Bool {
+    get { store.string(forKey: "badgeAppIcon") != "0" }
+    set { store.set(newValue ? "1" : "0", forKey: "badgeAppIcon") }
+  }
+  /// Settings › General › App Icon › Menu bar: "dome" (nil, the default), "antenna" or "ring" (CapcomdBot.MenuBarMark).
+  public var menuBarMark: String? {
+    get { store.string(forKey: "menuBarMark") }
+    set { store.set(newValue, forKey: "menuBarMark") }
+  }
+  /// Settings › General › App Icon › Dock: "orange" (nil, the default), "night" or "mono" (CapcomdBot.AppIconStyle).
+  public var dockIcon: String? {
+    get { store.string(forKey: "dockIcon") }
+    set { store.set(newValue, forKey: "dockIcon") }
+  }
+  /// Whether this notice may be posted (Settings › Notifications).
   public func allows(_ n: Notice) -> Bool {
     switch n {
     case .approvalRequested: notifyApprovals
     case .runFinished, .goalReady: notifyRunFinished   // a ready goal branch is how its run finished
+    case .usageLimit: notifyUsageLimits
     }
   }
   /// The stored effort pick for "let the CLI choose".
@@ -320,6 +341,8 @@ public protocol DaemonInfoFetching: Sendable {
   /// `GET /v1/logins`, `/v1/environments`, `/v1/service` (Settings). `DetailUnavailable.unsupported` on daemons
   /// without them.
   func logins() async throws -> [LoginInfo]
+  /// `GET /v1/logins?provider=` (capability `logins.fx`): only that AI's logins; fx's are listed only when asked so.
+  func logins(provider: String) async throws -> [LoginInfo]
   func environments() async throws -> [EnvironmentInfo]
   func service() async throws -> ServiceInfo
   /// `GET /v1/sandboxes`, `/v1/sandboxes/{name}` (capability `sandboxes`) and `…/resources`, `…/resources/{id}`
@@ -357,6 +380,7 @@ extension DaemonInfoFetching {
   public func runOptions(repo: String?) async throws -> RunOptions { RunOptions() }
   public func health() async throws -> DaemonHealth { DaemonHealth(version: nil, capabilities: try await capabilities()) }
   public func logins() async throws -> [LoginInfo] { throw DetailUnavailable.unsupported }
+  public func logins(provider: String) async throws -> [LoginInfo] { throw DetailUnavailable.unsupported }
   public func environments() async throws -> [EnvironmentInfo] { throw DetailUnavailable.unsupported }
   public func service() async throws -> ServiceInfo { throw DetailUnavailable.unsupported }
   public func sandboxes() async throws -> [SandboxDescriptor] { throw DetailUnavailable.unsupported }
