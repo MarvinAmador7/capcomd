@@ -463,7 +463,10 @@ public final class ProjectSetupFlow {
     rows.append(SetupRowItem(row: .mode(a.mode, target: a.target, pullRequests: i.pullRequestsAvailable), note: note("mode") ?? ghNote))
     let chips = i.agents.map { SetupAgentChip(provider: $0.provider, label: $0.label, on: a.agents.contains($0.provider), enabled: $0.loggedIn) }
     let nobody = !i.agents.isEmpty && !i.agents.contains(where: \.loggedIn)
-    rows.append(SetupRowItem(row: .agents(chips), note: note("agents") ?? (nobody ? SetupNote("Log in to Claude Code or Codex in Settings › Accounts first.", warn: true) : nil)))
+    // The agents the daemon offers, by name ("Claude Code or Codex"; more when it lists more).
+    let names = i.agents.map(\.label)
+    let who = names.count < 2 ? (names.first ?? "an agent") : names.dropLast().joined(separator: ", ") + " or " + names.last!
+    rows.append(SetupRowItem(row: .agents(chips), note: note("agents") ?? (nobody ? SetupNote("Log in to \(who) in Settings › Accounts first.", warn: true) : nil)))
     let billing = Self.billing(i, a, sandbox: sandbox)
     if !billing.isEmpty {
       let who = billing.map(\.label).joined(separator: " and ")

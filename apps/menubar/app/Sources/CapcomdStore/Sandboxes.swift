@@ -748,7 +748,7 @@ public enum SandboxRows {
     guard !here.isEmpty, here.contains(where: { $0.hostBound != nil }) else { return nil }
     let inUse = here.filter(\.loggedIn)
     guard !inUse.isEmpty else { return LoginsSummary(tone: .empty, text: "No logins", sub: "Log in from Settings › Accounts.") }
-    let name = { (p: String) in p == "claude" ? "Claude" : p == "codex" ? "Codex" : p }
+    let name = { (p: String) in Provider(wire: p)?.displayName ?? p }
     let bound = inUse.filter { $0.hostBound == true }, loose = inUse.filter { $0.hostBound != true }
     let hosts = bound.compactMap(\.boundTo)
     let hostList = hosts.isEmpty ? "" : " (\(hosts.joined(separator: ", ")))"

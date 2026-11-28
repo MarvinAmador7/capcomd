@@ -47,7 +47,7 @@ extension CapcomdStore {
     let efforts = driver?.efforts ?? []
     let editable = capabilities.contains(Capability.agentsMessagesModel) && driver != nil
     let effort = pick?.effort
-    let harness = driver?.label ?? a.provider.map { $0 == .claude ? "Claude Code" : "Codex" }
+    let harness = driver?.label ?? a.provider?.harnessName
     let pending = pick != nil && (pick?.model != nil && pick?.model != a.model || pick?.effort != nil)
     let spoken = ([harness, name, effort.map { EffortWords.title($0).lowercased() + " effort" }, pending ? "from its next turn" : nil] as [String?]).compactMap { $0 }
     return AgentModelChoice(provider: a.provider, harness: harness, chip: name, models: models, model: model, efforts: efforts, effort: effort,
