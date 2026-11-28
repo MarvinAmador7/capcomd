@@ -335,9 +335,10 @@ struct SurfaceChrome: ViewModifier {
   }
 }
 
-/// Wraps its items onto as many lines as they need (the menu's repo chips).
+/// Wraps its items onto as many lines as they need (the menu's repo chips; trailing: a Team row's tags).
 struct FlowRow: Layout {
   var spacing: CGFloat
+  var trailing = false
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     let rows = arrange(proposal.width ?? .infinity, subviews)
     return CGSize(width: rows.map(\.width).max() ?? 0, height: rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1)))
@@ -345,7 +346,7 @@ struct FlowRow: Layout {
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     var y = bounds.minY
     for row in arrange(bounds.width, subviews) {
-      var x = bounds.minX
+      var x = trailing ? bounds.maxX - row.width : bounds.minX
       for i in row.items { let s = subviews[i].sizeThatFits(.unspecified); subviews[i].place(at: CGPoint(x: x, y: y), proposal: .init(s)); x += s.width + spacing }
       y += row.height + spacing
     }
