@@ -5,6 +5,94 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.13.0-rc.4 (2026-11-27)
+
+Release candidate: the desktop app gets four window layouts and a redesigned Settings, Team's send button works for
+every profile, fx is a harness of its own in the app, and capcomd now treats git work from an agent's machine as
+untrusted. Changes since 0.13.0-rc.3 are below; everything in rc.1 to rc.3 still applies.
+
+### Behavior to watch for
+
+- **Breaking:** your own git hooks (a global `core.hooksPath`, `pre-commit`, `commit-msg`, `pre-push`) no longer run
+  on capcomd's merge commits and pushes, so a hook can no longer veto a merge. Put that check in the project's checks
+  (`run.checks`), which run on the merged code before it lands.
+- Your own git filters other than Git LFS (for example git-crypt) no longer decode files sent to agents' checks. LFS
+  files still arrive as real files.
+- The desktop's folded icon rail is gone: with tabs, its buttons sit at the tab bar's trailing end.
+
+### Desktop app: layouts
+
+- The window has four layouts: **Tabs above**, **Sidebar left**, **Sidebar right** and **Tabs below**. Tabs and
+  the sidebar are never shown together: with tabs, the crew is a row of tabs over (or under) the columns, and Home,
+  Team, History, Settings, the Needs you hand with its count, Search (⌘K) and + sit at the tab bar's trailing end;
+  with the sidebar, it is on the side you chose and the traffic lights stay at the top left. Choose one in
+  Settings › Interface › Layout (four tiles) or View › Layout. ⌃⌘S still switches between tabs and the sidebar, and
+  keeps the side or edge you chose for each.
+- Sidebar behavior and Tab bar behavior (Settings › Interface › Layout; View › Layout): Always show, or Show on hover,
+  which keeps the sidebar or the tab bar out of the way until the pointer reaches its edge of the window. Both are
+  always shown while VoiceOver is on.
+- Your current choice carries over: the Reel becomes Tabs above, and the Sidebar becomes Sidebar left.
+
+### Desktop app: Settings
+
+- **Settings is redesigned.** One window in the app's dark look, with a sidebar and a page: Search, then capcomd's
+  status (Running and its version, or Not running), then General, Notifications, Interface, Shortcuts, Runs, Accounts
+  and About, each with its own icon. Back and Forward (⌘[ and ⌘]) walk the pages you opened.
+  - **Search** finds any setting, login or place by name; Return opens the first result and highlights its card.
+  - **capcomd** (the status row): start capcomd when it isn't running, keep it running in the background, and reset
+    this app's token. These moved here from General and Accounts.
+  - **General › App Icon:** pick the Dock icon (Orange, Night or Mono) and the menu bar icon (Dome, Antenna or Ring).
+    **Show app icon** (Dock and menu bar, Dock only, Menu bar only) replaces the Show in menu bar and Keep in Dock
+    switches, so the app can't end up with neither. Bot faces is now **Menu bar moods**. The version card says
+    whether the app and the running capcomd match, and offers Restart capcomd when an update left the old one running.
+  - **Notifications:** new **Usage limits** (a notification when an agent's AI hits its usage limit and its run
+    pauses) and **Badge app icon** (the Needs you count on the Dock icon). Both are on unless you turn them off.
+  - **Interface:** the window's layout (above); **Columns across** (fit the window, or always 1, 2 or 3); **Crew
+    tabs** (the bot and its title, or the bot only); and whether **Follow asks and failures** is on when the window
+    opens.
+  - **Shortcuts:** the window's keyboard shortcuts, read-only.
+  - **Runs:** new runs' **Model** joins Project, Driven by, Effort and Runs on. Each place is one row that shows the
+    one thing it needs (for example "Agent environment not built"); click it for the place's own page with its agent
+    environment, machines, safety and options (the Details… sheet is gone).
+  - **Accounts:** when the AI new runs use isn't logged in where they run, Accounts shows an amber count and that row's
+    Log In… stands out.
+
+### Desktop app: Team and fx
+
+- Team's send button now works for worker profiles on Docker and boxd: it used to fail with "--profile/--set pick the
+  worker of the built-in recipe; a planner agent picks its own workers". It now starts a run of that one agent.
+- fx is a harness of its own. Agents, profiles and Team rows that run on fx show fx's mark (a plain "fx" monogram) and
+  its name. A Team profile on fx offers fx's effort levels in its model chip. Settings › Accounts has an fx card with
+  its login in each place, and each place's page lists fx's version in its agent environment.
+- An agent harness the app doesn't know yet, such as a plugin's, shows a generic mark and its name instead of
+  disappearing.
+- A profile's opened settings keep to the sheet's width: a long list (Allowed tools) wraps under its label, a long
+  description wraps onto up to four lines, and text values line up with the pop-ups beside them.
+
+### Runs
+
+- `capcomd run "<goal>" --profile <name>` (and POST /v1/runs with `profile`) now starts a run of one agent of that
+  profile, on any sandbox. The agent works on the goal itself, with no planner splitting it. Its work is checked
+  against the project's checks and reviewer, then merged onto the run's goal branch, ready for a pull request
+  (`capcomd pr open <runId>`). `--goal-branch`/`--base` name the branch and its base. With `--no-goal-branch`, the
+  work merges into the target, and a protected target waits for `capcomd approve`. If the agent fails or its work
+  doesn't pass, the run ends failed with the reason. The built-in recipe still takes a worker profile with
+  `--recipe --profile <name>`.
+
+### Security
+
+- capcomd now treats the git work that comes back from an agent's machine as untrusted. Before an agent's commits
+  reach your repository, the host checks the bundle they arrive in and refuses it, with the reason, when it names an
+  unexpected or malformed ref (`../`, control characters), fails git's object checks (a `.git` folder in any
+  spelling), or carries a symlink into `.git` or a `.gitmodules` trick such as a carriage return in a submodule path
+  (CVE-2025-48384). The agent's push then fails with that reason, and nothing of it reaches your repository.
+- git on the host never runs a hook, fsmonitor or submodule command on an agent's work. Verifying, merging and pushing
+  it ignore your system and global git settings, except your commit signing settings and Git LFS. A `.gitattributes`
+  in an agent's commit therefore can't select one of your merge drivers, and a symlink is checked out as a plain file
+  (it stays a symlink in the commit).
+- An agent's commit that adds or changes `.lfsconfig` (where LFS fetches from) is refused; change it on the target
+  yourself. LFS files are fetched from your LFS server with your credentials, as before.
+
 ## 0.13.0-rc.3 (2026-11-26)
 
 Release candidate: the desktop app gets Team, your agent profiles by project, each one a page you can give a task,
