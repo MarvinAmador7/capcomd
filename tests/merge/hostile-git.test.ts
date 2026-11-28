@@ -357,6 +357,8 @@ describe("the user's filters on an agent's work", () => {
     // same, so the test runs where git-lfs isn't installed.
     const w = await world({ test: `test "$(cat asset.bin)" = "smudged"` });
     await onMain(w, { ".gitattributes": "*.bin filter=lfs -text\n", "asset.bin": "pointer\n" });
+    // As main stores it (where git-lfs is set up globally, its clean filter turned the fixture's file into a pointer).
+    const stored = await w.r.show("main", "asset.bin");
     writeFileSync(join(w.dir, "feature.txt"), "agent work\n");
     const sha = await w.commit();
     const lfsLike = join(w.leak, "lfs-like.sh");
@@ -371,7 +373,7 @@ describe("the user's filters on an agent's work", () => {
     delete process.env.GIT_CONFIG_GLOBAL;
     expect({ status: v.status, reason: (v as { reason?: string }).reason ?? null, output: ((v as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "verified" });
     expect({ status: m.status, reason: (m as { reason?: string }).reason ?? null, output: ((m as { output?: string }).output ?? "").slice(-600) }).toMatchObject({ status: "merged" });
-    expect(await w.r.show("main", "asset.bin")).toBe("pointer");
+    expect(await w.r.show("main", "asset.bin")).toBe(stored);
   }, 60_000);
 
   test("a git-crypt-like filter of the user's never runs on an agent's checks: they see what git stores", async () => {
