@@ -205,7 +205,8 @@ struct TeamFieldRow: View, Equatable {
   }
   var body: some View {
     let t = Theme.Desk.Team.self
-    return HStack(spacing: t.fieldGap) {
+    // The label keeps its width; the control gets the rest (a list wraps in it, a text field stops at its width).
+    return HStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 1) {
         Text(verbatim: field.label).font(t.label).foregroundStyle(Theme.Affect.t1).lineLimit(1)
         if caption != nil || resettable {
@@ -220,7 +221,8 @@ struct TeamFieldRow: View, Equatable {
           .font(t.caption).lineLimit(1)
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .fixedSize()
+      Spacer(minLength: t.fieldGap)
       control
     }
     .padding(t.fieldPadding)
@@ -327,11 +329,15 @@ struct TeamTextField: View {
   @State private var hover = false
   var body: some View {
     let t = Theme.Desk.Team.self
-    TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(Theme.Affect.t3))
+    // A long value (a description) wraps onto up to four lines instead of being cut; its text lines up with the
+    // pop-ups' right edge, the ring showing 8 pt past it on hover.
+    TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(Theme.Affect.t3), axis: .vertical)
       .textFieldStyle(.plain).font(t.controlFont).foregroundStyle(Theme.Affect.t1)
-      .multilineTextAlignment(.trailing)
-      .padding(.horizontal, 8).frame(width: t.fieldWidth, height: t.control)
+      .multilineTextAlignment(.trailing).lineLimit(1...4)
+      .padding(.horizontal, 8).padding(.vertical, 4)
+      .frame(maxWidth: t.fieldWidth, minHeight: t.control, alignment: .trailing)
       .background(RoundedRectangle(cornerRadius: t.controlRadius, style: .continuous).strokeBorder(hover || editing ? t.titleRing : .clear, lineWidth: 0.5))
+      .padding(.trailing, -8)
       .focused($editing)
       .onHover { hover = $0 }
       .onSubmit { send() }
@@ -354,7 +360,7 @@ struct TeamList: View {
   @FocusState private var focused: Bool
   var body: some View {
     let t = Theme.Desk.Team.self
-    HStack(spacing: 6) {
+    FlowRow(spacing: 6, trailing: true) {
       ForEach(values, id: \.self) { v in TeamTag(text: v) { commit(values.filter { $0 != v }) } }
       if adding {
         TextField("", text: $draft).textFieldStyle(.plain).font(t.controlFont).frame(width: 120, height: t.tagHeight)
@@ -364,9 +370,9 @@ struct TeamList: View {
           .onAppear { focused = true }
       } else {
         Button("Add") { adding = true }.buttonStyle(.plain).font(t.controlFont).foregroundStyle(Theme.Affect.t3)
+          .frame(height: t.tagHeight)
       }
     }
-    .fixedSize()
   }
   private func add() {
     let v = draft.trimmingCharacters(in: .whitespacesAndNewlines)
