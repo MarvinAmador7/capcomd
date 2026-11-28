@@ -12,8 +12,8 @@ import PerfLoopKit
 /// and a long sidebar scrolled. Each leaves the window folded, as it found it, except where the snapshot wants it open.
 /// The sidebar's list and the pane's thread are ink regions: a blank sidebar or pane fails instead of passing as fast.
 @MainActor enum DriveSidebar {
-  /// Views that belong to the sidebar and the rail.
-  static let sidebarViews: Set<String> = ["Sidebar", "SidebarList", "SectionHeading", "ProjectLabel", "AgentRow", "Rail"]
+  /// Views that belong to the sidebar.
+  static let sidebarViews: Set<String> = ["Sidebar", "SidebarList", "SectionHeading", "ProjectLabel", "AgentRow"]
   /// Views of the reel (kept under the opened window): a toggle must not re-render them.
   static let reelViews: Set<String> = ["Reel", "Column", "ColumnHead", "ColumnThread", "EntryRow", "CrewTab", "OpenGroup"]
   static let paneViews: Set<String> = ["PaneHead", "PaneArea", "Pane", "PaneThread", "PaneEntryRow", "PaneComposer"]
@@ -97,7 +97,7 @@ import PerfLoopKit
       guard !targets.isEmpty else { break }
       let t = targets[(i * max(1, targets.count / picks)) % targets.count]
       clickedCount += 1
-      let p = CGPoint(x: 120, y: d.content.bounds.height - t.y)   // AppKit's window coordinates: from the bottom
+      let p = CGPoint(x: d.sidebarX(120), y: d.content.bounds.height - t.y)   // AppKit's window coordinates: from the bottom
       await run.click(at: p, name: "click#\(i) \(t.row.title)", until: { d.paneView()?.agent == t.row.id })
       await d.threadsDrawn("click#\(i)")
       await run.ink([d.sidebarRegion, d.paneRegion], after: "click#\(i)")

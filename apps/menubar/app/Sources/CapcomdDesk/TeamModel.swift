@@ -29,6 +29,8 @@ package final class TeamModel {
   package internal(set) var loaded = false { didSet { Mutations.record("TeamModel.loaded") } }
   /// Team has shown once: from then on its panes stay built while it is closed.
   package internal(set) var everOpened = false { didSet { Mutations.record("TeamModel.everOpened") } }
+  /// Team opened the sidebar from the tabs: closing Team goes back to them (unless the sidebar was chosen since).
+  @ObservationIgnored var openedSidebar = false
   /// Left to right; the focused one is the selected profile.
   package internal(set) var panes: [TeamPane] = [] { didSet { Mutations.record("TeamModel.panes") } }
   package internal(set) var focused = 0 { didSet { Mutations.record("TeamModel.focused") } }
@@ -116,7 +118,8 @@ extension DeskModel {
     leaveHome()
     if !team.everOpened { team.everOpened = true }
     team.isOpen = true
-    if !nav.sidebarOpen { setSidebar(open: true) }
+    // From the tabs: the sidebar opens for the roster, and closing Team goes back to the tabs.
+    if !nav.sidebarOpen { setSidebar(open: true); team.openedSidebar = true }
     nav.focusList()
     if team.panes.isEmpty, let first = team.members.first { showProfile(first.id) }
     Task { [weak self] in await self?.store.team.refresh() }
@@ -128,6 +131,7 @@ extension DeskModel {
     collapsePane()
     team.isOpen = false
     if openProjectId == nil, newProject == nil, !needs.isOpen { openHome(focus: false) }
+    if team.openedSidebar { setSidebar(open: false) }
   }
 
   /// A roster row (or ↑ ↓ in the roster): that profile in the focused pane. ⌘-click: beside it.

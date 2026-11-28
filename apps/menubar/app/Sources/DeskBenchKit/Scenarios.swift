@@ -66,6 +66,10 @@ public enum Scenarios {
     ScenarioSpec(name: "sidebar-scroll", summary: "A long sidebar (every project unfolded) scrolled down and back with replayed trackpad gestures.",
                  budget: "Sidebar scroll: no dropped frames, no pane work", rule: "no late frame while it moves; no stretch over 16.7 ms; no pane body",
                  kind: .smooth, latencyBudgetMs: nil, params: ["scrolls": "4", "gesture": "synthetic:scroll-down", "gestureBack": "synthetic:scroll-up"]),
+    // The desk's four layouts (Tabs above, Sidebar left, Sidebar right, Tabs below; SPEC §2).
+    ScenarioSpec(name: "layout-switch", summary: "Switch the layout ten ways (real clicks on the sidebar button in the tab bar and the sidebar's header, ⌃⌘S through the menu bar, a layout picked as Settings and View › Layout pick it), with an agent picked and two panes.",
+                 budget: "Fold or open the sidebar: first frame ≤ 50 ms, the reel untouched", rule: "median latency from the click, key or pick to the frame that shows the layout ≤ 50 ms; checks: chrome (each layout's tab bar or sidebar where it belongs, no rail), columns-kept (no reel column view rebuilt), selection-kept (the selected agent, the reel's place, the panes and their views)",
+                 kind: .latency, latencyBudgetMs: 50, params: ["rounds": "1"]),
     ScenarioSpec(name: "palette-first", summary: "The first Search ⌘K after the window opens (fixture `search`): the window shown and at rest, then ⌘K once, to the frame that shows the palette and its results.",
                  budget: "Search ⌘K opens: first frame ≤ 50 ms", rule: "latency from the first ⌘K to the first frame with the palette and its results ≤ 50 ms; checks: warmed-ahead, shown, items, empty-search",
                  kind: .latency, latencyBudgetMs: 50, params: [:], fixture: "search"),

@@ -17,6 +17,7 @@ extension DeskModel {
 
   package func setSidebar(open: Bool) {
     guard nav.sidebarOpen != open else { return }
+    team.openedSidebar = false   // the sidebar chosen by hand stays, whatever Team does next
     if !open { collapsePane() }
     if !open, team.isOpen { team.isOpen = false }   // Team lives in the opened sidebar
     if open {
@@ -35,6 +36,24 @@ extension DeskModel {
       resumeWarming()
     }
   }
+
+  // MARK: the layout (DeskLayout.swift)
+
+  /// Tabs above or below, the sidebar left or right: as the window shows it now.
+  package var layout: DeskLayout { nav.layout }
+
+  /// Settings › Interface › Layout, View › Layout: one of the four. The side or edge it names is kept for ⌃⌘S; going
+  /// between tabs and the sidebar is `setSidebar`'s, so the pane's agent, the splits and the reel's place are kept.
+  package func setLayout(_ l: DeskLayout) {
+    if let s = l.side, nav.sidebarSide != s { nav.sidebarSide = s }
+    if let e = l.edge, nav.tabsEdge != e { nav.tabsEdge = e }
+    setSidebar(open: l.isSidebar)
+  }
+
+  /// Sidebar behavior: Always show, or Show on hover.
+  package func setSidebarBehavior(_ b: ChromeBehavior) { if nav.sidebarBehavior != b { nav.sidebarBehavior = b } }
+  /// The tab bar's behavior: Always show, or Show on hover.
+  package func setTabsBehavior(_ b: ChromeBehavior) { if nav.tabsBehavior != b { nav.tabsBehavior = b } }
 
   /// The agent the opened pane shows: the open project's focused agent, else its first column. Nil on Home, or with
   /// nothing open.

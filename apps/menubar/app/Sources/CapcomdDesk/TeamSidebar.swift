@@ -16,7 +16,7 @@ struct TeamButton: View {
   var size: CGFloat = Theme.Desk.Side.button
   var body: some View {
     let available = model.team.available
-    SideButton(symbol: "person.2", on: model.team.isOpen, help: available ? "Team" : "Team (this capcomd doesn't list profiles)",
+    SideButton(symbol: "person.2", on: model.team.isOpen, help: available ? PlaceButton.team.help : "Team (this capcomd doesn't list profiles)",
                label: "Team", size: size) { model.toggleTeam() }
       .disabled(!available).opacity(available ? 1 : 0.5)
   }

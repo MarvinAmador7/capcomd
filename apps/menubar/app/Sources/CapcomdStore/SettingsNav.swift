@@ -107,7 +107,7 @@ public enum SettingsSearch {
       n("Usage limits", "notifications.notify", ["notify", "quota"]),
       n("Finished runs", "notifications.notify", ["notify", "failed", "stopped"]),
       n("Badge app icon", "notifications.badge", ["dock", "needs you", "count"]),
-      i("Layout", "interface.layout", ["reel", "sidebar"]),
+      i("Layout", "interface.layout", ["reel", "sidebar", "tabs", "tab bar", "hover", "behavior"]),
       i("Columns across", "interface.reel", ["reel", "columns"]),
       i("Crew tabs", "interface.reel", ["reel", "tabs", "bot"]),
       i("Follow asks and failures", "interface.reel", ["follow"]),

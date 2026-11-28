@@ -90,7 +90,7 @@ struct TeamPaneHead: View {
       Spacer(minLength: 8)
       HStack(spacing: 0) {
         if expanded {
-          NeedsHand(style: .header)
+          NeedsHand()
           SideButton(symbol: "arrow.down.right.and.arrow.up.left", on: true, help: "Collapse pane (Esc)", label: "Collapse pane") {
             paneMotion(reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.2)) { model.collapsePane() }
           }

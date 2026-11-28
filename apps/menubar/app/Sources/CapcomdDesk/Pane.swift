@@ -5,10 +5,10 @@ import CapcomdStore
 import CapcomdBot
 import CapcomdUI
 
-// The opened window (RexMain): the sidebar over the window's left 248 pt and, beside it, one agent's pane. The title bar
-// goes; the pane's 44 pt header is the top line. The reel stays built underneath at its own size (folding shows it as
-// it was, and a toggle never reflows it); the pane is an AppKit column (NativeColumnView, `.pane`) with the reel's own
-// thread, message box and decision.
+// The opened window (RexMain): the sidebar over the window's left (or right) 248 pt and, beside it, one agent's pane.
+// The tab bar goes; the pane's 44 pt header is the top line. The reel stays built underneath at its own size (folding
+// shows it as it was, and a toggle never reflows it); the pane is an AppKit column (NativeColumnView, `.pane`) with the
+// reel's own thread, message box and decision.
 
 /// What the window shows while the sidebar is open. Nothing is built until the first open; from then on it stays built
 /// and a toggle only shows or hides it. It lives in AppKit views of its own (`OpenedLayerView`): SwiftUI takes a view at
@@ -19,15 +19,58 @@ struct OpenedLayer: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.openSettings) private var openSettings
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
   @Environment(\.threadHost) private var threadHost
   var body: some View {
     if model.nav.everOpened {
       let open = model.nav.sidebarOpen
       // Folded, the panes keep what they show (nothing here is read, so a reel focus change doesn't re-render this).
       let deck = open ? PaneDeckInput(runId: model.openRunId, layout: model.panes, shown: model.panesShown, expanded: model.nav.expanded) : nil
-      OpenedLayerHost(model: model, open: open, deck: deck, reduceMotion: reduceMotion,
+      // The sidebar's side, Show on hover (never under VoiceOver), and the list taking the keyboard (it shows then).
+      let place = SidebarPlace(side: model.nav.sidebarSide, hover: model.nav.sidebarBehavior == .hover && !voiceOver, peek: model.nav.listFocus)
+      OpenedLayerHost(model: model, open: open, deck: deck, place: place, reduceMotion: reduceMotion,
                       openSettings: { openSettings() }, threadHost: threadHost)
     }
+  }
+}
+
+/// Where the opened sidebar goes and how it shows.
+struct SidebarPlace: Equatable {
+  var side: SidebarSide = .left
+  /// Show on hover: out of the window until the pointer reaches its edge.
+  var hover = false
+  /// Bumped when the list is handed the keyboard: a sidebar shown on hover comes in.
+  var peek = 0
+}
+
+/// The opened layer's frames for its size: the sidebar on its side, the main area beside it (or, with Show on hover,
+/// under it: the sidebar comes over the pane), and the panes' insets in the main area. On the right, and with Show on
+/// hover, the main area starts under the traffic lights' band, as the tabs' reel does. Expanded, the pane has the
+/// window.
+struct OpenedFrames: Equatable {
+  var sidebar: CGRect
+  var main: CGRect
+  /// The panes' margins from the main area's left and right (top and bottom: `PaneMetrics.inset`).
+  var paneInsets: (left: CGFloat, right: CGFloat)
+  /// The sidebar comes over the main area (Show on hover) instead of beside it.
+  var floating: Bool
+
+  static func make(size: CGSize, side: SidebarSide, hover: Bool, expanded: Bool) -> OpenedFrames {
+    let w = SidebarMetrics.width, m = PaneMetrics.inset
+    // The band the traffic lights sit in, less the pane's own top inset: the pane's top is where the reel's columns are.
+    let band = Theme.Desk.titleBar - m
+    let sidebar = CGRect(x: side == .left ? 0 : max(0, size.width - w), y: 0, width: w, height: size.height)
+    let under = CGRect(x: 0, y: band, width: size.width, height: max(0, size.height - band))
+    if expanded { return OpenedFrames(sidebar: sidebar, main: CGRect(origin: .zero, size: size), paneInsets: (0, m), floating: hover) }
+    if hover { return OpenedFrames(sidebar: sidebar, main: under, paneInsets: (m, m), floating: true) }
+    if side == .left {
+      return OpenedFrames(sidebar: sidebar, main: CGRect(x: w, y: 0, width: max(0, size.width - w), height: size.height), paneInsets: (0, m), floating: false)
+    }
+    return OpenedFrames(sidebar: sidebar, main: CGRect(x: 0, y: band, width: max(0, size.width - w), height: under.height), paneInsets: (m, 0), floating: false)
+  }
+
+  static func == (a: Self, b: Self) -> Bool {
+    a.sidebar == b.sidebar && a.main == b.main && a.paneInsets == b.paneInsets && a.floating == b.floating
   }
 }
 
@@ -35,11 +78,12 @@ struct OpenedLayerHost: NSViewRepresentable {
   let model: DeskModel
   let open: Bool
   let deck: PaneDeckInput?
+  let place: SidebarPlace
   let reduceMotion: Bool
   let openSettings: () -> Void
   let threadHost: ThreadHostBox?
   func makeNSView(context: Context) -> OpenedLayerView {
-    OpenedLayerView(model: model, openSettings: openSettings, threadHost: threadHost, open: open)
+    OpenedLayerView(model: model, openSettings: openSettings, threadHost: threadHost, open: open, place: place)
   }
   func sizeThatFits(_ proposal: ProposedViewSize, nsView: OpenedLayerView, context: Context) -> CGSize? {
     proposal.replacingUnspecifiedDimensions(by: DeskWindowContent.minSize)
@@ -48,18 +92,23 @@ struct OpenedLayerHost: NSViewRepresentable {
   /// keyboard doesn't.
   func updateNSView(_ v: OpenedLayerView, context: Context) {
     let animated = context.transaction.animation != nil && !context.transaction.disablesAnimations
+    v.set(place: place, reduceMotion: reduceMotion)
     if let deck { v.set(deck: deck, animated: animated, reduceMotion: reduceMotion) }
     v.set(open: open, animated: animated, reduceMotion: reduceMotion)
   }
 }
 
-/// The opened window's AppKit side: the sidebar (248 pt) and the main area beside it, each laid out by frame. The main
-/// area is Home, the Needs you reel or the unreachable notice (`PaneArea`, a hosting view) under the panes
-/// (`PaneDeckView`, AppKit: one reel column per pane). Shown and hidden with `isHidden`; opening by a click slides the
-/// sidebar in by transform and fades the main area in (0.25 s, ease-out, no bounce; Reduce Motion: a 0.15 s
-/// crossfade), folding the reverse. Expanded, the main area takes the whole window and the sidebar hides. Nothing is
-/// laid out by an animation: the frames are final from the start.
+/// The opened window's AppKit side: the sidebar (248 pt, on its side) and the main area beside it, each laid out by
+/// frame (`OpenedFrames`). The main area is Home, the Needs you reel or the unreachable notice (`PaneArea`, a hosting
+/// view) under the panes (`PaneDeckView`, AppKit: one reel column per pane). Shown and hidden with `isHidden`; opening
+/// by a click slides the sidebar in from its edge by transform and fades the main area in (0.25 s, ease-out, no bounce;
+/// Reduce Motion: a 0.15 s crossfade), folding the reverse. Expanded, the main area takes the whole window and the
+/// sidebar hides. Show on hover: the sidebar is hidden until the pointer reaches the window's edge on its side, then
+/// slides over the main area (0.2 s) and goes 0.3 s after the pointer leaves it. Nothing is laid out by an animation:
+/// the frames are final from the start, and moving the sidebar to the other side only re-frames the views.
 final class OpenedLayerView: NSView {
+  /// The sidebar's hosting view's identifier (the bench and the tests find it by it).
+  static let sidebarID = DeskLayoutProbe.sidebarID
   private let sidebar: NSHostingView<AnyView>
   private let main = Flipped()
   private let pane: NSHostingView<AnyView>
@@ -67,11 +116,19 @@ final class OpenedLayerView: NSView {
   private let model: DeskModel
   private var open: Bool
   private var expanded = false
-  private var placed: (size: CGSize, expanded: Bool)?
+  private var place: SidebarPlace
+  private var frames: OpenedFrames?
+  private var placed: (size: CGSize, expanded: Bool, side: SidebarSide, hover: Bool)?
   /// Bumped per toggle: a fold's completion doesn't hide a layer that was opened again meanwhile.
   private var serial = 0
+  /// Show on hover: the sidebar is in (the pointer at its edge or over it, or it was just opened or handed the keyboard).
+  private var revealed = false
+  private var revealSerial = 0
+  private var pointer: PointerWatch?
+  private var conceal: DispatchWorkItem?
+  private var reduceMotion = false
 
-  init(model: DeskModel, openSettings: @escaping () -> Void, threadHost: ThreadHostBox?, open: Bool) {
+  init(model: DeskModel, openSettings: @escaping () -> Void, threadHost: ThreadHostBox?, open: Bool, place: SidebarPlace) {
     func root<V: View>(_ v: V) -> AnyView {
       AnyView(v.environment(model).environment(\.threadHost, threadHost ?? ThreadHostBox(host: model))
         .environment(\.deskOpenSettings, DeskSettingsOpener(open: openSettings)).preferredColorScheme(.dark))
@@ -81,14 +138,18 @@ final class OpenedLayerView: NSView {
     deck = PaneDeckView(model: model)
     self.model = model
     self.open = open
+    self.place = place
+    revealed = open
     super.init(frame: .zero)
     wantsLayer = true
     main.wantsLayer = true
+    main.layer?.backgroundColor = NSColor(Theme.Desk.ground).cgColor
     for h in [pane, sidebar] {
       h.safeAreaRegions = []
       h.sizingOptions = []
       h.wantsLayer = true
     }
+    sidebar.identifier = NSUserInterfaceItemIdentifier(Self.sidebarID)
     main.addSubview(pane)
     main.addSubview(deck)
     addSubview(main)
@@ -98,16 +159,49 @@ final class OpenedLayerView: NSView {
   required init?(coder: NSCoder) { fatalError() }
   override var isFlipped: Bool { true }
 
+  /// The sidebar shows: always, or (Show on hover) while revealed; never while a pane is expanded.
+  private var sidebarShows: Bool { !expanded && (!place.hover || revealed) }
+
   override func layout() {
     super.layout()
-    guard placed.map({ $0.size != bounds.size || $0.expanded != expanded }) ?? true else { return }
-    placed = (bounds.size, expanded)
-    let w = SidebarMetrics.width
-    sidebar.frame = CGRect(x: 0, y: 0, width: w, height: bounds.height)
-    sidebar.isHidden = expanded
-    main.frame = expanded ? bounds : CGRect(x: w, y: 0, width: max(0, bounds.width - w), height: bounds.height)
-    pane.frame = main.bounds
-    deck.frame = main.bounds
+    let key = (bounds.size, expanded, place.side, place.hover)
+    guard placed.map({ $0.size != key.0 || $0.expanded != key.1 || $0.side != key.2 || $0.hover != key.3 }) ?? true else { return }
+    placed = key
+    let f = OpenedFrames.make(size: bounds.size, side: place.side, hover: place.hover, expanded: expanded)
+    frames = f
+    sidebar.frame = f.sidebar
+    if sidebar.isHidden == sidebarShows { sidebar.isHidden = !sidebarShows }
+    // The main area's column runs from the window's top, so the traffic lights' band over the pane (Sidebar right, Show
+    // on hover) is the window's ground, not the tab bar under the layer; its views start under the band.
+    main.frame = CGRect(x: f.main.minX, y: 0, width: f.main.width, height: bounds.height)
+    let inner = CGRect(x: 0, y: f.main.minY, width: f.main.width, height: f.main.height)
+    pane.frame = inner
+    deck.insets = f.paneInsets
+    deck.frame = inner
+    // Floating over the pane (Show on hover), the sidebar casts a shadow on it.
+    if let l = sidebar.layer {
+      l.masksToBounds = false
+      l.shadowOpacity = f.floating ? 0.45 : 0
+      l.shadowRadius = 18
+      l.shadowOffset = .zero
+      l.shadowColor = NSColor.black.cgColor
+      l.shadowPath = f.floating ? CGPath(rect: CGRect(origin: .zero, size: f.sidebar.size), transform: nil) : nil
+    }
+  }
+
+  /// The sidebar's side and Show on hover. A change re-frames the views at once (nothing is rebuilt); turning Show on
+  /// hover on leaves the sidebar in until the pointer leaves it.
+  func set(place p: SidebarPlace, reduceMotion r: Bool) {
+    reduceMotion = r
+    guard p != place else { return }
+    let old = place
+    place = p
+    if p.side != old.side || p.hover != old.hover {
+      if p.hover != old.hover { revealed = open }
+      watchPointer()
+      needsLayout = true
+    }
+    if p.peek != old.peek, p.hover, open { reveal(animated: false) }
   }
 
   /// The panes: what they show, and whether the focused one has the window. Expanding (or collapsing) lays the window
@@ -120,7 +214,7 @@ final class OpenedLayerView: NSView {
     expanded = d.expanded
     needsLayout = true
     layoutSubtreeIfNeeded()
-    if !expanded, animated {
+    if !expanded, animated, sidebarShows {
       sidebar.layer?.add(Self.anim("opacity", from: 0, to: 1, duration: reduceMotion ? 0.15 : 0.2), forKey: "fade")
     }
     moveKeyboard(had: had)
@@ -146,6 +240,10 @@ final class OpenedLayerView: NSView {
     open = o
     serial += 1
     let s = serial
+    // Opened with Show on hover, the sidebar comes in (it goes once the pointer leaves it).
+    if o, place.hover { revealed = true; cancelConceal() }
+    watchPointer()
+    if sidebar.isHidden == sidebarShows { sidebar.isHidden = !sidebarShows }
     sidebar.layer?.removeAllAnimations(); main.layer?.removeAllAnimations(); layer?.removeAllAnimations()
     guard animated else { isHidden = !o; return }
     if o { isHidden = false }
@@ -158,11 +256,90 @@ final class OpenedLayerView: NSView {
     if reduceMotion {
       layer?.add(Self.anim("opacity", from: o ? 0 : 1, to: o ? 1 : 0, duration: 0.15), forKey: "fade")
     } else {
-      let w = Double(SidebarMetrics.width)
-      sidebar.layer?.add(Self.anim("transform.translation.x", from: o ? -w : 0, to: o ? 0 : -w, duration: 0.25), forKey: "slide")
+      let w = Double(SidebarMetrics.width) * (place.side == .left ? -1 : 1)
+      sidebar.layer?.add(Self.anim("transform.translation.x", from: o ? w : 0, to: o ? 0 : w, duration: 0.25), forKey: "slide")
       main.layer?.add(Self.anim("opacity", from: o ? 0 : 1, to: o ? 1 : 0, duration: 0.25), forKey: "fade")
     }
     CATransaction.commit()
+  }
+
+  // MARK: Show on hover
+
+  /// Watches the pointer while it matters: opened, with Show on hover.
+  private func watchPointer() {
+    let want = open && place.hover
+    if want, pointer == nil {
+      let p = PointerWatch { [weak self] e, inside in self?.pointer(e, inside: inside) }
+      pointer = p
+      p.attach(to: self)
+    } else if !want, let p = pointer {
+      p.detach(from: self)
+      pointer = nil
+      cancelConceal()
+    }
+  }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    pointer?.attach(to: self)
+  }
+
+  /// At the window's edge on the sidebar's side, it comes in; anywhere else (or out of the window) it goes, 0.3 s later.
+  private func pointer(_ e: NSEvent, inside: Bool) {
+    guard open, place.hover, !expanded, let f = frames else { return }
+    let p = convert(e.locationInWindow, from: nil)
+    let edge = place.side == .left ? p.x <= TabBarMetrics.hotEdge : p.x >= bounds.width - TabBarMetrics.hotEdge
+    if !revealed {
+      if inside, edge, p.y >= 0, p.y <= bounds.height { reveal(animated: true) }
+    } else if inside, f.sidebar.insetBy(dx: -8, dy: 0).contains(p) || edge {
+      cancelConceal()
+    } else {
+      scheduleConceal()
+    }
+  }
+
+  private func reveal(animated: Bool) {
+    cancelConceal()
+    guard !revealed || sidebar.isHidden else { return }
+    revealed = true
+    revealSerial += 1
+    sidebar.isHidden = !sidebarShows
+    guard animated, !expanded else { sidebar.layer?.removeAnimation(forKey: "hover"); return }
+    sidebar.layer?.add(slideAnimation(in: true), forKey: "hover")
+  }
+
+  private func scheduleConceal() {
+    guard conceal == nil else { return }
+    let w = DispatchWorkItem { [weak self] in self?.concealNow() }
+    conceal = w
+    DispatchQueue.main.asyncAfter(deadline: .now() + TabBarMetrics.concealDelay, execute: w)
+  }
+  private func cancelConceal() { conceal?.cancel(); conceal = nil }
+
+  private func concealNow() {
+    conceal = nil
+    guard revealed, place.hover, open else { return }
+    revealed = false
+    revealSerial += 1
+    let s = revealSerial
+    // The keyboard leaves with it: to the pane, not to nobody.
+    let hadKeyboard = window.flatMap { PaletteFocusReturn.Keeper.owner($0.firstResponder) }?.isDescendant(of: sidebar) == true
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { [weak self] in
+      guard let self, self.revealSerial == s else { return }
+      self.sidebar.layer?.removeAnimation(forKey: "hover")
+      self.sidebar.isHidden = !self.sidebarShows
+      if hadKeyboard { _ = self.deck.focusedPane?.takeKeyboard() }
+    }
+    sidebar.layer?.add(slideAnimation(in: false), forKey: "hover")
+    CATransaction.commit()
+  }
+
+  /// The sidebar sliding in from its edge or out to it (0.2 s, ease-out; Reduce Motion: a fade), held at its end.
+  private func slideAnimation(in coming: Bool) -> CABasicAnimation {
+    if reduceMotion { return Self.anim("opacity", from: coming ? 0 : 1, to: coming ? 1 : 0, duration: 0.15, hold: !coming) }
+    let w = Double(SidebarMetrics.width) * (place.side == .left ? -1 : 1)
+    return Self.anim("transform.translation.x", from: coming ? w : 0, to: coming ? 0 : w, duration: 0.2, hold: !coming)
   }
 
   /// Transform or opacity only, ease-out, held at its end until the completion block tidies up.
@@ -175,6 +352,25 @@ final class OpenedLayerView: NSView {
   }
 
   final class Flipped: NSView { override var isFlipped: Bool { true } }
+
+  /// The pointer over the opened layer, for Show on hover: a tracking area of its own (moves, enter and exit), so the
+  /// views under the pointer keep their clicks and their own hover.
+  final class PointerWatch: NSResponder {
+    private let handle: (NSEvent, Bool) -> Void
+    private var area: NSTrackingArea?
+    init(_ handle: @escaping (NSEvent, Bool) -> Void) { self.handle = handle; super.init() }
+    required init?(coder: NSCoder) { fatalError() }
+    func attach(to v: NSView) {
+      if let area { v.removeTrackingArea(area) }
+      let a = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+      v.addTrackingArea(a)
+      area = a
+    }
+    func detach(from v: NSView) { if let area { v.removeTrackingArea(area) }; area = nil }
+    override func mouseMoved(with e: NSEvent) { handle(e, true) }
+    override func mouseEntered(with e: NSEvent) { handle(e, true) }
+    override func mouseExited(with e: NSEvent) { handle(e, false) }
+  }
 }
 
 /// What the panes show: the open run, its panes, whether they have the main area (not Home, not the Needs you reel),
@@ -204,6 +400,10 @@ final class PaneDeckView: NSView {
   private var pool: [Slot] = []
   private var input = PaneDeckInput()
   private var placed: (size: CGSize, input: PaneDeckInput)?
+  /// The panes' margins from the left and right (the sidebar's side has none: `OpenedFrames`).
+  var insets: (left: CGFloat, right: CGFloat) = (0, PaneMetrics.inset) {
+    didSet { if insets != oldValue { placed = nil; needsLayout = true } }
+  }
   /// The expand or collapse a click asked to animate, run once the frames are final.
   private var pendingMotion: (expanding: Bool, reduceMotion: Bool)?
 
@@ -290,7 +490,7 @@ final class PaneDeckView: NSView {
       if f.view.frame != bounds { f.view.frame = bounds }
     } else {
       let m = PaneMetrics.inset
-      let area = CGRect(x: 0, y: m, width: max(0, bounds.width - m), height: max(0, bounds.height - 2 * m))
+      let area = CGRect(x: insets.left, y: m, width: max(0, bounds.width - insets.left - insets.right), height: max(0, bounds.height - 2 * m))
       let frames = input.layout.frames(in: area, gap: PaneMetrics.gap)
       for s in slots {
         if s.view.isHidden { s.view.isHidden = false }
@@ -452,7 +652,7 @@ struct PaneControls: View {
   var body: some View {
     HStack(spacing: 0) {
       if pane?.expanded == true {
-        NeedsHand(style: .header)
+        NeedsHand()
       } else {
         PaneSplitSlot(agentId: slice.id)
         if pane?.focused ?? true { PaneMore(slice: slice) }

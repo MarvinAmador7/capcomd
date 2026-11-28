@@ -444,7 +444,7 @@ public enum SearchCommands {
       if c.panes > 1 { add("close-split", "Close this split", "xmark", .shortcut("⌘W"), .closeSplit) }
       add("expand", "Expand the pane", "arrow.up.left.and.arrow.down.right", .shortcut("⇧⌘↩"), .expand(true))
     }
-    add("sidebar", c.sidebarOpen && !c.expanded ? "Fold the sidebar" : "Show the sidebar", "sidebar.left", .shortcut("⌃⌘S"), .sidebar(!c.sidebarOpen || c.expanded))
+    add("sidebar", c.sidebarOpen && !c.expanded ? "Show tabs" : "Show the sidebar", "sidebar.left", .shortcut("⌃⌘S"), .sidebar(!c.sidebarOpen || c.expanded))
     add("home", "Home", "house", .shortcut("⌘0"), .home, common: !c.homeShown)
     add("follow", c.follow ? "Turn Follow off" : "Turn Follow on", "eye", .shortcut("⇧⌘F"), .follow(!c.follow))
     add("settings", "Settings", "gearshape", .shortcut("⌘,"), .settings, common: true)

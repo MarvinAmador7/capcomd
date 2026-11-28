@@ -34,9 +34,17 @@ struct DeskOverlays: View {
         }
         if model.menuOpen, let menu = model.projectMenu {
           let r = group.map { g[$0] } ?? CGRect(x: 0, y: -8, width: 0, height: 0)
-          ProjectMenuView(menu: menu)
-            .offset(x: max(8, r.minX), y: max(4, r.maxY + 6))
-            .transition(Self.drop(reduceMotion))
+          if model.nav.tabsEdge == .below {
+            // The tab bar below: the menu rises from the project's group instead of dropping.
+            ProjectMenuView(menu: menu)
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+              .padding(.leading, max(8, r.minX)).padding(.bottom, max(4, g.size.height - r.minY + 6))
+              .transition(Self.drop(reduceMotion))
+          } else {
+            ProjectMenuView(menu: menu)
+              .offset(x: max(8, r.minX), y: max(4, r.maxY + 6))
+              .transition(Self.drop(reduceMotion))
+          }
         }
         // Search ⌘K: in the window (SearchView), or its own panel over it (SearchPanel.swift; knob search.host).
         if DeskKnobs.searchHost.value == .panel {

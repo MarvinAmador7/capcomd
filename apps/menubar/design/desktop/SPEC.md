@@ -42,16 +42,34 @@ PR is called done, and put the numbers in the PR. The bench (`apps/menubar/app/D
 
 # 2. Structure
 
-One window, folded (the default) or opened (§2.1). Folded, it has three parts: the rail, the title bar and the reel.
+One window, in one of four **layouts** (owner, 2026-11-27; the Settings board's Interface › Layout tiles, as Rex's
+"Toolbar layout"): **Tabs above** (the default), **Sidebar left**, **Sidebar right**, **Tabs below**. Tabs and the
+sidebar are never shown together. A tabs layout is "folded": the tab bar and the reel; a sidebar layout is "opened"
+(§2.1). ⌃⌘S (⌘\ too, the sidebar button, View › Toggle Sidebar) switches between tabs and the sidebar, keeping the
+side and the edge chosen last; View › Layout picks any of the four. Kept across launches (`desk.layout`, with the side
+and edge ⌃⌘S goes back to); the old Reel / Sidebar choice became Tabs above / Sidebar left. Switching rebuilds nothing:
+the reel, the panes and their splits, the selected agent and the reel's place stay as they were.
 
-- **Rail** (C folded: `leftnav/NavC`, `rex/RexStates` "Folded"; 60 pt wide, under the title bar): the **Needs you** hand
-  (SF `hand.raised`; the normal icon colour with an amber count badge while anything needs you, grey with none at
-  zero; a click opens the Needs you reel, §2.1), **Home** (the prototype's house; pressed while Home shows; ⌘0), **Team**
-  (opens the sidebar on Team, §2.2; disabled on a daemon without `profiles`) and **History** (no screen yet: shown,
-  disabled), and **Settings** at its foot (the app's Settings window). 34 pt buttons, 9 pt corners, 6 pt apart.
-- **Title bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content): traffic lights, then the **sidebar button**
-  (SF `sidebar.left`, 30 pt, at x 84 pt: where the opened sidebar has it too, so it never moves; ⌃⌘S), then the **projects**, then on the right **Follow**, **Actions ⌘K**, **+**. Boards:
-  `ReelStack`, `ReelTabs`, `Home`, `rex/RexStates`. (Home moved to the rail.)
+- **Behavior** (Settings › Interface › Layout's row, View › Layout): Sidebar behavior and Tab bar behavior, each
+  **Always show** (the default) or **Show on hover**. Show on hover: the sidebar is out of the window (the pane has
+  the width, under the traffic lights' band) until the pointer reaches the window's edge on its side (6 pt), then it
+  slides over the pane (0.2 s, ease-out; Reduce Motion: a fade) with a shadow, and goes 0.3 s after the pointer leaves
+  it; opening the sidebar (⌃⌘S, Team) shows it too. The tab bar is out of the window until the pointer is in the band
+  (above) or the window's bottom 6 pt (below), and goes 0.3 s after it leaves (not while the project menu is open);
+  below, the reel then has the window's full height. Under VoiceOver both are always shown.
+- **Tab bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content). Above:
+  in the title bar's band: traffic lights, then the **sidebar button** (SF `sidebar.left`, or `sidebar.right` when the
+  sidebar goes right; 30 pt, at x 84 pt: where the opened left sidebar has it too; ⌃⌘S), then the **projects**, then
+  on the right **Follow** and the **places**. Below: the same bar along the window's bottom (the sidebar button at
+  10 pt), the reel above it and the band empty but for the traffic lights. Boards: `ReelStack`, `ReelTabs`, `Home`,
+  `rex/RexStates`, the Settings board's tiles.
+  - The **places** (the folded rail's buttons until 2026-11-27: the rail is gone) are compact icon buttons at the bar's
+    trailing end, the sidebar's own (28 pt, 7 pt corners, 2 pt apart): the **Needs you** hand (SF `hand.raised`; the
+    normal icon colour with the amber count beside it while anything needs you, grey with none at zero; opens the
+    Needs you reel, §2.1), **Home** (the prototype's house; pressed while Home shows; ⌘0), **Team** (opens the sidebar
+    on Team, §2.2, and closing Team goes back to the tabs; disabled on a daemon without `profiles`), **History** (no
+    screen yet: shown, disabled), **Settings** (the app's Settings window), **Search** (⌘K) and **+** (⇧⌘N). Each keeps
+    its tooltip and shortcut.
   - The **open project** is one group: Local/Cloud glyph (`laptopcomputer` / `cloud`), name (no clock or
     status line), then its crew tabs in tree order, with a bracket around the tabs whose columns are on screen. A tab
     is the agent's bot and its title (`Agent.title`, capability `agents.title`; 1–4 lowercase words the agent, its
@@ -168,8 +186,8 @@ One window, folded (the default) or opened (§2.1). Folded, it has three parts: 
     shows (`HomeSlice`).
 - **Needs you reel** (`rex/RexNeedsReel.dc.html`; RexStates' "Needs you reel"; RexNotes' "The Needs you hand"). One
   place to answer every agent that waits on you, across all projects. The Needs you hand (SF `hand.raised`; the amber
-  count beside it while anything asks, grey with no count at zero; on the rail while folded, in the sidebar's header
-  while opened) and the sidebar's "Needs you" heading open it, and View › Needs You. It takes the main area (opened:
+  count beside it while anything asks, grey with no count at zero; at the tab bar's trailing end with tabs, in the
+  sidebar's header with the sidebar) and the sidebar's "Needs you" heading open it, and View › Needs You. It takes the main area (opened:
   the pane's place; a row then opens just that agent and the reel closes) (the project reel stays built, hidden, underneath; Home, if it showed, goes and comes back on Back).
   - One column per asking agent, oldest first (when it asked, then the daemon's order): every undecided approval's
     waiting agent (a merge's asker; its oldest approval), and one per run a usage limit paused (its first paused agent).
@@ -206,8 +224,11 @@ One window, folded (the default) or opened (§2.1). Folded, it has three parts: 
 
 Boards: `rex/RexMain` (the window), `rex/RexStates` (every state), `rex/AttentionIcon` (the hand), `rex/RexNotes` (the
 decisions; its open choices took the proposed options). ⌃⌘S (⌘\ too), the sidebar button or View › Toggle Sidebar
-opens and folds it; the state is kept across launches. Opened, the title bar goes (its decks and crew tabs with it):
-the window is the sidebar and one agent's pane, on the reel's dark ground (#0E0E10 window, #151518 pane).
+switches to it from the tabs and back (§2); the layout is kept across launches. Opened, the tab bar goes (its decks and
+crew tabs with it): the window is the sidebar and one agent's pane, on the reel's dark ground (#0E0E10 window, #151518
+pane). **Sidebar right** mirrors it: the sidebar along the window's right edge (its header: the hand, Search, +, then
+the sidebar button at its trailing end), the traffic lights still at the window's top left, so the pane starts under
+their band (52 pt from the top) and is 8 pt from the window's left, top and bottom.
 
 - **Sidebar** (248 pt, 8 pt sides): the header (52 pt): the traffic lights' room, the sidebar button (pressed), then
   the **Needs you** hand (normal colour with the amber count beside it, 12 pt bold; grey and no count at zero; opens the
@@ -285,8 +306,8 @@ driver menu are not), `team/CrewNotes.dc.html` (daemon facts and phasing). Where
 measurement, the boards win. Labels and values only: no sentence explains anything.
 
 - **The Team button**: in the opened sidebar's foot (Home on the left; Team, History, Settings on the right; SF
-  `person.2`, 28 pt) and on the folded rail (34 pt), where it opens the sidebar first. Pressed while Team shows; again,
-  Team closes (back to the open project's panes, else Home). Home (⌘0, +), the Needs you hand, a project (a deck,
+  `person.2`, 28 pt) and at the tab bar's trailing end, where it switches to the sidebar first. Pressed while Team
+  shows; again, Team closes (back to the open project's panes, else Home; opened from the tabs, back to the tabs). Home (⌘0, +), the Needs you hand, a project (a deck,
   ⌘1–9, Search ⌘K) and folding the sidebar leave it. Disabled on a daemon without capability `profiles`.
 - **The roster** (CrewProfile's `.sb`), in the agents' list's place: one quiet project label per project the app knows
   (`GET /v1/projects/known`; the agents sidebar's 24 pt label, folder glyph, 2 pt above the first and 14 pt above the
@@ -353,7 +374,7 @@ only when the focused column would leave the window, 180 ms ease-out; opened wit
 expand the focused pane (opened; Esc back) · ⌘D / ⇧⌘D split right / down (opened) · ⌘K search · ⇧⌘N Home with the
 composer focused · ⌘L message the planner · ⌥⌘P pause / resume the project · ⌘W fold the project into the title bar (a
 finished one: remove it; Home: back to the open project; opened with splits: close the focused pane; the window's own
-Close is replaced) · ⇧⌘F Follow · ⌃⌘S (and ⌘\) fold or open the sidebar · ⌘J the next agent that needs you, one at a time (Next Ask). ⌘T (Trace) is bound once the desktop has a trace
+Close is replaced) · ⇧⌘F Follow · ⌃⌘S (and ⌘\) switch between tabs and the sidebar, on the side or edge chosen last · ⌘J the next agent that needs you, one at a time (Next Ask). ⌘T (Trace) is bound once the desktop has a trace
 view. Each is in the app's menus (File, Project, View, Go). Return approves while an ask has focus and nothing else takes
 Return: never while a text field has the keyboard (a column's message box, a rename field, the new project column's
 composer, Search ⌘K), nor while the menu or the Stop question is up; on Home it approves only the focused card's ask.

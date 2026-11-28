@@ -34,7 +34,7 @@ public enum Guards {
   /// not `typing` (the caret, the field editor). Their threads rest where they rest: a look that differs only in a
   /// thread is the owner's to read (DESKBENCH.md, Snapshots).
   static let snapshotScenarios: Set<String> = ["open", "switch", "step", "jump", "fling", "swipe", "follow", "resize",
-                                                "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe", "sidebar-toggle", "sidebar-select",
+                                                "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe", "sidebar-toggle", "sidebar-select", "layout-switch",
                                                 "palette-first", "palette-open", "palette-type", "palette-keys", "split-open", "split-focus", "pane-expand", "expand-switch",
                                                 "team-open", "team-switch", "team-settings", "settings-open", "settings-switch-page"]
 

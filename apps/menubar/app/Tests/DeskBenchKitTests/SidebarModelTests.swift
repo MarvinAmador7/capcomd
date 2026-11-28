@@ -207,11 +207,11 @@ final class SidebarModelTests: XCTestCase {
     let (m, _, _) = model(defaults: d)
     XCTAssertFalse(m.nav.sidebarOpen)
     m.toggleSidebar()
-    XCTAssertTrue(d.bool(forKey: DeskNav.key))
+    XCTAssertEqual(d.string(forKey: DeskLayoutPrefs.layoutKey), "sidebarLeft")
     let (again, _, _) = model(defaults: d)
     XCTAssertTrue(again.nav.sidebarOpen)
     again.toggleSidebar()
-    XCTAssertFalse(d.bool(forKey: DeskNav.key))
+    XCTAssertEqual(d.string(forKey: DeskLayoutPrefs.layoutKey), "tabsAbove")
   }
 
   /// A finished run's project goes under Finished, its agents grey; a failure there doesn't need you.

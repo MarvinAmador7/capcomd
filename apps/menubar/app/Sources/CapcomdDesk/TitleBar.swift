@@ -4,15 +4,18 @@ import CapcomdStore
 import CapcomdBot
 import CapcomdUI
 
-/// The title bar (ReelStack, ReelTabs, Home): Home, then the open project as one group with its crew tabs, every other
-/// project folded into a deck, and on the right Follow, Actions (⌘K) and + (Home with the composer focused). While Home
-/// shows every project is a deck and Home stays pressed. Each piece reads only its own slice.
+/// The tab bar (ReelStack, ReelTabs, Home; the Settings board's Layout tiles): the sidebar button, then the open project
+/// as one group with its crew tabs, every other project folded into a deck, and on the right Follow and the places (the
+/// Needs you hand, Home, Team, History, Settings, Search ⌘K and +: `TabBarPlaces`). While Home shows every project is a
+/// deck and Home stays pressed. Above, it sits in the title bar's band beside the traffic lights; below, along the
+/// window's bottom. Each piece reads only its own slice.
 struct TitleBar: View {
   @Environment(DeskModel.self) private var model
+  let edge: TabsEdge
   var body: some View {
     DeskProbe.body("TitleBar")
     return HStack(spacing: 8) {
-      // Home moved to the rail (C folded); the sidebar button takes its place, where the opened sidebar has it too.
+      // The sidebar button: where the opened left sidebar has it too (above).
       SidebarToggleButton(on: false)
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 8) {
@@ -26,10 +29,9 @@ struct TitleBar: View {
       Spacer(minLength: 0)
       OfflineBadge()
       FollowButton()
-      ActionsButton()
-      NewProjectButton()
+      TabBarPlaces()
     }
-    .padding(.leading, Theme.Desk.titleLeading).padding(.trailing, 10)
+    .padding(.leading, edge == .above ? Theme.Desk.titleLeading : 10).padding(.trailing, 10)
     .frame(height: Theme.Desk.titleBar)
   }
 }
@@ -241,58 +243,6 @@ struct FollowButton: View {
     .foregroundStyle(model.follow ? Color(red: 0x6C / 255, green: 0xB4 / 255, blue: 1) : Theme.Desk.tertiary)
     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(model.follow ? Theme.accent.opacity(0.16) : .clear))
     .help("Follow: an ask or a failure scrolls the reel to it (⇧⌘F)")
-  }
-}
-
-/// Actions (⌘K): the palette.
-struct ActionsButton: View {
-  @Environment(DeskModel.self) private var model
-  var body: some View {
-    Button { model.togglePalette() } label: {
-      Image(systemName: "command").font(.system(size: 13, weight: .regular))
-        .foregroundStyle(model.paletteOpen ? Theme.Desk.text : Theme.Desk.tertiary)
-        .frame(width: Theme.Desk.iconButton, height: Theme.Desk.iconButton)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(model.paletteOpen ? Color.white.opacity(0.10) : .clear))
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(PressableStyle())
-    .help("Actions (⌘K)")
-    .accessibilityLabel("Actions")
-  }
-}
-
-/// + (⇧⌘N): Home, with the composer focused.
-struct NewProjectButton: View {
-  @Environment(DeskModel.self) private var model
-  var body: some View {
-    Button { model.openNewProject() } label: {
-      Image(systemName: "plus").font(.system(size: 13, weight: .regular))
-        .foregroundStyle(Theme.Desk.tertiary)
-        .frame(width: Theme.Desk.iconButton, height: Theme.Desk.iconButton)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(PressableStyle())
-    .help("New project (⇧⌘N)")
-    .accessibilityLabel("New project")
-  }
-}
-
-/// Home (⌘0), before the projects: pressed while Home shows; pressed again, back to the open project.
-struct HomeButton: View {
-  @Environment(DeskModel.self) private var model
-  var body: some View {
-    let on = model.homeShown
-    Button { model.toggleHome() } label: {
-      HouseGlyph().stroke(style: StrokeStyle(lineWidth: 1.3, lineJoin: .round))
-        .frame(width: 15, height: 15)
-        .foregroundStyle(on ? Theme.Desk.text : Theme.Desk.tertiary)
-        .frame(width: Theme.Desk.iconButton, height: Theme.Desk.iconButton)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Color.white.opacity(0.10) : .clear))
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(PressableStyle())
-    .help("Home (⌘0)")
-    .accessibilityLabel("Home").accessibilityAddTraits(on ? .isSelected : [])
   }
 }
 

@@ -44,6 +44,18 @@ import PerfLoopProbe
     store = CapcomdStore(daemonInfo: teamDaemon, thread: thread, clientId: "deskbench")
     w.load(into: store)
     model = DeskModel(store: store)
+    // `--set layout=sidebarRight` (tabsAbove, the default, sidebarLeft, sidebarRight, tabsBelow): every scenario in that
+    // layout; `sidebarBehavior=hover`, `tabsBehavior=hover` likewise. A scenario that folds or opens the sidebar does so
+    // on that side or edge.
+    if let l = run.param("layout") {
+      guard let layout = DeskLayout(rawValue: l) else { throw DeskError("layout=\(l): not one of \(DeskLayout.allCases.map(\.rawValue).joined(separator: ", "))") }
+      model.setLayout(layout)
+    }
+    for (key, set) in [("sidebarBehavior", model.setSidebarBehavior), ("tabsBehavior", model.setTabsBehavior)] {
+      guard let v = run.param(key) else { continue }
+      guard let b = ChromeBehavior(rawValue: v) else { throw DeskError("\(key)=\(v): always or hover") }
+      set(b)
+    }
     DeskProbe.sink = self
     Desk.current = self
     run.atClose { DeskProbe.sink = nil; Desk.current = nil }
@@ -229,15 +241,21 @@ import PerfLoopProbe
     return best
   }
 
-  /// The sidebar's list: the vertical scroll view in the window's left 248 pt.
+  /// The sidebar's list: the vertical scroll view in the window's left (or, Sidebar right, right) 248 pt.
   func sidebarScrollView(scrollable: Bool = true) -> NSScrollView? {
     var best: NSScrollView?
+    let W = content.bounds.width
     walk(content) { v in
       guard let s = v as? NSScrollView, let d = s.documentView, !scrollable || d.frame.height > s.bounds.height, !s.isHiddenOrHasHiddenAncestor else { return }
       let r = s.convert(s.bounds, to: nil)
-      if r.minX < 20, r.maxX <= 250, r.width > 150 { best = s }
+      if r.width > 150, (r.minX < 20 && r.maxX <= 250) || (r.minX >= W - 250 && r.maxX > W - 20) { best = s }
     }
     return best
+  }
+
+  /// The x of a point inside the sidebar (`x` from its left edge), on whichever side it is.
+  func sidebarX(_ x: CGFloat) -> CGFloat {
+    model.nav.sidebarSide == .right ? content.bounds.width - DeskLayoutProbe.sidebarWidth + x : x
   }
 
   // MARK: ink regions (the main view of each scenario; PerfLoopHost's ink guard and the snapshots' regions)

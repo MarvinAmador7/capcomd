@@ -162,11 +162,32 @@ package final class SettingsModel {
 
   // MARK: Interface
 
-  /// Layout: the sidebar (opened) or the reel (folded), the value ⌃⌘S stores.
-  package var sidebarLayout: Bool {
-    get { _ = revision; return desk?.nav.sidebarOpen ?? UserDefaults.standard.bool(forKey: "desk.sidebarOpen") }
+  /// Layout: tabs above or below, the sidebar left or right (DeskLayout.swift). The open window's, else the stored one.
+  package var deskLayout: DeskLayout {
+    get { _ = revision; return desk?.layout ?? DeskLayoutPrefs.read(.standard).layout }
     set {
-      if let desk { desk.setSidebar(open: newValue) } else { UserDefaults.standard.set(newValue, forKey: "desk.sidebarOpen") }
+      if let desk { desk.setLayout(newValue) } else { var p = DeskLayoutPrefs.read(.standard); p.choose(newValue); p.write(.standard) }
+      bump()
+    }
+  }
+  /// The behavior row under the tiles: Sidebar behavior with a sidebar layout, the tab bar's with a tabs layout.
+  package var layoutBehavior: ChromeBehavior {
+    get {
+      _ = revision
+      let sidebar = deskLayout.isSidebar
+      if let desk { return sidebar ? desk.nav.sidebarBehavior : desk.nav.tabsBehavior }
+      let p = DeskLayoutPrefs.read(.standard)
+      return sidebar ? p.sidebarBehavior : p.tabsBehavior
+    }
+    set {
+      let sidebar = deskLayout.isSidebar
+      if let desk {
+        if sidebar { desk.setSidebarBehavior(newValue) } else { desk.setTabsBehavior(newValue) }
+      } else {
+        var p = DeskLayoutPrefs.read(.standard)
+        if sidebar { p.sidebarBehavior = newValue } else { p.tabsBehavior = newValue }
+        p.write(.standard)
+      }
       bump()
     }
   }
