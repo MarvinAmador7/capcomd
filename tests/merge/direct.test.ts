@@ -5,6 +5,7 @@ import { directMerge, testHooks } from "../../src/merge/direct";
 import { produceFakeWork } from "../../src/merge/fakework";
 import { taskBranch, taskKey, loadMergeConfig } from "../../src/merge/config";
 import { withTargetLock } from "../../src/merge/lock";
+import { existsSync, readdirSync } from "fs";
 import { join } from "path";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
@@ -120,22 +121,30 @@ describe("direct merge against a local bare repo", () => {
     expect(await r.sha("main")).toBe(before);
   });
 
-  test("hooks run on capcomd's own commits (pre-commit can veto a squash)", async () => {
-    const r = await bareRepo();
-    await produceFakeWork(r.cfg, { ...req("run8", "t"), epoch: 1 });
-    process.env.GIT_CONFIG_COUNT = "1";
-    process.env.GIT_CONFIG_KEY_0 = "core.hooksPath";
-    const hooks = join(r.root, "hooks");
-    await Bun.write(join(hooks, "pre-commit"), "#!/bin/sh\necho vetoed by hook >&2\nexit 1\n");
-    Bun.spawnSync(["chmod", "+x", join(hooks, "pre-commit")]);
-    process.env.GIT_CONFIG_VALUE_0 = hooks;
-    try {
-      await expect(mergeTask(req("run8", "t"), r.cfg)).rejects.toThrow(/vetoed by hook/);
-    } finally {
-      delete process.env.GIT_CONFIG_COUNT; delete process.env.GIT_CONFIG_KEY_0; delete process.env.GIT_CONFIG_VALUE_0;
+  test("no hook runs on capcomd's own commits and pushes, not even the user's own (core.hooksPath)", async () => {
+    // The commits a merge integrates are an agent's: a hook of the user's (a global core.hooksPath) would run against
+    // them on this host (src/merge/host-git.ts HOST_POLICY), so none runs. Each one here would leave a marker, and
+    // pre-commit and pre-push would veto.
+    for (const strategy of ["squash", "rebase", "merge"] as const) {
+      const r = await bareRepo({ strategy });
+      await produceFakeWork(r.cfg, { ...req("run8", "t"), epoch: 1 });
+      await r.pushToMain("moved.txt", "m\n");
+      const hooks = join(r.root, "hooks"), marks = join(r.root, "marks");
+      const names = ["pre-commit", "commit-msg", "prepare-commit-msg", "post-commit", "post-checkout", "post-merge", "post-rewrite", "pre-rebase", "pre-push", "reference-transaction", "pre-auto-gc"];
+      for (const h of names) {
+        await Bun.write(join(hooks, h), `#!/bin/sh\nmkdir -p '${marks}' && touch '${marks}/${h}'\nexit 1\n`);
+        Bun.spawnSync(["chmod", "+x", join(hooks, h)]);
+      }
+      Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: hooks });
+      try {
+        expect((await mergeTask(req("run8", "t"), r.cfg)).status).toBe("merged");
+      } finally {
+        for (const k of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) delete process.env[k];
+      }
+      expect(await r.show("main", "tasks/t.md")).toContain("run run8");
+      expect(existsSync(marks) ? readdirSync(marks) : []).toEqual([]);
     }
-    expect(await r.landings(taskKey("run8", "t"))).toBe(0);
-  });
+  }, 60_000);
 });
 
 describe("merge after a verify: the fast path", () => {

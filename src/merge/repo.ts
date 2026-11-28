@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
 import { createHash } from "crypto";
-import { Git } from "./git";
-import { hostRepoProblems, initHostRepo, isHostRepo, lsRemote, remoteGit } from "./host-git";
+import type { Git } from "./git";
+import { hostGit, hostRepoProblems, initHostRepo, isHostRepo, lsRemote, remoteGit } from "./host-git";
 import type { MergeConfig } from "./config";
 import { withTargetLock } from "./lock";
 
@@ -28,7 +28,7 @@ export async function openClone(cfg: MergeConfig, name: string, o: { fetch?: boo
   return withCloneLock(cfg, name, async () => {
     const dir = cloneDir(cfg, name);
     // Without a fetch (the caller knows the refs it needs are current, and a push's lease checks it): only clean up.
-    if (o.fetch === false && existsSync(join(dir, ".git")) && isHostRepo(dir)) { const git = new Git(dir); await clean(git, dir); return git; }
+    if (o.fetch === false && existsSync(join(dir, ".git")) && isHostRepo(dir)) { const git = hostGit(dir); await clean(git, dir); return git; }
     return fetchClone(cfg, name, true);
   });
 }
@@ -52,7 +52,7 @@ async function fetchInto(cfg: MergeConfig, dir: string, cleanMain: boolean): Pro
       const git = await initHostRepo(dir);
       await git.ok(["remote", "add", "origin", cfg.remote]);
     }
-    const git = new Git(dir);
+    const git = hostGit(dir);
     try {
       if (cleanMain) await clean(git, dir);
       const f = await remoteGit(git, ["fetch", "-q", "--prune", cfg.remote, "+refs/heads/*:refs/remotes/origin/*"], cfg.remote);
@@ -83,8 +83,8 @@ export async function withWorktree<T>(cfg: MergeConfig, name: string, ref: strin
   const opened = await withCloneLock(cfg, name, async () => {
     // Verifies that queued behind another's fetch share it: it completed after they asked (so the target is as recent as
     // a fetch of their own would have seen it to within that fetch), and it has the commit they are about to check.
-    const shared = (fetchedAt.get(dir) ?? 0) >= asked && o.has && existsSync(join(dir, ".git")) && (await new Git(dir).revParse(o.has.ref)) === o.has.sha;
-    let main = shared ? new Git(dir) : await fetchClone(cfg, name, false);
+    const shared = (fetchedAt.get(dir) ?? 0) >= asked && o.has && existsSync(join(dir, ".git")) && (await hostGit(dir).revParse(o.has.ref)) === o.has.sha;
+    let main = shared ? hostGit(dir) : await fetchClone(cfg, name, false);
     if (!(await main.revParse(ref))) {
       if (!shared) return null;
       main = await fetchClone(cfg, name, false);
@@ -98,7 +98,7 @@ export async function withWorktree<T>(cfg: MergeConfig, name: string, ref: strin
   });
   if (!opened) return null;
   try {
-    return await fn(new Git(path), opened);
+    return await fn(hostGit(path), opened);
   } finally {
     await withCloneLock(cfg, name, async () => {
       await opened.run(["worktree", "remove", "--force", path]);
@@ -170,7 +170,7 @@ export async function remoteBranchSha(cfg: MergeConfig, branch: string, timeoutM
  *  when it isn't one capcomd made, or fails the host repo check. */
 async function refsRepo(cfg: MergeConfig): Promise<Git> {
   const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_refs");
-  if (existsSync(join(dir, ".git")) && isHostRepo(dir) && !(await hostRepoProblems(new Git(dir))).length) return new Git(dir);
+  if (existsSync(join(dir, ".git")) && isHostRepo(dir) && !(await hostRepoProblems(hostGit(dir))).length) return hostGit(dir);
   rmSync(dir, { recursive: true, force: true });
   return initHostRepo(dir);
 }

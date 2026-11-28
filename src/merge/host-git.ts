@@ -1,4 +1,4 @@
-// The one way capcomd runs git that talks to a remote (docs/spec/plugin-api.md §11.7). Two rules:
+// The one way capcomd runs git that talks to a remote (docs/spec/plugin-api.md §11.7). Three rules:
 //
 //  1. Credentials never enter a sandbox. An agent's VM or container is agent-editable (its checkout, its .git/config,
 //     its hooks, its HOME, its PATH, and every process running there, which can read another process's environment),
@@ -9,14 +9,21 @@
 //     remote's URL as capcomd knows it, never a remote name a config could redirect. A host repo that fails the check
 //     (a setting capcomd never writes, a hook that wasn't there at init, alternates) is refused; the callers that own
 //     disposable clones start them over.
+//  3. A sandbox's commits are hostile data (docs/spec/plugin-api.md §11.7 item 5). They reach the host only as a bundle
+//     (receiveBundle: its header and refs checked, `git bundle verify`, its objects through git's object checks into a
+//     quarantine, symlinks into `.git` and `.gitmodules` tricks refused, and only then into the mirror), and every git
+//     command in a host repo runs under HOST_POLICY (hostGit): no hooks, no fsmonitor, no submodules, no symlinks or
+//     `.git` look-alikes written out, no transport for local work, and for local work none of the user's git settings
+//     (their filters, merge and diff drivers, global hooks), only their commit signing and Git LFS ones (an agent's
+//     change to `.lfsconfig` is refused). Git never runs in a directory a sandbox made.
 //
 // `tests/unit/host-git-lint.test.ts` fails when a network git command is spelled anywhere else.
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import type { ForgeRemoteCredential } from "../../packages/plugin/src/seams";
-import { Git, type GitResult, type GitRunOptions } from "./git";
+import { Git, type GitPolicy, type GitResult, type GitRunOptions } from "./git";
 
 /** The git subcommands that talk to a remote. */
 export const NETWORK_OPS = ["fetch", "push", "ls-remote", "clone", "pull"] as const;
@@ -28,6 +35,94 @@ const ALLOWED_PROTOCOLS = "file:git:http:https:ssh";
 const MARKER = "capcomd-host-repo.json";
 interface Marker { schema: 1; hooks: Record<string, string> }
 
+// ---- the policy every host repo's git runs under ---------------------------------------------------------------------
+
+/**
+ * `-c` settings for every git command in a host repo (they beat every config file and GIT_CONFIG_COUNT). A host repo
+ * holds commits a sandbox made, so nothing git can run or follow by itself may act on them: no hooks (the user's global
+ * `core.hooksPath` included, so a pre-commit or pre-push hook never runs the sandbox's code), no fsmonitor, no
+ * submodules, symlinks written as plain files and no `.git` look-alike written out (CVE-2024-32002 and the like), no
+ * transport (a network command's GIT_ALLOW_PROTOCOL lifts it for the plain protocols). No filter is configured here: local
+ * work reads no config of the user's but what userArgs passes back (Git LFS among it).
+ */
+const POLICY_CONFIG: ReadonlyArray<readonly [string, string]> = [
+  ["core.hooksPath", "/dev/null"],
+  ["core.fsmonitor", "false"],
+  ["submodule.recurse", "false"],
+  ["fetch.recurseSubmodules", "false"],
+  ["push.recurseSubmodules", "no"],
+  ["core.symlinks", "false"],
+  ["core.protectHFS", "true"],
+  ["core.protectNTFS", "true"],
+  ["protocol.allow", "never"],
+];
+const POLICY_ARGS = POLICY_CONFIG.flatMap(([k, v]) => ["-c", `${k}=${v}`]);
+
+/** Variables that point git at another repository, object store, index or template: never inherited by a host repo's git. */
+const REPO_VARS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_QUARANTINE_PATH", "GIT_TEMPLATE_DIR", "GIT_EXTERNAL_DIFF"];
+/** And for local work, the user's own settings: their config files and any passed in the environment. */
+const CONFIG_VARS = ["GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"];
+
+/**
+ * The only settings of the user's (system, global, environment) that local work keeps, as `-c` after POLICY_CONFIG:
+ *  - commit signing (`user.signingkey`, `commit.gpgsign`, `gpg.*`): capcomd's own commits are signed as before
+ *    (CAPCOMD_SIGN_COMMITS, or the user's `commit.gpgsign`);
+ *  - Git LFS, when the user has it (`filter.lfs.clean|smudge|process|required`), with what it needs to reach the user's
+ *    LFS server as it would for them: their `lfs.*` (its endpoint among them), `credential.*`, `http.*`, `url.*`,
+ *    `core.sshCommand` and `ssh.*` (git-lfs takes none of the commands among them from `.lfsconfig`). Every other
+ *    filter stays off (git-crypt and the like would hand an agent's checks what they decrypt). git-lfs reads config
+ *    from git (these) before a repository's `.lfsconfig`, and receiveBundle refuses an agent's change to `.lfsconfig`,
+ *    so the endpoint and its credentials are the user's own; an agent's `.gitattributes` can only mark files as LFS
+ *    pointers, fetched from that server.
+ * Read outside any repository once per set of config locations.
+ */
+const USER_KEYS = "^(user\\.signingkey|commit\\.gpgsign|gpg\\..+|filter\\.lfs\\.(clean|smudge|process|required)|lfs\\..+|credential\\..+|http\\..+|url\\..+|core\\.sshcommand|ssh\\..+)$";
+let user: { key: string; args: string[] } | null = null;
+function userArgs(): string[] {
+  const src = process.env;
+  const key = JSON.stringify(Object.keys(src).filter((k) => k === "HOME" || k === "XDG_CONFIG_HOME" || k.startsWith("GIT_CONFIG")).sort().map((k) => [k, src[k]]));
+  if (user?.key === key) return user.args;
+  const cwd = nowhere();
+  let ceiling = dirname(cwd);
+  try { ceiling = realpathSync(ceiling); } catch { /* as given */ }
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(src)) if (v !== undefined && !REPO_VARS.includes(k)) env[k] = v;
+  const r = Bun.spawnSync(["git", "config", "--null", "--get-regexp", USER_KEYS], { cwd, env: { ...env, GIT_CEILING_DIRECTORIES: ceiling }, stdout: "pipe", stderr: "ignore" });
+  const kept: Array<[string, string]> = [];
+  if (r.exitCode === 0) for (const e of r.stdout.toString().split("\0")) {
+    const nl = e.indexOf("\n");
+    if (nl > 0) kept.push([e.slice(0, nl), e.slice(nl + 1)]);
+  }
+  // LFS's company (its endpoint, credentials, http) only with LFS itself.
+  const lfs = kept.some(([k]) => k.startsWith("filter.lfs."));
+  const args = kept.filter(([k]) => lfs || !/^(lfs|credential|http|url|ssh)\.|^core\.sshcommand$/.test(k)).flatMap(([k, v]) => ["-c", `${k}=${v}`]);
+  user = { key, args };
+  return args;
+}
+
+/** How a host repo's git runs (Git's `policy`). */
+export const HOST_POLICY: GitPolicy = {
+  args: (network) => network ? POLICY_ARGS : [...POLICY_ARGS, ...userArgs()],
+  inherit: (env, network) => {
+    const out = { ...env };
+    for (const k of network ? REPO_VARS : [...REPO_VARS, ...CONFIG_VARS]) delete out[k];
+    return out;
+  },
+  // Local work reads no system or global config (GIT_CONFIG_GLOBAL needs git 2.32; POLICY_CONFIG covers the settings
+  // that run things on older ones) but what userArgs keeps, and fetches nothing lazily (git 2.44+).
+  env: (network): Record<string, string> => network ? {} : { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_LAZY_FETCH: "1" },
+};
+
+/** Git in a host repo (or a worktree of one), under HOST_POLICY. */
+export function hostGit(dir: string, extraEnv: Record<string, string> = {}): Git {
+  return new Git(dir, extraEnv, HOST_POLICY);
+}
+
+/** `git` under HOST_POLICY: itself when it is, else the same repository with it. */
+export function asHostGit(git: Git): Git {
+  return git.policy === HOST_POLICY ? git : hostGit(git.cwd, git.extraEnv);
+}
+
 export class HostRepoRefused extends Error {
   constructor(readonly dir: string, readonly why: string[]) {
     super(`capcomd won't run credentialed git in ${dir}: ${why.join("; ")}`);
@@ -36,10 +131,12 @@ export class HostRepoRefused extends Error {
 }
 
 /** The local and worktree settings a host repo may have: what `git init`, `git remote add`, a fetch (a partial one too)
- *  and `git worktree add` write. Anything else (a credential helper, `url.*.insteadOf`, `core.sshCommand`,
+ *  and `git worktree add` write, and the two Git LFS records itself there when the user's LFS filter runs
+ *  (`lfs.repositoryformatversion`, and `lfs.<url>.access`, the auth scheme its server asked for: neither names a command
+ *  or an endpoint). Anything else (a credential helper, `url.*.insteadOf`, `core.sshCommand`,
  *  `core.fsmonitor`, `core.hooksPath`, `include.path`, `http.*`, a remote's `uploadpack`/`receivepack`/`proxy`, …) was put
  *  there by something other than capcomd. */
-const ALLOWED_KEY = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|refstorage|partialclone)|remote\.[^\n]+\.(url|fetch|promisor|partialclonefilter))$/;
+const ALLOWED_KEY = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|refstorage|partialclone)|remote\.[^\n]+\.(url|fetch|promisor|partialclonefilter)|lfs\.repositoryformatversion|lfs\.[^\n]+\.access)$/;
 
 const hooksOf = (gitDir: string): Record<string, string> => {
   const dir = join(gitDir, "hooks");
@@ -70,7 +167,7 @@ async function commonDir(git: Git): Promise<string | null> {
 /** Make `dir` a host repo: `git init` (bare or not) and the marker that records its hooks as git made them. */
 export async function initHostRepo(dir: string, o: { bare?: boolean } = {}): Promise<Git> {
   mkdirSync(dir, { recursive: true });
-  const git = new Git(dir);
+  const git = hostGit(dir);
   await git.ok(["init", "-q", ...(o.bare ? ["--bare"] : [])]);
   const gd = gitDirOf(dir);
   writeFileSync(join(gd, MARKER), JSON.stringify({ schema: 1, hooks: hooksOf(gd) } satisfies Marker));
@@ -83,7 +180,8 @@ export function isHostRepo(dir: string): boolean {
 }
 
 /** Why `git`'s repository can't be trusted with credentials, or [] when it can. */
-export async function hostRepoProblems(git: Git): Promise<string[]> {
+export async function hostRepoProblems(repo: Git): Promise<string[]> {
+  const git = asHostGit(repo);
   const gd = await commonDir(git);
   if (!gd) return ["not a git repository"];
   const why: string[] = [];
@@ -194,10 +292,11 @@ export async function remoteGit(git: Git, args: string[], remote: string, o: Rem
   if (!(NETWORK_OPS as readonly string[]).includes(op) || op === "clone" || op === "pull") throw new Error(`remoteGit runs fetch, push or ls-remote, not ${op}`);
   assertRemoteUrl(remote);
   if (!args.includes(remote)) throw new Error(`remoteGit needs the remote's URL in its arguments (git ${op})`);
-  const why = await hostRepoProblems(git);
+  const host = asHostGit(git);
+  const why = await hostRepoProblems(host);
   if (why.length) throw new HostRepoRefused(git.cwd, why);
   const { indexPack, ...run } = o;
-  return git.run([...(indexPack && op === "fetch" ? ["-c", "fetch.unpackLimit=1"] : []), ...args], { ...run, env: { ...(await hostCredentialEnv(remote)), ...(o.env ?? {}) } });
+  return host.run([...(indexPack && op === "fetch" ? ["-c", "fetch.unpackLimit=1"] : []), ...args], { ...run, network: true, env: { ...(await hostCredentialEnv(remote)), ...(o.env ?? {}) } });
 }
 
 /** A directory in no repository (git finds none above it), where a command that needs no repository runs. */
@@ -213,8 +312,8 @@ export async function lsRemote(remote: string, rest: string[], o: RemoteGitOptio
   const cwd = nowhere();
   let ceiling = dirname(cwd);
   try { ceiling = realpathSync(ceiling); } catch { /* as given */ }
-  return new Git(cwd).run(["ls-remote", ...rest.filter((a) => a.startsWith("-")), remote, ...rest.filter((a) => !a.startsWith("-"))], {
-    ...o, env: { ...(await hostCredentialEnv(remote)), GIT_CEILING_DIRECTORIES: ceiling, ...(o.env ?? {}) },
+  return hostGit(cwd).run(["ls-remote", ...rest.filter((a) => a.startsWith("-")), remote, ...rest.filter((a) => !a.startsWith("-"))], {
+    ...o, network: true, env: { ...(await hostCredentialEnv(remote)), GIT_CEILING_DIRECTORIES: ceiling, ...(o.env ?? {}) },
   });
 }
 
@@ -225,12 +324,200 @@ export async function remoteDefaultBranch(remote: string, o: RemoteGitOptions = 
   return /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.stdout)?.[1] ?? null;
 }
 
-/** Read a bundle file capcomd wrote (a sandbox's commit) into a host repo: a local file, no remote, no credentials. */
-export async function fetchBundle(git: Git, file: string, refspec: string): Promise<GitResult> {
+// ---- a sandbox's bundle ------------------------------------------------------------------------------------------
+
+/** A sandbox's bundle the host won't take, and why (for the agent and its driver: what to change). */
+export class BundleRefused extends Error {
+  constructor(readonly why: string) { super(why); this.name = "BundleRefused"; }
+}
+
+/** A ref name the host takes from a bundle: `refs/` and plain path components (no control character, space, `..`,
+ *  leading dot, `.lock`, `@{`), at most 255 bytes. */
+export function isSafeRefName(r: string): boolean {
+  if (r.length > 255 || !/^refs\/[A-Za-z0-9._/-]+$/.test(r) || r.includes("..") || r.includes("@{")) return false;
+  return r.split("/").every((c) => !!c && !c.startsWith(".") && !c.endsWith(".") && !c.endsWith(".lock"));
+}
+
+/** The longest bundle header the host reads: a ref and a few hundred prerequisites are a few kilobytes. */
+const MAX_HEADER = 1024 * 1024;
+const show = (s: string) => JSON.stringify(s.length > 120 ? `${s.slice(0, 120)}…` : s);
+
+export interface BundleHeader { version: 2 | 3; format: "sha1" | "sha256"; prerequisites: string[]; refs: Array<{ oid: string; name: string }>; packOffset: number }
+
+/** A bundle file's header (v2, or v3 with only `@object-format`), checked line by line: else BundleRefused. */
+export function readBundleHeader(file: string): BundleHeader {
+  const fd = openSync(file, "r");
+  let buf: Buffer;
+  try {
+    buf = Buffer.alloc(Math.min(MAX_HEADER + 4, statSync(file).size));
+    readSync(fd, buf, 0, buf.length, 0);
+  } finally { closeSync(fd); }
+  const end = buf.indexOf("\n\n");
+  if (end < 0) throw new BundleRefused(buf.length > MAX_HEADER ? "its header is over 1 MiB" : "it isn't a git bundle (no end to its header)");
+  if (buf.subarray(end + 2, end + 6).toString("latin1") !== "PACK") throw new BundleRefused("it isn't a git bundle (no pack after its header)");
+  const lines = buf.subarray(0, end).toString("latin1").split("\n");
+  const version = lines[0] === "# v2 git bundle" ? 2 : lines[0] === "# v3 git bundle" ? 3 : null;
+  if (!version) throw new BundleRefused(`it isn't a git bundle v2 or v3 (${show(lines[0] ?? "")})`);
+  let format: "sha1" | "sha256" = "sha1";
+  const prerequisites: string[] = [], refs: Array<{ oid: string; name: string }> = [];
+  for (const line of lines.slice(1)) {
+    if (line.startsWith("@")) {
+      const cap = /^@object-format=(sha1|sha256)$/.exec(line);
+      if (version !== 3 || !cap) throw new BundleRefused(`it asks for ${show(line)}, which capcomd doesn't take`);
+      format = cap[1] as "sha1" | "sha256";
+      continue;
+    }
+    const pre = /^-([0-9a-f]{40}|[0-9a-f]{64})(?: [^\0]*)?$/.exec(line);
+    if (pre) { prerequisites.push(pre[1]!); continue; }
+    const ref = /^([0-9a-f]{40}|[0-9a-f]{64}) (.*)$/s.exec(line);
+    if (!ref) throw new BundleRefused(`its header has a line that isn't a ref or a prerequisite: ${show(line)}`);
+    if (!isSafeRefName(ref[2]!)) throw new BundleRefused(`it has a ref named ${show(ref[2]!)}: not a plain ref name (a control character, a space, "..", a leading dot or ".lock")`);
+    refs.push({ oid: ref[1]!, name: ref[2]! });
+  }
+  const len = format === "sha1" ? 40 : 64;
+  if ([...prerequisites, ...refs.map((r) => r.oid)].some((o) => o.length !== len)) throw new BundleRefused(`its object names aren't ${format}`);
+  return { version, format, prerequisites, refs, packOffset: end + 2 };
+}
+
+/** `file` from `offset` to its end, a MiB at a time (Bun's `Bun.file(f).slice(n)` loses its offset as a process's
+ *  stdin). */
+function fileFrom(file: string, offset: number): { stream: ReadableStream<Uint8Array>; close: () => void } {
+  let fd: number | null = openSync(file, "r");
+  let pos = offset;
+  const close = () => { if (fd !== null) { closeSync(fd); fd = null; } };
+  const stream = new ReadableStream<Uint8Array>({
+    pull(c) {
+      if (fd === null) return c.close();
+      const b = new Uint8Array(1024 * 1024);
+      const n = readSync(fd, b, 0, b.length, pos);
+      if (n <= 0) { close(); c.close(); return; }
+      pos += n;
+      c.enqueue(b.subarray(0, n));
+    },
+    cancel: close,
+  });
+  return { stream, close };
+}
+
+/** A path component git would take for `.git` (any case, HFS's ignorable characters, NTFS's trailing dots and spaces
+ *  and its 8.3 name), or for `.gitmodules`. */
+const IGNORABLE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u206a-\u206f\ufeff]/g;
+const norm = (c: string) => c.toLowerCase().replace(IGNORABLE, "").replace(/[. ]+$/, "");
+const isDotGit = (c: string) => { const n = norm(c); return n === ".git" || n === "git~1"; };
+const isDotGitmodules = (c: string) => { const n = norm(c); return n === ".gitmodules" || /^gi7eba~\d$/.test(n) || n === "gitmod~1"; };
+
+/** Settings git's object checks treat as errors on a sandbox's objects (the rest are git's defaults: `.gitmodules` and
+ *  `.gitattributes` errors, broken objects). All known to git since 2.6. */
+const FSCK_ERRORS = "hasdotgit=error,hasdot=error,hasdotdot=error,fullpathname=error,emptyname=error";
+
+/** Why a new commit's tree can't come in, or null: a symlink whose target goes through `.git` (a hook planted through
+ *  it, CVE-2024-32002's shape), or a `.gitmodules` with a control character in a value (CVE-2025-48384: a path ending
+ *  in a carriage return), a path or URL that reads as an option, a path out of the tree or into `.git`, or a command. */
+async function treeProblem(git: Git, sha: string, env: Record<string, string>): Promise<string | null> {
+  const log = await git.run(["log", "--format=", "--raw", "-z", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv", "--root", "-m", sha, "--not", "--all"], { env });
+  if (log.code !== 0) return `git log failed: ${log.stderr.trim().slice(0, 300)}`;
+  const links = new Map<string, string>(), modules = new Map<string, string>();
+  const parts = log.stdout.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const meta = parts[i]!.replace(/^\n+/, "");
+    if (!meta.startsWith(":")) continue;
+    const [, dstMode, , dst, status] = meta.slice(1).split(" ");
+    const path = parts[++i] ?? "";
+    if (status === "D" || !dst || /^0+$/.test(dst)) continue;
+    // `.lfsconfig` says where Git LFS fetches files from, with the user's credentials: the user's decision, never an
+    // agent's (any case and spelling git or a case-insensitive disk would take for it).
+    if (!path.includes("/") && norm(path) === ".lfsconfig") return `it changes ${show(path)}, which says where Git LFS fetches files from with your credentials; change it on the target yourself if it should change`;
+    if (dstMode === "120000") links.set(dst, path);
+    else if (isDotGitmodules(path.split("/").pop() ?? "") && /^100(644|755)$/.test(dstMode ?? "")) modules.set(dst, path);
+  }
+  for (const [blob, path] of links) {
+    const t = await git.run(["cat-file", "blob", blob], { env });
+    if (t.code !== 0) return `its symlink ${show(path)} can't be read`;
+    if (t.stdout.split(/[\\/]/).some(isDotGit)) return `its symlink ${show(path)} points into .git (${show(t.stdout)}), which could plant a hook`;
+  }
+  for (const [blob, path] of modules) {
+    const c = await git.run(["config", `--blob=${blob}`, "--null", "--list"], { env });
+    if (c.code !== 0) return `its ${show(path)} isn't a git config file git can read`;
+    for (const e of c.stdout.split("\0").filter(Boolean)) {
+      const nl = e.indexOf("\n");
+      const key = nl < 0 ? e : e.slice(0, nl), value = nl < 0 ? "" : e.slice(nl + 1);
+      if (/[\x00-\x1f\x7f]/.test(key + value)) return `its ${show(path)} has a control character in ${show(key)} (a carriage return in a submodule path is CVE-2025-48384)`;
+      if (!/^submodule\..+\.(path|url|update)$/.test(key)) continue;
+      if (value.startsWith("-")) return `its ${show(path)} has ${show(key)} = ${show(value)}, which git would read as an option`;
+      if (key.endsWith(".update") && value.startsWith("!")) return `its ${show(path)} has ${show(key)} = ${show(value)}, a command`;
+      if (key.endsWith(".path") && (value.startsWith("/") || value.split(/[\\/]/).some((c) => c === ".." || isDotGit(c)))) return `its ${show(path)} has ${show(key)} = ${show(value)}, out of the tree or into .git`;
+    }
+  }
+  return null;
+}
+
+/**
+ * A sandbox's bundle `file` (it should hold one ref, `ref`) into the host repo `git`, at `into`: refused (BundleRefused)
+ * unless its header is a plain bundle's with exactly that ref, `git bundle verify` takes it, git's object checks pass
+ * on every object in it (FSCK_ERRORS; `index-pack --strict`, on every git version, where `fetch.fsckObjects` skips
+ * bundles before git 2.48), and no new commit has a tree treeProblem refuses. The objects go into a quarantine first
+ * and into the repository only when all of that passed; no transport, hook or filter runs. `missing`: the repository
+ * lacks a commit the bundle builds on (a bundle of everything may do).
+ */
+export async function receiveBundle(repo: Git, file: string, o: { ref: string; into: string }): Promise<{ ok: true; sha: string } | { ok: false; missing: boolean; detail: string }> {
   if (!file.startsWith("/") || !file.endsWith(".bundle")) throw new Error(`not a bundle file: ${file}`);
+  if (!isSafeRefName(o.into)) throw new Error(`not a ref: ${o.into}`);
+  const git = asHostGit(repo);
   const why = await hostRepoProblems(git);
   if (why.length) throw new HostRepoRefused(git.cwd, why);
-  return git.run(["fetch", "-q", "--no-tags", "--no-write-fetch-head", file, refspec], { env: { GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "file" } });
+  const gd = await commonDir(git);
+  if (!gd) throw new HostRepoRefused(git.cwd, ["not a git repository"]);
+
+  const h = readBundleHeader(file);
+  const names = h.refs.map((r) => r.name);
+  if (names.length !== 1 || names[0] !== o.ref) throw new BundleRefused(`it should hold ${o.ref} alone, and it holds ${names.length ? names.map(show).join(", ") : "no ref"}`);
+  const format = (await git.run(["rev-parse", "--show-object-format"])).stdout.trim() || "sha1";
+  if (format !== h.format) throw new BundleRefused(`its objects are ${h.format} and the host's repository's are ${format}`);
+  const sha = h.refs[0]!.oid;
+
+  if (h.prerequisites.length) {
+    const have = await git.run(["cat-file", "--batch-check=%(objectname) %(objecttype)"], { input: h.prerequisites.join("\n") + "\n" });
+    const lacks = h.prerequisites.filter((p) => !have.stdout.includes(`${p} commit`));
+    if (lacks.length) return { ok: false, missing: true, detail: `the repository lacks ${lacks.length} commit(s) the bundle builds on (${lacks[0]!.slice(0, 12)}…)` };
+  }
+  const v = await git.run(["bundle", "verify", file]);
+  if (v.code !== 0) {
+    const text = (v.stderr || v.stdout).trim();
+    if (/lacks these prerequisite|prerequisite/i.test(text)) return { ok: false, missing: true, detail: text.slice(-400) };
+    throw new BundleRefused(`git bundle verify: ${text.slice(-400)}`);
+  }
+
+  const q = join(gd, "xfer", `quarantine-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+  const packDir = join(q, "pack");
+  mkdirSync(packDir, { recursive: true });
+  const pack = fileFrom(file, h.packOffset);
+  try {
+    const ix = await git.run(["index-pack", "--stdin", "--fix-thin", `--strict=${FSCK_ERRORS}`, "-o", join(packDir, "in.idx"), join(packDir, "in.pack")], { stdin: pack.stream });
+    if (ix.code !== 0) {
+      const text = ix.stderr.trim();
+      if (/unresolved delta|did not receive expected object|missing/i.test(text) && !/fsck error/i.test(text)) return { ok: false, missing: true, detail: text.slice(-400) };
+      throw new BundleRefused(`git's object checks failed: ${text.slice(-400)}`);
+    }
+    const name = /^(?:pack|keep)\t([0-9a-f]+)$/m.exec(ix.stdout)?.[1];
+    if (!name) throw new BundleRefused(`git index-pack said ${show(ix.stdout.trim())}`);
+    const qenv = { GIT_ALTERNATE_OBJECT_DIRECTORIES: q };
+    if ((await git.run(["cat-file", "-t", sha], { env: qenv })).stdout.trim() !== "commit") throw new BundleRefused(`its ref ${o.ref} isn't a commit`);
+    const bad = await treeProblem(git, sha, qenv);
+    if (bad) throw new BundleRefused(bad);
+    // Into the repository: the pack, its reverse index, then its index (git finds a pack by its index).
+    const dest = join(gd, "objects", "pack");
+    mkdirSync(dest, { recursive: true });
+    for (const ext of ["pack", "rev", "idx"]) {
+      const from = join(packDir, `in.${ext}`);
+      if (existsSync(from)) renameSync(from, join(dest, `pack-${name}.${ext}`));
+    }
+    const u = await git.run(["update-ref", o.into, sha]);
+    if (u.code !== 0) return { ok: false, missing: false, detail: `git update-ref failed: ${u.stderr.trim().slice(0, 300)}` };
+    return { ok: true, sha };
+  } finally {
+    pack.close();
+    rmSync(q, { recursive: true, force: true });
+  }
 }
 
 /** Where a host repo for `remote` named `name` lives under `workdir` (one folder per remote). */

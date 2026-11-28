@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Git } from "../merge/git";
-import { hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
+import { hostGit, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
 import { APPROVAL_FILES_MAX, FILES_AGENTS_MAX, FILES_MAX } from "./contract";
 import { dottedType, isoTs } from "./envelope";
 import type { RawEvent } from "./source";
@@ -112,7 +112,7 @@ export class FilesMirror {
 
 	/** A host repo (src/merge/host-git.ts), started over when it isn't one or fails the check: it is only a cache. */
 	private async git(): Promise<Git> {
-		const git = new Git(this.dir, this.env);
+		const git = hostGit(this.dir, this.env);
 		if (!existsSync(join(this.dir, "HEAD")) || !isHostRepo(this.dir) || (await hostRepoProblems(git)).length) {
 			rmSync(this.dir, { recursive: true, force: true });
 			await initHostRepo(this.dir, { bare: true });

@@ -25,7 +25,7 @@ export async function integrate(git: Git, cfg: MergeConfig, strategy: MergeStrat
     }
     const staged = await git.run(["diff", "--cached", "--quiet"]);
     if (staged.code === 0) return { ok: true, head: targetSha, how: "noop" };
-    // Hooks run (no --no-verify): pre-commit / commit-msg apply to capcomd's own commits too.
+    // No hook runs (a host repo's git runs none: src/merge/host-git.ts HOST_POLICY); the project's checks judge it.
     await git.ok(["commit", "-q", ...sign, "-m", `${title}\n\nCapcomd-Task: ${key}`]);
     return { ok: true, head: await git.ok(["rev-parse", "HEAD"]), how: "squash" };
   }
