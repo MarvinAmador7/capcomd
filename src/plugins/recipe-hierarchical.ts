@@ -79,12 +79,11 @@ export async function changedPaths(cfg: MergeConfig, w: { branch: string; commit
   if (!SAFE_BRANCH(w.branch) || !SAFE_BRANCH(w.target)) throw new Error("not a branch name");
   const commit = w.commit && /^[0-9a-f]{40,64}$/.test(w.commit) ? w.commit : null;
   const { cloneDir, withCloneLock } = await import("../merge/repo");
-  const { hostRepoProblems, initHostRepo, isHostRepo, remoteGit } = await import("../merge/host-git");
-  const { Git } = await import("../merge/git");
+  const { hostGit, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } = await import("../merge/host-git");
   const ref = (b: string) => `+refs/heads/${b}:refs/remotes/origin/${b}`;
   const { git, tip } = await withCloneLock(cfg, MEMORY_CLONE, async () => {
     const dir = cloneDir(cfg, MEMORY_CLONE);
-    let g = new Git(dir);
+    let g = hostGit(dir);
     if (!existsSync(join(dir, "HEAD")) || !isHostRepo(dir) || (await hostRepoProblems(g)).length) { rmSync(dir, { recursive: true, force: true }); g = await initHostRepo(dir, { bare: true }); }
     const f = await remoteGit(g, ["fetch", "-q", "--no-tags", cfg.remote, ref(w.target), ref(w.branch)], cfg.remote);
     if (f.code !== 0) throw new Error(`git fetch ${cfg.remote} failed: ${(f.stderr || f.stdout).trim().slice(0, 200)}`);

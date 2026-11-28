@@ -122,8 +122,7 @@ export const promotionKernel = {
     if (!cfg) throw new Error("the run has no repository");
     const target = (await (await import("../primitives/ops")).runTarget(runId)) ?? cfg.target;
     const { cloneDir, withCloneLock } = await import("../merge/repo");
-    const { hostRepoProblems, initHostRepo, isHostRepo, remoteGit } = await import("../merge/host-git");
-    const { Git } = await import("../merge/git");
+    const { hostGit, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } = await import("../merge/host-git");
     const { readContextAt } = await import("../context/lint");
     const SHA = /^[0-9a-f]{40,64}$/;
     if (!SHA.test(o.commit) || (o.targetSha && !SHA.test(o.targetSha)) || /[^A-Za-z0-9._/-]|\.\./.test(`${o.branch}${target}`)) throw new Error("not a commit or a branch");
@@ -132,7 +131,7 @@ export const promotionKernel = {
     // both commits already (a merge after its verify read them): a merge's fast path stays one round trip.
     const git = await withCloneLock(cfg, GATES_CLONE, async () => {
       const dir = cloneDir(cfg, GATES_CLONE);
-      let g = new Git(dir);
+      let g = hostGit(dir);
       if (!existsSync(join(dir, "HEAD")) || !isHostRepo(dir) || (await hostRepoProblems(g)).length) { rmSync(dir, { recursive: true, force: true }); g = await initHostRepo(dir, { bare: true }); }
       const has = async (sha: string) => (await g.run(["cat-file", "-e", `${sha}^{commit}`])).code === 0;
       if (o.targetSha && (await has(o.commit)) && (await has(o.targetSha))) return g;

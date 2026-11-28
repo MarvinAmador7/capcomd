@@ -7,8 +7,7 @@ import { definePlugin, type PluginModule } from "../../../packages/plugin/src/co
 import { PluginError } from "../../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../../packages/plugin/src/manifest";
 import type { ErrorClass, Forge, ForgeBranches, ForgeLogin, ForgeLoginUse, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
-import { Git } from "../../merge/git";
-import { lsRemote, remoteGit } from "../../merge/host-git";
+import { hostGit, lsRemote, remoteGit } from "../../merge/host-git";
 import { VERSION } from "../../utils/self";
 
 /** A push git refused because a lease didn't hold: someone moved the ref since the kernel looked. */
@@ -25,7 +24,7 @@ export async function casPush(req: LandRequest, c: SeamCall): Promise<LandOutcom
   const target = `refs/heads/${req.target}`, branch = `refs/heads/${req.branch}`;
   const lease = req.leaseBranch && req.branchSha;
   if (c.signal.aborted) throw new PluginError("timeout", `git push to ${req.target} was cancelled`, undefined, true);
-  const git = new Git(req.workdir);
+  const git = hostGit(req.workdir);
   const push = await remoteGit(git, lease
     ? ["push", "--porcelain", "--atomic", `--force-with-lease=${target}:${req.targetSha}`, `--force-with-lease=${branch}:${req.branchSha}`, req.remote, `${req.sha}:${target}`, `${req.branchSha}:${branch}`]
     : ["push", "--porcelain", `--force-with-lease=${target}:${req.targetSha}`, req.remote, `${req.sha}:${target}`], req.remote, { signal: c.signal });

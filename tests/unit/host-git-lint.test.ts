@@ -1,5 +1,5 @@
 // Plugin API §11.7: the host runs git that talks to a remote only through src/merge/host-git.ts (remoteGit in a host
-// repo it checks, lsRemote outside any repository, fetchBundle for a sandbox's bundle), and no git credential is made
+// repo it checks, lsRemote outside any repository; a sandbox's bundle is read by receiveBundle, with no transport), and no git credential is made
 // anywhere else. This fails when a new call spells a network git command (fetch, push, ls-remote, clone, pull) any
 // other way, or builds a credential helper outside host-git.ts. A call that has to be an exception is listed below,
 // with the reason it can't reach an agent-editable checkout.

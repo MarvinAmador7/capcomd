@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix } from "node:path";
 import { Git } from "../merge/git";
-import { hostRepoDir, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
+import { hostGit, hostRepoDir, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
 import { TREE_LIMITS, inside, linkInside } from "./lock";
 import type { PackageSource } from "./source";
 
@@ -25,7 +25,7 @@ const TIMEOUT_MS = 120_000;
 /** The host repo `remote` is fetched into, made (again) when it isn't a clean one (§11.7). */
 async function hostRepo(workdir: string, remote: string): Promise<Git> {
   const dir = hostRepoDir(workdir, remote, "repo.git");
-  if (isHostRepo(dir) && !(await hostRepoProblems(new Git(dir))).length) return new Git(dir);
+  if (isHostRepo(dir) && !(await hostRepoProblems(hostGit(dir))).length) return hostGit(dir);
   const { rmSync } = await import("node:fs");
   rmSync(dir, { recursive: true, force: true });
   return initHostRepo(dir, { bare: true });

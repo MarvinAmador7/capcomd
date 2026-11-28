@@ -1967,6 +1967,26 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    build refuses `capcomd env build --project`), none within an hour of a failed one; and `sandbox-boxd` keeps a timer (§16.2: a plugin-owned job, `job.changed`
    `fired`), daily by default (`CAPCOMD_TEMPLATE_REFRESH_HOURS`, 0 for none), that rebuilds every template whose
    repository moved since it was built.
+5. **A sandbox's commits are hostile data on the host** (`src/merge/host-git.ts`). They arrive only as the bundle of
+   item 1, and `receiveBundle` takes it only when its header is a plain v2 or v3 bundle (no `@filter`) holding the one
+   ref the host asked for, under a plain ref name (`refs/`, no control character, space, `..`, leading dot or `.lock`),
+   `git bundle verify` passes, and git's object checks (`index-pack --strict`, with `.git` in any spelling, `.`, `..`,
+   `/` and empty names as errors, besides git's own `.gitmodules` and `.gitattributes` errors) pass on every object in
+   it. The objects go into a quarantine first; its new commits are refused when a symlink's target goes through `.git`
+   (any case, HFS's ignorable characters, NTFS's `git~1`), or a `.gitmodules` has a control character in a value
+   (CVE-2025-48384), a submodule path or URL that starts with `-`, a submodule path out of the tree or into `.git`, or
+   an `update` command. Only then do they move into the mirror; a refused bundle fails the push (`TransferError` kind
+   `refused`) with the reason, and nothing of it reaches the mirror or the remote. Every git command in a host repo
+   (and in a worktree of one) runs under one policy: `core.hooksPath=/dev/null` (no hook runs, the user's own
+   global hooks included), `core.fsmonitor=false`, no submodule recursion, `core.symlinks=false` (a checkout writes a
+   symlink as a plain file; the commit keeps it a symlink), `core.protectHFS` and `core.protectNTFS`,
+   `protocol.allow=never` (a network command's `GIT_ALLOW_PROTOCOL` allows the plain protocols), and the LFS filter off;
+   local work (checkout, merge, rebase, commit, archive, log, diff) also reads no system or global git config
+   (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`) except the user's commit signing settings (`user.signingkey`,
+   `commit.gpgsign`, `gpg.*`), so none of their filters, merge or diff drivers runs on an agent's files, and the
+   checks VM gets the tree as git stores it. No variable that points git elsewhere (`GIT_DIR`, `GIT_WORK_TREE`,
+   `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, …) is inherited. Git never runs in a directory a sandbox made.
+   `tests/merge/hostile-git.test.ts` plants each vector and checks that nothing runs on the host.
 
 Checks that run on the host (`CAPCOMD_CHECKS=host`, or the test sandboxes) run agent-written code as the operator, which
 no git setting can contain: there a planted setting or hook in the merge clone is refused (the merge fails), but the
